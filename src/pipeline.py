@@ -10,7 +10,7 @@ import signal
 import shutil
 import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -462,31 +462,38 @@ def test_api_keys(
     runtime = runtime or config.get_config()
     chosen = _normalize_providers(providers)
 
-    rows: list[dict[str, str]] = []
-    for provider in chosen:
+    rows: list[dict[str, str] | None] = [None] * len(chosen)
+    probe_futures: dict[Future[tuple[bool, str]], tuple[int, str]] = {}
+    max_workers = max(1, min(4, len(chosen)))
+    executor: ThreadPoolExecutor | None = ThreadPoolExecutor(max_workers=max_workers)
+    for idx, provider in enumerate(chosen):
         key = runtime.get_api_key(provider).strip()
         if not key:
-            rows.append(
-                {
-                    "provider": provider,
-                    "status": "KEY_MISSING",
-                    "detail": "No key configured.",
-                }
-            )
+            rows[idx] = {"provider": provider, "status": "KEY_MISSING", "detail": "No key configured."}
             continue
+        assert executor is not None
+        future = executor.submit(_probe_provider_key, provider=provider, api_key=key, timeout=timeout)
+        probe_futures[future] = (idx, provider)
 
-        ok, detail = _probe_provider_key(provider=provider, api_key=key, timeout=timeout)
-        rows.append(
-            {
+    try:
+        for future in as_completed(probe_futures):
+            idx, provider = probe_futures[future]
+            try:
+                ok, detail = future.result()
+            except Exception as exc:  # pragma: no cover - defensive
+                ok, detail = False, f"Probe failed: {exc}"
+            rows[idx] = {
                 "provider": provider,
                 "status": "KEY_VALID" if ok else "KEY_INVALID",
                 "detail": detail,
             }
-        )
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=False)
 
     return {
         "checked_at": _utc_now(),
-        "providers": rows,
+        "providers": [row for row in rows if isinstance(row, dict)],
     }
 
 

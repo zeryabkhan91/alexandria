@@ -293,53 +293,83 @@
 
     function qs(id) { return document.getElementById(id); }
     function catalogQuery() { return `catalog=${encodeURIComponent(app.catalog)}`; }
+    async function fetchJson(url, { timeoutMs = 12000, options = {} } = {}) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), Math.max(500, Number(timeoutMs) || 12000));
+      try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        let data = {};
+        try {
+          data = await res.json();
+        } catch (_) {
+          data = {};
+        }
+        return { res, data };
+      } catch (error) {
+        if (error && error.name === 'AbortError') {
+          const secs = Math.max(1, Math.round((Number(timeoutMs) || 12000) / 1000));
+          throw new Error(`Request timed out after ${secs}s`);
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
 
     async function init() {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('catalog')) app.catalog = params.get('catalog');
+      try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('catalog')) app.catalog = params.get('catalog');
 
-      const catalogRes = await fetch('/api/catalogs');
-      const catalogData = await catalogRes.json();
-      app.catalogs = catalogData.catalogs || [];
-      if (!app.catalog && catalogData.active_catalog) app.catalog = catalogData.active_catalog;
-      renderCatalogs();
+        const { res: catalogRes, data: catalogData } = await fetchJson('/api/catalogs', { timeoutMs: 10000 });
+        if (!catalogRes.ok) throw new Error(catalogData.error || catalogData.message || 'Failed to load catalogs.');
+        app.catalogs = catalogData.catalogs || [];
+        if (!app.catalog && catalogData.active_catalog) app.catalog = catalogData.active_catalog;
+        renderCatalogs();
 
-      const res = await fetch(`/api/iterate-data?${catalogQuery()}`);
-      const data = await res.json();
-      app.books = data.books || [];
-      app.models = data.models || [];
-      app.providers = data.providers || [];
-      app.providerModels = data.provider_models || {};
-      app.anchors = data.style_anchors || [];
-      app.promptLibrary = data.prompt_library || [];
-      app.intelligentPromptsAvailable = Boolean(data.intelligent_prompts_available);
-      app.enrichmentAvailable = Boolean(data.enrichment_available);
-      app.promptPerformance = data.prompt_performance || {};
-      app.promptSource = app.intelligentPromptsAvailable ? 'ai_generated' : 'template';
-      app.selectedProvider = 'all';
-      app.defaultVariantsPerModel = Number(data.default_variants_per_model || 5);
-      app.maxGenerationVariants = Math.max(app.defaultVariantsPerModel, Number(data.max_generation_variants || 20));
-      app.modelCosts = data.model_costs || {};
-      app.driveOutputFolderId = String(data.gdrive_output_folder_id || '');
-      app.modelSelectionTouched = false;
-      app.modelSelection = new Set(app.models);
+        const { res, data } = await fetchJson(`/api/iterate-data?${catalogQuery()}`, { timeoutMs: 15000 });
+        if (!res.ok) throw new Error(data.error || data.message || 'Failed to load iterate data.');
+        app.books = data.books || [];
+        app.models = data.models || [];
+        app.providers = data.providers || [];
+        app.providerModels = data.provider_models || {};
+        app.anchors = data.style_anchors || [];
+        app.promptLibrary = data.prompt_library || [];
+        app.intelligentPromptsAvailable = Boolean(data.intelligent_prompts_available);
+        app.enrichmentAvailable = Boolean(data.enrichment_available);
+        app.promptPerformance = data.prompt_performance || {};
+        app.promptSource = app.intelligentPromptsAvailable ? 'ai_generated' : 'template';
+        app.selectedProvider = 'all';
+        app.defaultVariantsPerModel = Number(data.default_variants_per_model || 5);
+        app.maxGenerationVariants = Math.max(app.defaultVariantsPerModel, Number(data.max_generation_variants || 20));
+        app.modelCosts = data.model_costs || {};
+        app.driveOutputFolderId = String(data.gdrive_output_folder_id || '');
+        app.modelSelectionTouched = false;
+        app.modelSelection = new Set(app.models);
 
-      renderBooks();
-      renderCoverPickers();
-      renderProviders();
-      renderModels();
-      renderAnchors();
-      renderLibrary();
-      applyVariationLimits();
-      qs('promptSource').value = app.promptSource;
-      bindEvents();
-      await refreshProviderConnectivity({ force: false, silent: false });
-      await loadModelCompare();
-      renderModelInfoPanel();
-      await loadDriveCovers({ silent: true });
-      applyCoverSource();
-      setStatus(`Ready. Catalog: ${app.catalog}. Choose a book and generate.`);
-      resetHeartbeat('No generation started.');
+        renderBooks();
+        renderCoverPickers();
+        renderProviders();
+        renderModels();
+        renderAnchors();
+        renderLibrary();
+        applyVariationLimits();
+        qs('promptSource').value = app.promptSource;
+        bindEvents();
+        applyCoverSource();
+        setStatus(`Ready. Catalog: ${app.catalog}. Choose a book and generate.`);
+        resetHeartbeat('No generation started.');
+
+        // Non-critical requests run in the background so controls stay responsive.
+        refreshProviderConnectivity({ force: false, silent: false }).catch(() => {});
+        loadModelCompare()
+          .then(() => renderModelInfoPanel())
+          .catch(() => renderModelInfoPanel());
+      } catch (error) {
+        const message = (error && error.message) ? error.message : String(error || 'unknown error');
+        qs('status').textContent = `Failed to initialize iterate page: ${message}`;
+        showToast(`Initialize failed: ${message}`, 'error');
+      }
     }
 
     function connectivitySummaryText() {
@@ -468,8 +498,11 @@
       refreshBtn.disabled = true;
       statusNode.textContent = 'Loading Drive covers...';
       try {
-        const res = await fetch(`/api/drive/input-covers?limit=1000&${catalogQuery()}`);
-        const data = await res.json();
+        const { res, data } = await fetchJson(`/api/drive/input-covers?limit=300&${catalogQuery()}`, { timeoutMs: 12000 });
+        if (!res.ok) {
+          const message = data.error || data.message || 'Drive cover load failed.';
+          throw new Error(message);
+        }
         const covers = Array.isArray(data.covers) ? data.covers : [];
         app.driveCovers = covers;
         app.driveFolderId = String(data.drive_folder_id || app.driveFolderId || '');
@@ -487,7 +520,7 @@
           if (!silent) showToast(`Drive error: ${data.error}`, 'error');
           return false;
         }
-        statusNode.textContent = `Loaded ${count} cover item(s) from ${mode}.`;
+        statusNode.textContent = `Loaded ${count} cover item(s) from ${mode}${count >= 300 ? ' (top 300 shown)' : ''}.`;
         if (!silent) showToast(`Loaded ${count} Drive cover item(s).`, 'success', 2200);
         return true;
       } catch (error) {
@@ -581,8 +614,7 @@
 
     async function loadModelCompare() {
       try {
-        const res = await fetch(`/api/analytics/models/compare?${catalogQuery()}`);
-        const data = await res.json();
+        const { res, data } = await fetchJson(`/api/analytics/models/compare?${catalogQuery()}`, { timeoutMs: 8000 });
         if (!res.ok || !data.ok) return false;
         app.modelCompare = Array.isArray(data.models) ? data.models : [];
         app.recommendedModel = String(data.recommended_model || '');
@@ -664,8 +696,7 @@
       try {
         if (!silent) qs('providerStatus').textContent = 'Checking provider connectivity...';
         const url = `/api/providers/connectivity?${catalogQuery()}${force ? '&force=1' : ''}`;
-        const res = await fetch(url);
-        const data = await res.json();
+        const { res, data } = await fetchJson(url, { timeoutMs: force ? 10000 : 8000 });
         if (!res.ok || !data.ok) {
           app.providerConnectivityError = data.error || data.message || 'Connectivity check failed.';
           if (!silent) qs('providerStatus').textContent = app.providerConnectivityError;

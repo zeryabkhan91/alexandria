@@ -2351,7 +2351,7 @@ def _provider_connectivity_payload(*, runtime: config.Config, force: bool = Fals
         if provider in model_counts:
             model_counts[provider] += 1
 
-    report = pipeline_runner.test_api_keys(runtime=runtime, providers=provider_names)
+    report = pipeline_runner.test_api_keys(runtime=runtime, providers=provider_names, timeout=4.0)
     rows = report.get("providers", []) if isinstance(report, dict) else []
     by_provider: dict[str, dict[str, Any]] = {}
     if isinstance(rows, list):
