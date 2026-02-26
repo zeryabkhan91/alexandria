@@ -1,0 +1,57 @@
+/* Page-level styles for /similarity */
+main {
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+/* Extracted from similarity.html */
+    :root {
+      --bg: #1a2744;
+      --panel: #243454;
+      --panel-2: #1f2f50;
+      --text: #f5e6c8;
+      --gold: #c4a352;
+      --muted: #bfae8f;
+      --line: rgba(245,230,200,.2);
+      --warn: #f2c66f;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: radial-gradient(circle at top left, #243454, #1a2744 42%, #15233e); color: var(--text); }
+    .nav { display: flex; gap: 12px; align-items: center; padding: 14px 18px; background: rgba(20, 31, 55, 0.95); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20; }
+    .nav a { color: var(--gold); text-decoration: none; font-weight: 700; padding: 8px 10px; border-radius: 8px; }
+    .nav a.active { background: rgba(196,163,82,.18); }
+    .nav .catalog { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .nav select { border-radius: 8px; border: 1px solid var(--line); background: #1b2a49; color: var(--text); padding: 6px 8px; }
+    main { padding: 16px; display: grid; gap: 12px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+    h1, h2 { margin: 0 0 8px; color: var(--gold); }
+    .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    input, button { border-radius: 8px; border: 1px solid var(--line); background: #1b2a49; color: var(--text); padding: 8px; }
+    button { background: var(--gold); color: #172442; border: none; font-weight: 700; cursor: pointer; }
+    .ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 8px; }
+    .kpi { background: var(--panel-2); border-radius: 10px; border: 1px solid var(--line); padding: 10px; }
+    .kpi strong { color: var(--gold); font-size: 22px; display: block; }
+    .heatmap-wrap { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; }
+    canvas { background: #1a2744; border: 1px solid var(--line); border-radius: 8px; image-rendering: pixelated; }
+    .legend { font-size: 12px; color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid rgba(245,230,200,.15); padding: 8px; vertical-align: top; font-size: 12px; }
+    th { color: var(--gold); text-align: left; background: #1f2f50; }
+    .thumb { width: 120px; border-radius: 8px; border: 1px solid var(--line); }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; background: rgba(242,198,111,.18); color: var(--warn); font-size: 11px; }
+    .clusters { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
+    .cluster { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); padding: 10px; }
+    #pairModal { position: fixed; inset: 0; background: rgba(0,0,0,.78); display: none; align-items: center; justify-content: center; z-index: 30; }
+    .modal-card { width: min(1100px, 96vw); max-height: 92vh; overflow: auto; background: #111a2f; border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+    .pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .pair-grid img { width: 100%; border-radius: 8px; border: 1px solid var(--line); }
+    @media (max-width: 900px) {
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .heatmap-wrap { grid-template-columns: 1fr; }
+      .pair-grid { grid-template-columns: 1fr; }
+    }
+
+.similarity-regenerate-link {
+  color: var(--gold);
+}

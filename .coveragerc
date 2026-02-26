@@ -1,0 +1,13 @@
+[run]
+omit =
+    src/image_generator.py
+    src/pipeline.py
+    src/intelligent_prompter.py
+    src/book_enricher.py
+    src/gdrive_sync.py
+    src/social_card_generator.py
+    src/notifications.py
+
+[report]
+show_missing = True
+skip_covered = False

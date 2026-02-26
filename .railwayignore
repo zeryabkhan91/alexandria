@@ -1,11 +1,32 @@
-Input Covers/
-Output Covers/
+# Minimize upload context for `railway up`.
+*
+
+# Runtime/build essentials.
+!Dockerfile
+!requirements.txt
+!railway.toml
+!.dockerignore
+!.env.example
+!favicon.ico
+!src/
+!src/**
+!scripts/
+!scripts/quality_review.py
+!config/
+!config/catalogs.json
+!config/book_catalog.json
+!config/book_prompts.json
+!config/book_catalog_test-catalog.json
+!config/book_prompts_test-catalog.json
+!config/cover_regions.json
+!config/cover_regions_test-catalog.json
+!config/prompt_templates.json
+!config/prompt_library.json
+!config/cover_templates.json
+!config/model_prompt_overrides.json
+!config/genre_presets.json
+!config/mockup_templates.json
+!config/mockup_background_prompts.json
+
+# Exclude temporary runtime artifacts from upload.
 tmp/
-.env
-.git/
-__pycache__/
-*.pyc
-data/generation_*.json
-Codex Prompts/
-Codex Output Answers/
-*.pdf

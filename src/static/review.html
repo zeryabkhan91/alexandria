@@ -3,203 +3,221 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Alexandria Review Grid</title>
-  <style>
-    :root {
-      --bg: #0f2449;
-      --panel: #f8f5ea;
-      --ink: #18233a;
-      --gold: #d8b15a;
-      --muted: #7d8596;
-    }
-    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: linear-gradient(140deg, #0d2142, #0f2d58); color: #f5efe2; }
-    header { padding: 20px 28px; border-bottom: 1px solid rgba(255,255,255,.15); position: sticky; top: 0; background: rgba(12,30,58,.95); z-index: 5; }
-    h1 { margin: 0 0 8px; color: var(--gold); font-size: 30px; }
-    .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    .controls input, .controls select, .controls button { border: none; border-radius: 10px; padding: 10px 12px; font-size: 14px; }
-    .controls button { background: var(--gold); color: #10213d; font-weight: 700; cursor: pointer; }
-    .progress-wrap { margin-top: 10px; }
-    .progress-bar { width: 100%; height: 10px; background: rgba(255,255,255,.2); border-radius: 99px; overflow: hidden; }
-    .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #e5c375, #ffd98f); }
-    .progress-label { font-size: 13px; margin-top: 6px; color: #ece1c8; }
-    main { padding: 24px; display: grid; gap: 20px; }
-    .book { background: rgba(250,244,228,.95); color: var(--ink); border-radius: 18px; padding: 16px; box-shadow: 0 12px 30px rgba(0,0,0,.25); }
-    .book h2 { margin: 0 0 8px; font-size: 20px; }
-    .book .meta { color: #4f5566; margin-bottom: 12px; font-size: 14px; }
-    .images { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
-    .thumb { background: #fff; border-radius: 12px; padding: 8px; border: 2px solid transparent; }
-    .thumb.selected { border-color: #bc8d2e; }
-    .thumb img { width: 100%; border-radius: 8px; display: block; cursor: zoom-in; }
-    .thumb .label { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-top: 8px; font-size: 13px; }
-    .thumb input { transform: scale(1.15); }
-    .hidden { display: none !important; }
-    #zoomModal { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: none; align-items: center; justify-content: center; z-index: 20; }
-    #zoomModal img { max-width: 92vw; max-height: 92vh; border-radius: 12px; }
-  </style>
+    <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/review.css" />
+<title>Alexandria Review</title>
 </head>
 <body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a class="active" href="/review">Review</a>
+    <a href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+    <div class="catalog"><span>Catalog</span><select id="catalogSelect"></select></div>
+  </nav>
+
   <header>
-    <h1>Review Winners</h1>
+    <h1>Winner Review</h1>
     <div class="controls">
-      <input id="search" type="text" placeholder="Search title or author" />
-      <input id="bookFilter" type="text" placeholder="Book # or range (e.g. 1-20)" />
+      <input id="search" placeholder="Search title or author" />
+      <input id="bookFilter" placeholder="Book # or range (e.g. 1-20)" />
+      <select id="sortMode">
+        <option value="book_number">Sort: Book number</option>
+        <option value="winner_score_desc">Sort: Winner score (high -> low)</option>
+        <option value="winner_score_asc">Sort: Winner score (low -> high)</option>
+        <option value="needs_review">Sort: Needs review first</option>
+      </select>
       <select id="statusFilter">
         <option value="all">All</option>
         <option value="reviewed">Reviewed</option>
         <option value="unreviewed">Unreviewed</option>
       </select>
-      <select id="qualityFilter">
-        <option value="0">Any quality</option>
-        <option value="0.6">Quality ≥ 0.60</option>
-        <option value="0.7">Quality ≥ 0.70</option>
-        <option value="0.8">Quality ≥ 0.80</option>
-      </select>
       <button id="saveBtn">Save Selections</button>
-      <button id="exportBtn">Export JSON</button>
+      <button id="syncDriveBtn">Sync Winners</button>
     </div>
-    <div class="progress-wrap">
-      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-      <div class="progress-label" id="progressLabel">0 / 0 reviewed</div>
+
+    <div class="toolbar">
+      <button class="btn-catalog" id="speedReviewBtn">Speed Review Mode</button>
+      <button class="btn-auto" id="acceptAutoBtn">Accept All Auto-Selections</button>
+      <button class="btn-export" id="exportWinnersBtn">Export Winners JSON</button>
+      <button class="btn-archive" id="archiveBtn">Archive Non-Winners</button>
+      <button class="btn-catalog" id="generateCatalogBtn">Generate Catalog PDF</button>
+      <button class="btn-catalog" id="generateContactSheetBtn">Generate Contact Sheet</button>
+    </div>
+
+    <div class="progress">
+      <div class="bar"><div id="progressFill" class="fill"></div></div>
+      <div id="progressLabel" class="status">0 / 0 reviewed</div>
+      <div id="syncStatus" class="status">Drive sync idle.</div>
+      <div id="catalogStatus" class="status">Catalog generation idle.</div>
+      <div id="focusStatus" class="status">Keyboard: 1-9 select variant, ←/→ navigate, Enter confirm+next, S save, ? help.</div>
     </div>
   </header>
+
   <main id="grid"></main>
 
   <div id="zoomModal"><img id="zoomImg" alt="zoom" /></div>
 
+  <div id="helpModal">
+    <div class="help-card">
+      <div class="u-row-between-center">
+        <strong class="u-title-gold-18">Keyboard Shortcuts</strong>
+        <button id="closeHelpBtn" class="review-modal-close">Close</button>
+      </div>
+      <div class="help-grid">
+        <div><code>1-9</code></div><div>Select variant as winner for focused book</div>
+        <div><code>← / →</code></div><div>Move focus to previous/next visible book</div>
+        <div><code>Enter</code></div><div>Confirm current focused selection and move to next book</div>
+        <div><code>Space</code></div><div>Zoom selected winner image for focused book</div>
+        <div><code>S</code></div><div>Save selections</div>
+        <div><code>?</code></div><div>Show shortcut help</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="similarityModal">
+    <div class="help-card review-similarity-card">
+      <div class="u-row-between-center">
+        <strong class="u-title-gold-18">Similarity Overlay</strong>
+        <button id="closeSimilarityBtn" class="review-modal-close">Close</button>
+      </div>
+      <div id="similarityMeta" class="meta u-mt-8"></div>
+      <div id="similarityContent" class="u-mt-10"></div>
+    </div>
+  </div>
+
   <script>
-    const state = { books: [], selections: loadSelections() };
+    const state = {
+      books: [],
+      winnerSelections: {},
+      visibleBooks: [],
+      focusedIndex: 0,
+      catalog: 'classics',
+      catalogs: [],
+      similarityByBook: {},
+      similarityBookMeta: {},
+    };
+
+    function q(id) { return document.getElementById(id); }
+    function catalogQuery() { return `catalog=${encodeURIComponent(state.catalog)}`; }
 
     async function init() {
-      const response = await fetch('/api/review-data');
-      const payload = await response.json();
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('catalog')) state.catalog = params.get('catalog');
+      await loadCatalogs();
+
+      const res = await fetch(`/api/review-data?${catalogQuery()}`);
+      const payload = await res.json();
       state.books = payload.books || [];
+      state.winnerSelections = normalizeSelections(payload.winner_selections || {}, state.books);
+      await loadSimilarityWarnings();
+      state.focusedIndex = 0;
       render();
       bindEvents();
     }
 
+    async function loadCatalogs() {
+      const res = await fetch('/api/catalogs');
+      const payload = await res.json();
+      state.catalogs = payload.catalogs || [];
+      if (!state.catalog && payload.active_catalog) state.catalog = payload.active_catalog;
+      q('catalogSelect').innerHTML = state.catalogs.map(c => `<option value="${escapeHtml(c.id)}" ${c.id===state.catalog?'selected':''}>${escapeHtml(c.name || c.id)}</option>`).join('');
+    }
+
+    async function loadSimilarityWarnings() {
+      try {
+        const matrixRes = await fetch(`/api/similarity-matrix?threshold=0.25&${catalogQuery()}`);
+        const matrix = await matrixRes.json();
+        const pairs = matrix.pairs || [];
+        state.similarityBookMeta = matrix.books || {};
+        state.similarityByBook = {};
+        pairs.forEach(row => {
+          const a = Number(row.book_a || 0);
+          const b = Number(row.book_b || 0);
+          const similarity = Number(row.similarity || 1);
+          if (a <= 0 || b <= 0 || similarity >= 0.25) return;
+          state.similarityByBook[a] = state.similarityByBook[a] || [];
+          state.similarityByBook[b] = state.similarityByBook[b] || [];
+          state.similarityByBook[a].push({ other: b, similarity, reason: row.reason || '' });
+          state.similarityByBook[b].push({ other: a, similarity, reason: row.reason || '' });
+        });
+      } catch (_error) {
+        state.similarityByBook = {};
+        state.similarityBookMeta = {};
+      }
+    }
+
     function bindEvents() {
-      document.getElementById('search').addEventListener('input', render);
-      document.getElementById('bookFilter').addEventListener('input', render);
-      document.getElementById('statusFilter').addEventListener('change', render);
-      document.getElementById('qualityFilter').addEventListener('change', render);
-      document.getElementById('saveBtn').addEventListener('click', saveSelectionsRemote);
-      document.getElementById('exportBtn').addEventListener('click', exportSelections);
-      document.getElementById('zoomModal').addEventListener('click', () => {
-        document.getElementById('zoomModal').style.display = 'none';
+      q('search').addEventListener('input', render);
+      q('bookFilter').addEventListener('input', render);
+      q('statusFilter').addEventListener('change', render);
+      q('sortMode').addEventListener('change', render);
+      q('saveBtn').addEventListener('click', saveSelectionsRemote);
+      q('syncDriveBtn').addEventListener('click', syncWinnersToDrive);
+      q('acceptAutoBtn').addEventListener('click', acceptAllAutoSelections);
+      q('speedReviewBtn').addEventListener('click', () => {
+        window.location.href = `/review?mode=speed&catalog=${encodeURIComponent(state.catalog)}`;
       });
+      q('exportWinnersBtn').addEventListener('click', exportConfirmedSelections);
+      q('archiveBtn').addEventListener('click', archiveNonWinners);
+      q('generateCatalogBtn').addEventListener('click', () => generateCatalog('catalog'));
+      q('generateContactSheetBtn').addEventListener('click', () => generateCatalog('contact_sheet'));
+      q('catalogSelect').addEventListener('change', (event) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('catalog', event.target.value);
+        window.location.href = url.toString();
+      });
+      q('zoomModal').addEventListener('click', () => q('zoomModal').style.display = 'none');
+      q('closeHelpBtn').addEventListener('click', () => q('helpModal').style.display = 'none');
+      q('helpModal').addEventListener('click', (e) => { if (e.target === q('helpModal')) q('helpModal').style.display = 'none'; });
+      q('closeSimilarityBtn').addEventListener('click', () => q('similarityModal').style.display = 'none');
+      q('similarityModal').addEventListener('click', (e) => { if (e.target === q('similarityModal')) q('similarityModal').style.display = 'none'; });
+
+      document.addEventListener('keydown', handleKeydown);
     }
 
-    function loadSelections() {
-      try {
-        return JSON.parse(localStorage.getItem('variantSelections') || '{}');
-      } catch {
-        return {};
-      }
-    }
+    function normalizeSelections(raw, books) {
+      const out = {};
+      books.forEach(book => {
+        const key = String(book.number);
+        const value = raw[key];
+        if (value && typeof value === 'object') {
+          out[key] = {
+            winner: Number(value.winner || 0),
+            score: Number(value.score || 0),
+            auto_selected: Boolean(value.auto_selected),
+            confirmed: Boolean(value.confirmed),
+          };
+          return;
+        }
 
-    function saveSelectionsLocal() {
-      localStorage.setItem('variantSelections', JSON.stringify(state.selections));
-      updateProgress();
-    }
-
-    async function saveSelectionsRemote() {
-      saveSelectionsLocal();
-      try {
-        await fetch('/api/save-selections', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(state.selections),
-        });
-        alert('Selections saved to data/variant_selections.json');
-      } catch {
-        alert('Selections saved locally. Server save unavailable.');
-      }
-    }
-
-    function exportSelections() {
-      const blob = new Blob([JSON.stringify(state.selections, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'variant_selections.json';
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-
-    function render() {
-      const root = document.getElementById('grid');
-      const query = document.getElementById('search').value.toLowerCase().trim();
-      const bookFilter = parseBookFilter(document.getElementById('bookFilter').value);
-      const statusFilter = document.getElementById('statusFilter').value;
-      const qualityFloor = Number(document.getElementById('qualityFilter').value || 0);
-      root.innerHTML = '';
-
-      state.books.forEach(book => {
-        const selected = state.selections[String(book.number)] || 0;
-        const searchable = `${book.title} ${book.author}`.toLowerCase();
-        const isReviewed = selected > 0;
-        const bestQuality = Number(book.best_quality_score || 0);
-
-        if (query && !searchable.includes(query)) return;
-        if (bookFilter && !bookFilter.has(Number(book.number))) return;
-        if (statusFilter === 'reviewed' && !isReviewed) return;
-        if (statusFilter === 'unreviewed' && isReviewed) return;
-        if (qualityFloor > 0 && bestQuality < qualityFloor) return;
-
-        const card = document.createElement('section');
-        card.className = 'book';
-        card.innerHTML = `
-          <h2>${book.number}. ${book.title}</h2>
-          <div class="meta">${book.author}</div>
-          <div class="images"></div>
-        `;
-
-        const images = card.querySelector('.images');
-        const allItems = [{ variant: 0, label: 'Original', image: book.original }].concat(book.variants || []);
-
-        allItems.forEach(item => {
-          if (!item.image) return;
-          const wrapper = document.createElement('div');
-          wrapper.className = 'thumb';
-          if (item.variant === selected) wrapper.classList.add('selected');
-          const disabled = item.variant === 0 ? 'disabled' : '';
-          const checked = item.variant === selected ? 'checked' : '';
-
-          wrapper.innerHTML = `
-            <img src="/${item.image}" alt="${book.title} variant ${item.variant}" />
-            <div class="label">
-              <span>${item.label || `Variant ${item.variant}`}</span>
-              <input type="checkbox" data-book="${book.number}" data-variant="${item.variant}" ${checked} ${disabled} />
-            </div>
-          `;
-
-          wrapper.querySelector('img').addEventListener('click', (e) => {
-            const zoom = document.getElementById('zoomImg');
-            zoom.src = e.target.src;
-            document.getElementById('zoomModal').style.display = 'flex';
-          });
-
-          const box = wrapper.querySelector('input');
-          if (!box.disabled) {
-            box.addEventListener('change', () => {
-              const key = String(book.number);
-              if (box.checked) {
-                state.selections[key] = item.variant;
-              } else if (state.selections[key] === item.variant) {
-                state.selections[key] = 0;
-              }
-              saveSelectionsLocal();
-              render();
-            });
+        let bestVariant = 1;
+        let bestScore = -1;
+        (book.variants || []).forEach(v => {
+          const variant = Number(v.variant || 0);
+          const score = Number(v.quality_score || 0);
+          if (score > bestScore || (score === bestScore && preferVariant(variant, bestVariant))) {
+            bestScore = score;
+            bestVariant = variant;
           }
-
-          images.appendChild(wrapper);
         });
 
-        root.appendChild(card);
+        out[key] = { winner: bestVariant, score: bestScore > 0 ? bestScore : 0, auto_selected: true, confirmed: false };
       });
+      return out;
+    }
 
-      updateProgress();
+    function preferVariant(next, current) {
+      const nextSketch = next >= 1 && next <= 3;
+      const curSketch = current >= 1 && current <= 3;
+      if (nextSketch !== curSketch) return nextSketch;
+      return next < current;
     }
 
     function parseBookFilter(raw) {
@@ -212,27 +230,364 @@
         if (token.includes('-')) {
           const [a, b] = token.split('-', 2).map(x => Number(x.trim()));
           if (Number.isFinite(a) && Number.isFinite(b)) {
-            const start = Math.min(a, b);
-            const end = Math.max(a, b);
-            for (let n = start; n <= end; n += 1) values.add(n);
+            for (let n = Math.min(a,b); n <= Math.max(a,b); n++) values.add(n);
           }
         } else {
-          const value = Number(token);
-          if (Number.isFinite(value)) values.add(value);
+          const n = Number(token);
+          if (Number.isFinite(n)) values.add(n);
         }
       });
       return values.size ? values : null;
     }
 
+    function sortedBooks(items) {
+      const mode = q('sortMode').value;
+      const copy = items.slice();
+      if (mode === 'winner_score_desc') {
+        copy.sort((a,b) => scoreOf(b.number) - scoreOf(a.number) || a.number - b.number);
+      } else if (mode === 'winner_score_asc') {
+        copy.sort((a,b) => scoreOf(a.number) - scoreOf(b.number) || a.number - b.number);
+      } else if (mode === 'needs_review') {
+        copy.sort((a,b) => Number(isConfirmed(a.number)) - Number(isConfirmed(b.number)) || a.number - b.number);
+      } else {
+        copy.sort((a,b) => a.number - b.number);
+      }
+      return copy;
+    }
+
+    function scoreOf(bookNumber) {
+      return Number((state.winnerSelections[String(bookNumber)] || {}).score || 0);
+    }
+
+    function isConfirmed(bookNumber) {
+      return Boolean((state.winnerSelections[String(bookNumber)] || {}).confirmed);
+    }
+
+    function render() {
+      const query = q('search').value.toLowerCase().trim();
+      const bookFilter = parseBookFilter(q('bookFilter').value);
+      const statusFilter = q('statusFilter').value;
+      const root = q('grid');
+      root.innerHTML = '';
+
+      const visible = [];
+      sortedBooks(state.books).forEach(book => {
+        const meta = state.winnerSelections[String(book.number)] || { winner: 0, score: 0, auto_selected: true, confirmed: false };
+        const selectedVariant = Number(meta.winner || 0);
+        const searchable = `${book.title} ${book.author}`.toLowerCase();
+        const reviewed = meta.confirmed;
+        const similarRows = state.similarityByBook[Number(book.number)] || [];
+        const similarityChip = similarRows.length
+          ? `<span class=\"chip warn\" data-sim-book=\"${book.number}\">Similar to Book #${similarRows[0].other}</span>`
+          : '';
+
+        if (query && !searchable.includes(query)) return;
+        if (bookFilter && !bookFilter.has(Number(book.number))) return;
+        if (statusFilter === 'reviewed' && !reviewed) return;
+        if (statusFilter === 'unreviewed' && reviewed) return;
+
+        visible.push(book);
+
+        const card = document.createElement('section');
+        card.className = 'book';
+        card.dataset.bookNumber = String(book.number);
+        card.innerHTML = `
+          <h2 class="review-book-title">${book.number}. ${escapeHtml(book.title)}</h2>
+          <div class="meta">
+            <span>${escapeHtml(book.author)}</span>
+            <span class="chip">Winner: Variant ${selectedVariant || '-'}</span>
+            <span class="chip">Score: ${Number(meta.score || 0).toFixed(3)}</span>
+            <span class="chip">${meta.auto_selected ? 'Auto' : 'Manual'}</span>
+            <span class="chip">${meta.confirmed ? 'Confirmed' : 'Needs review'}</span>
+            ${similarityChip}
+          </div>
+          <div class="images"></div>
+        `;
+        card.addEventListener('click', () => focusBookByNumber(book.number));
+
+        const imageWrap = card.querySelector('.images');
+        (book.variants || []).forEach(variant => {
+          const box = document.createElement('article');
+          const variantId = Number(variant.variant || 0);
+          const isSelected = selectedVariant === variantId;
+          box.className = `thumb ${isSelected ? (meta.auto_selected ? 'selected-auto' : 'selected-manual') : ''}`;
+          box.innerHTML = `
+            <img src="/${escapeHtml(variant.image)}" alt="Variant ${variantId}" data-book="${book.number}" data-variant="${variantId}" />
+            <div class="label">
+              <label>Variant ${variantId} <input type="checkbox" data-book="${book.number}" data-variant="${variantId}" ${isSelected ? 'checked' : ''} /></label>
+              <span class="score">${Number(variant.quality_score || 0).toFixed(3)}</span>
+            </div>
+          `;
+          box.querySelector('img').addEventListener('click', (event) => { event.stopPropagation(); openZoom(event.target.src); });
+          box.querySelector('input').addEventListener('change', (event) => {
+            event.stopPropagation();
+            selectVariant(book.number, variantId, Number(variant.quality_score || 0));
+          });
+          imageWrap.appendChild(box);
+        });
+
+        root.appendChild(card);
+      });
+
+      state.visibleBooks = visible;
+      if (state.focusedIndex >= visible.length) state.focusedIndex = Math.max(0, visible.length - 1);
+      root.querySelectorAll('[data-sim-book]').forEach(chip => {
+        chip.addEventListener('click', (event) => {
+          event.stopPropagation();
+          openSimilarityModal(Number(chip.dataset.simBook || 0));
+        });
+      });
+      paintFocus();
+      updateProgress();
+    }
+
+    function paintFocus() {
+      document.querySelectorAll('.book').forEach(card => card.classList.remove('focused'));
+      const focused = state.visibleBooks[state.focusedIndex];
+      if (!focused) return;
+      const card = document.querySelector(`.book[data-book-number="${focused.number}"]`);
+      if (card) {
+        card.classList.add('focused');
+        card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+      q('focusStatus').textContent = `Focused: ${focused.number}. ${focused.title} (${state.focusedIndex + 1}/${state.visibleBooks.length}). Keyboard: 1-9, ←/→, Enter, Space, S, ?`;
+    }
+
+    function focusBookByNumber(bookNumber) {
+      const idx = state.visibleBooks.findIndex(book => Number(book.number) === Number(bookNumber));
+      if (idx >= 0) {
+        state.focusedIndex = idx;
+        paintFocus();
+      }
+    }
+
+    function selectVariant(bookNumber, variantId, score) {
+      const key = String(bookNumber);
+      const prev = state.winnerSelections[key] || {};
+      state.winnerSelections[key] = {
+        winner: Number(variantId),
+        score: Number(score || prev.score || 0),
+        auto_selected: false,
+        confirmed: true,
+      };
+      render();
+    }
+
+    function openZoom(src) {
+      q('zoomImg').src = src;
+      q('zoomModal').style.display = 'flex';
+    }
+
+    function winnerImageForBook(bookNumber) {
+      const book = state.books.find(item => Number(item.number) === Number(bookNumber));
+      if (!book) return '';
+      const winner = state.winnerSelections[String(bookNumber)] || {};
+      const variantId = Number(winner.winner || 0);
+      const variant = (book.variants || []).find(v => Number(v.variant || 0) === variantId);
+      return variant ? `/${variant.image}` : '';
+    }
+
+    function openSimilarityModal(bookNumber) {
+      const rows = state.similarityByBook[Number(bookNumber)] || [];
+      if (!rows.length) return;
+      const row = rows.slice().sort((a, b) => Number(a.similarity || 1) - Number(b.similarity || 1))[0];
+      const other = Number(row.other || 0);
+      const currentImg = winnerImageForBook(bookNumber);
+      const otherMeta = state.similarityBookMeta[String(other)] || {};
+      const otherImg = otherMeta.image ? `/${otherMeta.image}` : '';
+      if (!currentImg || !otherImg) return;
+
+      q('similarityMeta').textContent = `Book #${bookNumber} appears similar to Book #${other} (distance ${Number(row.similarity || 0).toFixed(3)}).`;
+      q('similarityContent').innerHTML = `
+        <div class=\"sim-ab-wrap\">
+          <img src=\"${currentImg}\" alt=\"Current winner\" />
+          <div class=\"sim-ab-top\" id=\"simAbTop\"><img src=\"${otherImg}\" alt=\"Similar winner\" /></div>
+        </div>
+        <input id=\"simAbSlider\" type=\"range\" min=\"0\" max=\"100\" value=\"50\" class=\"u-w-full u-mt-10\" />
+        <div class=\"meta u-mt-8\">Drag slider to compare overlays.</div>
+      `;
+      const top = q('simAbTop');
+      const slider = q('simAbSlider');
+      const apply = () => { top.style.clipPath = `inset(0 ${100 - Number(slider.value)}% 0 0)`; };
+      slider.addEventListener('input', apply);
+      apply();
+      q('similarityModal').style.display = 'flex';
+    }
+
+    function focusedSelection() {
+      const book = state.visibleBooks[state.focusedIndex];
+      if (!book) return null;
+      const meta = state.winnerSelections[String(book.number)];
+      if (!meta || !meta.winner) return null;
+      const variant = (book.variants || []).find(v => Number(v.variant) === Number(meta.winner));
+      return variant ? { book, variant } : null;
+    }
+
+    function handleKeydown(event) {
+      const key = event.key;
+      const tag = (event.target && event.target.tagName || '').toLowerCase();
+      const typing = ['input','textarea','select'].includes(tag);
+      if ((key === '?' || (key === '/' && event.shiftKey)) && !event.metaKey && !event.ctrlKey) {
+        event.preventDefault();
+        q('helpModal').style.display = 'flex';
+        return;
+      }
+      if (typing) return;
+
+      if (key >= '1' && key <= '9') {
+        const focused = state.visibleBooks[state.focusedIndex];
+        if (!focused) return;
+        const variantId = Number(key);
+        const variant = (focused.variants || []).find(v => Number(v.variant) === variantId);
+        if (!variant) return;
+        event.preventDefault();
+        selectVariant(focused.number, variantId, Number(variant.quality_score || 0));
+        return;
+      }
+
+      if (key === 'ArrowRight') {
+        event.preventDefault();
+        if (state.focusedIndex < state.visibleBooks.length - 1) state.focusedIndex += 1;
+        paintFocus();
+        return;
+      }
+
+      if (key === 'ArrowLeft') {
+        event.preventDefault();
+        if (state.focusedIndex > 0) state.focusedIndex -= 1;
+        paintFocus();
+        return;
+      }
+
+      if (key === 'Enter') {
+        event.preventDefault();
+        const focused = state.visibleBooks[state.focusedIndex];
+        if (!focused) return;
+        const keyBook = String(focused.number);
+        const meta = state.winnerSelections[keyBook] || { winner: 1, score: 0, auto_selected: false, confirmed: false };
+        meta.confirmed = true;
+        state.winnerSelections[keyBook] = meta;
+        if (state.focusedIndex < state.visibleBooks.length - 1) state.focusedIndex += 1;
+        render();
+        return;
+      }
+
+      if (key === ' ') {
+        event.preventDefault();
+        const selected = focusedSelection();
+        if (selected) openZoom(`/${selected.variant.image}`);
+        return;
+      }
+
+      if (key.toLowerCase() === 's') {
+        event.preventDefault();
+        saveSelectionsRemote();
+      }
+    }
+
+    async function saveSelectionsRemote() {
+      const response = await fetch(`/api/save-selections?${catalogQuery()}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ catalog: state.catalog, selections: state.winnerSelections }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        alert(data.error || 'Failed to save selections');
+        return;
+      }
+      q('focusStatus').textContent = `Saved ${data.saved_books || 0} selections.`;
+      updateProgress();
+    }
+
+    async function syncWinnersToDrive() {
+      q('syncStatus').textContent = 'Syncing winners to Google Drive...';
+      try {
+        const response = await fetch('/api/sync-to-drive', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ catalog: state.catalog, selections: state.winnerSelections }),
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) throw new Error(payload.error || 'Drive sync failed');
+        const summary = payload.summary || {};
+        q('syncStatus').textContent = `Drive sync complete. uploaded ${summary.uploaded || 0}, skipped ${summary.skipped || 0}, failed ${summary.failed || 0}.`;
+      } catch (error) {
+        q('syncStatus').textContent = `Drive sync failed: ${error.message || 'Unknown error'}`;
+      }
+    }
+
+    function acceptAllAutoSelections() {
+      Object.keys(state.winnerSelections).forEach(key => {
+        const entry = state.winnerSelections[key];
+        if (entry && entry.auto_selected) entry.confirmed = true;
+      });
+      render();
+    }
+
+    function exportConfirmedSelections() {
+      const selections = {};
+      Object.entries(state.winnerSelections).forEach(([book, value]) => {
+        if (value && value.confirmed && Number(value.winner || 0) > 0) selections[book] = value;
+      });
+      const payload = { selections, exported_at: new Date().toISOString(), total_confirmed: Object.keys(selections).length };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'winner_selections_export.json'; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    async function archiveNonWinners() {
+      const confirmedBooks = state.visibleBooks.filter(book => {
+        const entry = state.winnerSelections[String(book.number)];
+        return entry && entry.confirmed && Number(entry.winner || 0) > 0;
+      });
+      const toArchive = confirmedBooks.reduce((acc, book) => acc + Math.max(0, (book.variants || []).length - 1), 0);
+      if (!window.confirm(`This will archive ${toArchive} non-winner variants. Winners remain in Output Covers. Continue?`)) return;
+
+      await saveSelectionsRemote();
+      const response = await fetch(`/api/archive-non-winners?${catalogQuery()}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ catalog: state.catalog, dry_run: false }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        alert(payload.error || 'Archive failed');
+        return;
+      }
+      const summary = payload.summary || {};
+      alert(`Archive complete. Variant dirs moved: ${summary.moved_variant_dirs || 0}, files moved: ${summary.moved_files || 0}, space freed: ${summary.disk_space_freed_mb || 0} MB.`);
+      await init();
+    }
+
+    async function generateCatalog(mode) {
+      const label = mode === 'contact_sheet' ? 'contact sheet' : (mode === 'all_variants' ? 'all variants catalog' : 'catalog PDF');
+      q('catalogStatus').textContent = `Generating ${label}...`;
+      try {
+      const response = await fetch(`/api/generate-catalog?mode=${encodeURIComponent(mode)}&${catalogQuery()}`);
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) throw new Error(payload.error || 'Generation failed');
+        if (payload.download_url) {
+          q('catalogStatus').innerHTML = `Generated ${label} (${Number(payload.size_mb || 0).toFixed(2)} MB): <a href="${payload.download_url}" target="_blank" class="review-download-link">Download</a>`;
+        } else {
+          q('catalogStatus').textContent = `Generated ${label}.`;
+        }
+      } catch (error) {
+        q('catalogStatus').textContent = `Catalog generation failed: ${error.message || 'Unknown error'}`;
+      }
+    }
+
     function updateProgress() {
       const total = state.books.length;
-      const reviewed = state.books.filter(book => (state.selections[String(book.number)] || 0) > 0).length;
-      const pct = total ? (reviewed / total) * 100 : 0;
-      document.getElementById('progressFill').style.width = `${pct}%`;
-      document.getElementById('progressLabel').textContent = `${reviewed} / ${total} reviewed`;
+      const reviewed = Object.values(state.winnerSelections).filter(item => item && item.confirmed && Number(item.winner || 0) > 0).length;
+      const pct = total ? Math.round((reviewed / total) * 100) : 0;
+      q('progressFill').style.width = `${pct}%`;
+      q('progressLabel').textContent = `${reviewed} / ${total} reviewed (${pct}%)`;
+    }
+
+    function escapeHtml(value) {
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+      return String(value).replace(/[&<>'"]/g, (char) => map[char] || char);
     }
 
     init();
   </script>
+  <script src="/src/static/navbar.js"></script>
 </body>
 </html>

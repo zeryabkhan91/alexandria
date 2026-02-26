@@ -1,0 +1,37 @@
+{
+  "literary_fiction": {
+    "preferred_style": "Impressionist / Pre-Raphaelite",
+    "emphasis": "character emotion, symbolic settings",
+    "color_tendency": "warm, muted, atmospheric"
+  },
+  "gothic_horror": {
+    "preferred_style": "Dark Romantic / Gothic engraving",
+    "emphasis": "dramatic lighting, isolation, foreboding architecture",
+    "color_tendency": "dark, high contrast, candlelight"
+  },
+  "adventure": {
+    "preferred_style": "Victorian adventure illustration / N.C. Wyeth",
+    "emphasis": "action, exotic settings, bold composition",
+    "color_tendency": "vivid, warm, golden hour"
+  },
+  "science_fiction": {
+    "preferred_style": "Art Nouveau / Symbolist",
+    "emphasis": "wonder, scale, otherworldly elements",
+    "color_tendency": "cool metallics with warm accents"
+  },
+  "romance": {
+    "preferred_style": "Pre-Raphaelite / Romantic era painting",
+    "emphasis": "emotion, beauty, intimate settings",
+    "color_tendency": "soft, warm, golden"
+  },
+  "philosophy": {
+    "preferred_style": "Symbolist / Allegorical",
+    "emphasis": "abstract concepts, classical references, contemplative",
+    "color_tendency": "muted earth tones, chiaroscuro"
+  },
+  "satire": {
+    "preferred_style": "Hogarth / Cruikshank caricature",
+    "emphasis": "wit, social commentary, detailed scenes",
+    "color_tendency": "warm sepia, pen-and-ink"
+  }
+}

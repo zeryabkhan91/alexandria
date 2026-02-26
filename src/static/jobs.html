@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/jobs.css" />
+  <title>Alexandria Jobs</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a href="/review">Review</a>
+    <a href="/batch">Batch</a>
+    <a href="/catalogs">Catalogs</a>
+    <a class="active" href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+    <div class="catalog"><span>Catalog</span><select id="catalogSelect"></select></div>
+  </nav>
+
+  <main>
+    <section class="card panel">
+      <h1>Job Queue</h1>
+      <p class="status">Queue, pause, resume, retry, and monitor generation jobs in real time.</p>
+      <p id="eventStatus" class="status">Waiting for connection…</p>
+      <div class="toolbar">
+        <label>
+          <span>Status filter</span>
+          <select id="statusFilter">
+            <option value="">All</option>
+            <option value="queued">Queued</option>
+            <option value="running">Running</option>
+            <option value="retrying">Retrying</option>
+            <option value="paused">Paused</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </label>
+        <label>
+          <span>Type filter</span>
+          <input id="typeFilter" placeholder="generate_cover" />
+        </label>
+        <button id="refreshBtn" class="secondary">Refresh</button>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card panel">
+        <h2>Queue Generate Job</h2>
+        <div class="toolbar">
+          <label>
+            <span>Book number</span>
+            <input id="jobBook" type="number" min="1" value="1" />
+          </label>
+          <label>
+            <span>Variants</span>
+            <input id="jobVariants" type="number" min="1" step="1" value="5" />
+          </label>
+          <label>
+            <span>Provider</span>
+            <select id="jobProvider">
+              <option value="all">all</option>
+              <option value="openrouter">openrouter</option>
+              <option value="openai">openai</option>
+              <option value="google">google</option>
+              <option value="fal">fal</option>
+              <option value="replicate">replicate</option>
+            </select>
+          </label>
+          <label>
+            <span>Models (comma)</span>
+            <input id="jobModels" placeholder="openai/gpt-image-1,openrouter/flux" />
+          </label>
+        </div>
+        <label class="u-mt-10">
+          <span>Prompt override (optional)</span>
+          <textarea id="jobPrompt" rows="3" placeholder="Leave blank to use catalog prompt."></textarea>
+        </label>
+        <div class="u-mt-10">
+          <button id="queueBtn">Queue Job</button>
+        </div>
+      </article>
+
+      <article class="card panel">
+        <h2>Queue Summary</h2>
+        <div id="summaryGrid" class="summary-grid"></div>
+      </article>
+    </section>
+
+    <section class="card panel u-mt-12">
+      <h2>Jobs</h2>
+      <div id="jobsWrap" class="empty-state">Loading jobs…</div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      catalog: "classics",
+      catalogs: [],
+      jobs: [],
+      statusFilter: "",
+      typeFilter: "",
+      progress: {},
+      eventSource: null,
+      pollTimer: null,
+      pendingRefresh: null,
+      defaultVariantsPerModel: 5,
+      maxGenerationVariants: 20,
+    };
+
+    function q(id) {
+      return document.getElementById(id);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function statusClass(status) {
+      const token = String(status || "queued").toLowerCase();
+      return `status-pill status-${token}`;
+    }
+
+    function setEventStatus(message, isError) {
+      const node = q("eventStatus");
+      node.textContent = message;
+      node.className = isError ? "error-text" : "status";
+    }
+
+    function catalogQuery() {
+      return `catalog=${encodeURIComponent(state.catalog)}`;
+    }
+
+    function formatTime(value) {
+      if (!value) return "—";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "—";
+      return date.toLocaleString();
+    }
+
+    function progressFor(job) {
+      const jobId = String(job.id || "");
+      if (Object.prototype.hasOwnProperty.call(state.progress, jobId)) {
+        return Math.max(0, Math.min(1, Number(state.progress[jobId] || 0)));
+      }
+      const status = String(job.status || "").toLowerCase();
+      if (status === "completed") return 1;
+      if (status === "failed" || status === "cancelled") return 1;
+      return 0;
+    }
+
+    function applyVariantLimits() {
+      const field = q("jobVariants");
+      const max = Math.max(1, Number(state.maxGenerationVariants || 20));
+      const fallback = Math.min(max, Math.max(1, Number(state.defaultVariantsPerModel || 5)));
+      field.min = "1";
+      field.max = String(max);
+      const current = Number(field.value || fallback);
+      field.value = String(Math.min(max, Math.max(1, current)));
+      field.title = `Allowed range: 1-${max}`;
+    }
+
+    function summarizeJobs(rows) {
+      const counts = {
+        queued: 0,
+        running: 0,
+        retrying: 0,
+        paused: 0,
+        completed: 0,
+        failed: 0,
+        cancelled: 0,
+      };
+      rows.forEach((job) => {
+        const status = String(job.status || "queued").toLowerCase();
+        counts[status] = (counts[status] || 0) + 1;
+      });
+      q("summaryGrid").innerHTML = Object.entries(counts)
+        .map(([key, value]) => `<div class="metric"><strong>${escapeHtml(key)}</strong><div>${escapeHtml(value)}</div></div>`)
+        .join("");
+    }
+
+    function renderJobs() {
+      const rows = state.jobs || [];
+      summarizeJobs(rows);
+      if (!rows.length) {
+        q("jobsWrap").className = "empty-state";
+        q("jobsWrap").textContent = "No jobs found for current filters.";
+        return;
+      }
+
+      q("jobsWrap").className = "";
+      q("jobsWrap").innerHTML = `
+        <table class="jobs-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Book</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Progress</th>
+              <th>Created</th>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((job) => {
+              const progress = progressFor(job);
+              const progressPercent = Math.round(progress * 100);
+              return `
+                <tr>
+                  <td class="mono">${escapeHtml(String(job.id || "").slice(0, 8))}</td>
+                  <td>${escapeHtml(job.book_number || "—")}</td>
+                  <td>${escapeHtml(job.job_type || "generate_cover")}</td>
+                  <td><span class="${statusClass(job.status)}">${escapeHtml(job.status || "queued")}</span></td>
+                  <td>
+                    <div class="progress-wrap">
+                      <div class="bar"><div class="fill" data-progress="${progressPercent}"></div></div>
+                      <div class="progress-label">${progressPercent}%</div>
+                    </div>
+                  </td>
+                  <td>${escapeHtml(formatTime(job.created_at))}</td>
+                  <td>${escapeHtml(formatTime(job.updated_at))}</td>
+                  <td>
+                    <div class="actions">
+                      <button data-action="cancel" data-id="${escapeHtml(job.id)}">Cancel</button>
+                      <button class="secondary" data-action="pause" data-id="${escapeHtml(job.id)}">Pause</button>
+                      <button class="secondary" data-action="resume" data-id="${escapeHtml(job.id)}">Resume</button>
+                      <button class="secondary" data-action="retry" data-id="${escapeHtml(job.id)}">Retry</button>
+                      <button class="ghost" data-action="delete" data-id="${escapeHtml(job.id)}">Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
+      `;
+
+      q("jobsWrap").querySelectorAll("button[data-action]").forEach((button) => {
+        button.addEventListener("click", () => handleJobAction(button.dataset.id, button.dataset.action));
+      });
+      q("jobsWrap").querySelectorAll(".fill[data-progress]").forEach((node) => {
+        const value = Math.max(0, Math.min(100, Number(node.getAttribute("data-progress") || 0)));
+        node.style.width = `${value}%`;
+      });
+    }
+
+    async function loadCatalogs() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("catalog")) state.catalog = params.get("catalog");
+      const response = await fetch("/api/catalogs");
+      const payload = await response.json();
+      state.catalogs = payload.catalogs || [];
+      if (!state.catalog && payload.active_catalog) state.catalog = payload.active_catalog;
+      const select = q("catalogSelect");
+      select.innerHTML = state.catalogs
+        .map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === state.catalog ? "selected" : ""}>${escapeHtml(item.name || item.id)} (${escapeHtml(item.book_count || 0)})</option>`)
+        .join("");
+      select.addEventListener("change", (event) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set("catalog", event.target.value);
+        window.location.href = url.toString();
+      });
+    }
+
+    async function loadJobs() {
+      const params = new URLSearchParams();
+      params.set("catalog", state.catalog);
+      params.set("limit", "200");
+      if (state.statusFilter) params.set("status", state.statusFilter);
+      if (state.typeFilter) params.set("type", state.typeFilter);
+      const response = await fetch(`/api/jobs?${params.toString()}`);
+      const payload = await response.json();
+      state.jobs = payload.jobs || [];
+      const limits = payload.limits || {};
+      state.defaultVariantsPerModel = Math.max(1, Number(limits.default_variants_per_model || state.defaultVariantsPerModel || 5));
+      state.maxGenerationVariants = Math.max(
+        state.defaultVariantsPerModel,
+        Number(limits.max_generation_variants || state.maxGenerationVariants || 20),
+      );
+      applyVariantLimits();
+      renderJobs();
+    }
+
+    async function queueJob() {
+      const book = Number(q("jobBook").value || 0);
+      const variants = Number(q("jobVariants").value || 5);
+      const modelsRaw = q("jobModels").value || "";
+      const models = modelsRaw.split(",").map((item) => item.trim()).filter(Boolean);
+      const prompt = q("jobPrompt").value || "";
+      const provider = q("jobProvider").value || "all";
+
+      const payload = {
+        catalog: state.catalog,
+        job_type: "generate",
+        book,
+        variants,
+        models,
+        prompt,
+        provider,
+      };
+      const response = await fetch(`/api/jobs?${catalogQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await response.json();
+      if (!response.ok || body.ok === false) {
+        throw new Error(body.error && body.error.message ? body.error.message : `HTTP ${response.status}`);
+      }
+      await loadJobs();
+    }
+
+    async function handleJobAction(jobId, action) {
+      if (!jobId || !action) return;
+      let url = "";
+      let options = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ catalog: state.catalog }) };
+      if (action === "delete") {
+        url = `/api/jobs/${encodeURIComponent(jobId)}?${catalogQuery()}`;
+        options = { method: "DELETE" };
+      } else {
+        url = `/api/jobs/${encodeURIComponent(jobId)}/${encodeURIComponent(action)}?${catalogQuery()}`;
+      }
+      const response = await fetch(url, options);
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.error && payload.error.message ? payload.error.message : `HTTP ${response.status}`);
+      }
+      await loadJobs();
+    }
+
+    function handleEvent(raw) {
+      if (!raw || !raw.job_id) return;
+      if (raw.catalog_id && raw.catalog_id !== state.catalog) return;
+      if (typeof raw.progress === "number") {
+        state.progress[String(raw.job_id)] = Math.max(0, Math.min(1, raw.progress));
+      }
+      if (state.pendingRefresh) window.clearTimeout(state.pendingRefresh);
+      state.pendingRefresh = window.setTimeout(() => {
+        loadJobs().catch(() => {});
+      }, 200);
+    }
+
+    function connectEvents() {
+      if (state.eventSource) state.eventSource.close();
+      try {
+        const source = new EventSource(`/api/jobs/events?${catalogQuery()}`);
+        state.eventSource = source;
+        source.onopen = () => setEventStatus("Live updates connected.", false);
+        source.onerror = () => setEventStatus("Live updates disconnected. Polling fallback active.", true);
+        const eventNames = [
+          "job_queued",
+          "job_started",
+          "job_progress",
+          "book_completed",
+          "job_completed",
+          "job_failed",
+          "job_cancelled",
+          "job_pause",
+          "job_resume",
+          "job_retry",
+          "job_deleted",
+        ];
+        eventNames.forEach((name) => {
+          source.addEventListener(name, (event) => {
+            try {
+              handleEvent(JSON.parse(event.data || "{}"));
+            } catch (_err) {
+              return;
+            }
+          });
+        });
+      } catch (_err) {
+        setEventStatus("Live updates unavailable. Polling active.", true);
+      }
+    }
+
+    function bindEvents() {
+      q("refreshBtn").addEventListener("click", () => loadJobs().catch((err) => setEventStatus(String(err), true)));
+      q("queueBtn").addEventListener("click", async () => {
+        try {
+          await queueJob();
+          setEventStatus("Job queued.", false);
+        } catch (error) {
+          setEventStatus(String(error && error.message ? error.message : error), true);
+        }
+      });
+      q("statusFilter").addEventListener("change", async (event) => {
+        state.statusFilter = event.target.value || "";
+        await loadJobs();
+      });
+      q("typeFilter").addEventListener("change", async (event) => {
+        state.typeFilter = event.target.value.trim();
+        await loadJobs();
+      });
+    }
+
+    async function init() {
+      await loadCatalogs();
+      bindEvents();
+      await loadJobs();
+      connectEvents();
+      if (state.pollTimer) window.clearInterval(state.pollTimer);
+      state.pollTimer = window.setInterval(() => {
+        loadJobs().catch(() => {});
+      }, 5000);
+    }
+
+    init().catch((error) => {
+      setEventStatus(String(error && error.message ? error.message : error), true);
+    });
+  </script>
+  <script src="/src/static/navbar.js"></script>
+</body>
+</html>

@@ -1,0 +1,134 @@
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  margin-top: 12px;
+}
+
+.toolbar label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.toolbar input,
+.toolbar select {
+  min-width: 160px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.panel {
+  padding: 14px;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.summary-grid .metric {
+  text-align: center;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 2px 8px;
+  font-weight: 700;
+}
+
+.status-queued {
+  background: rgba(59, 130, 246, 0.2);
+  color: #bfdbfe;
+}
+
+.status-running {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fde68a;
+}
+
+.status-retrying {
+  background: rgba(249, 115, 22, 0.2);
+  color: #fed7aa;
+}
+
+.status-paused {
+  background: rgba(148, 163, 184, 0.25);
+  color: #e2e8f0;
+}
+
+.status-completed {
+  background: rgba(34, 197, 94, 0.2);
+  color: #bbf7d0;
+}
+
+.status-failed,
+.status-cancelled {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fecaca;
+}
+
+.jobs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.jobs-table th,
+.jobs-table td {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 8px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.jobs-table th {
+  color: var(--gold-500);
+  font-weight: 700;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.actions button {
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.progress-wrap {
+  min-width: 120px;
+}
+
+.progress-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+@media (max-width: 960px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .jobs-table {
+    font-size: 11px;
+  }
+}

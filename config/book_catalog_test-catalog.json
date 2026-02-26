@@ -1,0 +1,20 @@
+[
+  {
+    "number": 1,
+    "title": "Sample Book",
+    "author": "Test Author",
+    "folder_name": "1. Sample Book - Test Author",
+    "file_base": "Sample Book - Test Author",
+    "genre": "unknown",
+    "themes": []
+  },
+  {
+    "number": 2,
+    "title": "Another Story",
+    "author": "Demo Writer",
+    "folder_name": "2. Another Story - Demo Writer",
+    "file_base": "Another Story - Demo Writer",
+    "genre": "unknown",
+    "themes": []
+  }
+]

@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/history.css" />
+<title>Alexandria History</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a href="/review">Review</a>
+    <a class="active" href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+    <div class="catalog"><span>Catalog</span><select id="catalogSelect"></select></div>
+  </nav>
+
+  <main>
+    <section class="card">
+      <h1 class="history-title">Generation History</h1>
+      <div class="filters">
+        <div><label>Book</label><input id="fBook" placeholder="1-20 or 2,5" /></div>
+        <div><label>Model</label><select id="fModel"><option value="">All</option></select></div>
+        <div><label>Provider</label><select id="fProvider"><option value="">All</option></select></div>
+        <div><label>Status</label><select id="fStatus"><option value="all">All</option><option value="success">Success</option><option value="fail">Failure</option></select></div>
+        <div><label>Date From</label><input id="fDateFrom" type="date" /></div>
+        <div><label>Date To</label><input id="fDateTo" type="date" /></div>
+        <div><label>Quality Min</label><input id="fQMin" type="number" min="0" max="1" step="0.01" placeholder="0.00" /></div>
+        <div><label>Quality Max</label><input id="fQMax" type="number" min="0" max="1" step="0.01" placeholder="1.00" /></div>
+        <div><label>&nbsp;</label><button id="applyBtn">Apply Filters</button></div>
+        <div><label>&nbsp;</label><button id="resetBtn" class="history-reset-btn">Reset</button></div>
+        <div><label>Total Rows</label><div id="rowCount" class="meta">0</div></div>
+      </div>
+    </section>
+
+    <section class="card table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th data-sort="timestamp">Date</th>
+            <th data-sort="book_number">Book #</th>
+            <th data-sort="book_title">Book Title</th>
+            <th data-sort="model">Model</th>
+            <th data-sort="provider">Provider</th>
+            <th data-sort="variant">Variant</th>
+            <th data-sort="quality_score">Quality</th>
+            <th data-sort="cost">Cost</th>
+            <th data-sort="status">Status</th>
+            <th data-sort="duration">Duration</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2 class="history-subtitle">Row Details</h2>
+      <div id="detailMeta" class="meta">Select a row to inspect prompt, image, composited result, and errors.</div>
+      <div class="detail-grid u-mt-10">
+        <div class="detail-box">
+          <strong>Prompt</strong>
+          <div id="detailPrompt" class="prompt u-mt-8">-</div>
+          <div id="detailError" class="meta u-mt-10"></div>
+        </div>
+        <div class="detail-box">
+          <strong>Images</strong>
+          <div id="detailImages" class="detail-images u-mt-8"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      rows: [],
+      sortedBy: 'timestamp',
+      sortDir: 'desc',
+      activeIndex: -1,
+      catalog: 'classics',
+      catalogs: [],
+    };
+
+    function q(id) { return document.getElementById(id); }
+    function catalogQuery() { return `catalog=${encodeURIComponent(state.catalog)}`; }
+
+    function buildQuery() {
+      const params = new URLSearchParams();
+      const pairs = [
+        ['book', q('fBook').value.trim()],
+        ['model', q('fModel').value],
+        ['provider', q('fProvider').value],
+        ['status', q('fStatus').value],
+        ['date_from', q('fDateFrom').value],
+        ['date_to', q('fDateTo').value],
+        ['quality_min', q('fQMin').value],
+        ['quality_max', q('fQMax').value],
+      ];
+      pairs.forEach(([k, v]) => { if (v) params.set(k, v); });
+      params.set('catalog', state.catalog);
+      return params.toString();
+    }
+
+    function sortRows(rows) {
+      const key = state.sortedBy;
+      const dir = state.sortDir === 'asc' ? 1 : -1;
+      return rows.slice().sort((a, b) => {
+        const av = a[key] ?? '';
+        const bv = b[key] ?? '';
+        const na = Number(av);
+        const nb = Number(bv);
+        if (Number.isFinite(na) && Number.isFinite(nb)) return (na - nb) * dir;
+        return String(av).localeCompare(String(bv)) * dir;
+      });
+    }
+
+    async function loadRows() {
+      const query = buildQuery();
+      const res = await fetch(`/api/generation-history${query ? `?${query}` : ''}`);
+      const payload = await res.json();
+      state.rows = sortRows(payload.items || []);
+      state.activeIndex = -1;
+      renderTable();
+      hydrateFilters(payload.items || []);
+    }
+
+    async function loadCatalogs() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('catalog')) state.catalog = params.get('catalog');
+      const res = await fetch('/api/catalogs');
+      const payload = await res.json();
+      state.catalogs = payload.catalogs || [];
+      if (!state.catalog && payload.active_catalog) state.catalog = payload.active_catalog;
+      q('catalogSelect').innerHTML = state.catalogs.map(c => `<option value="${escapeHtml(c.id)}" ${c.id===state.catalog?'selected':''}>${escapeHtml(c.name || c.id)}</option>`).join('');
+      q('catalogSelect').addEventListener('change', (event) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('catalog', event.target.value);
+        window.location.href = url.toString();
+      });
+    }
+
+    function hydrateFilters(items) {
+      const modelSel = q('fModel');
+      const providerSel = q('fProvider');
+      const currentModel = modelSel.value;
+      const currentProvider = providerSel.value;
+
+      const models = [...new Set(items.map(r => r.model).filter(Boolean))].sort();
+      const providers = [...new Set(items.map(r => r.provider).filter(Boolean))].sort();
+
+      modelSel.innerHTML = '<option value="">All</option>' + models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+      providerSel.innerHTML = '<option value="">All</option>' + providers.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+
+      modelSel.value = models.includes(currentModel) ? currentModel : '';
+      providerSel.value = providers.includes(currentProvider) ? currentProvider : '';
+    }
+
+    function renderTable() {
+      const tbody = q('rows');
+      tbody.innerHTML = '';
+      state.rows.forEach((row, idx) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${escapeHtml(formatDate(row.timestamp))}</td>
+          <td>${Number(row.book_number || 0)}</td>
+          <td>${escapeHtml(row.book_title || '')}</td>
+          <td>${escapeHtml(row.model || '')}</td>
+          <td>${escapeHtml(row.provider || '')}</td>
+          <td>${Number(row.variant || 0)}</td>
+          <td>${Number(row.quality_score || 0).toFixed(3)}</td>
+          <td>$${Number(row.cost || 0).toFixed(4)}</td>
+          <td class="${row.status === 'success' ? 'status-ok' : 'status-bad'}">${escapeHtml(row.status || '')}</td>
+          <td>${Number(row.duration || 0).toFixed(2)}s</td>
+        `;
+        tr.addEventListener('click', () => selectRow(idx));
+        if (idx === state.activeIndex) tr.classList.add('active');
+        tbody.appendChild(tr);
+      });
+      q('rowCount').textContent = `${state.rows.length} rows`;
+      if (!state.rows.length) {
+        q('detailMeta').textContent = 'No rows match current filters.';
+        q('detailPrompt').textContent = '-';
+        q('detailError').textContent = '';
+        q('detailImages').innerHTML = '';
+      }
+    }
+
+    function selectRow(idx) {
+      state.activeIndex = idx;
+      renderTable();
+      const row = state.rows[idx];
+      if (!row) return;
+      q('detailMeta').textContent = `${formatDate(row.timestamp)} | Book ${row.book_number} | ${row.model} | ${row.provider}`;
+      q('detailPrompt').textContent = row.prompt || '(no prompt captured for this row)';
+      q('detailError').textContent = row.error ? `Error: ${row.error}` : 'No error';
+      const images = [];
+      if (row.image_path) images.push({ label: 'Generated', path: row.image_path });
+      if (row.composited_path) images.push({ label: 'Composited', path: row.composited_path });
+      q('detailImages').innerHTML = images.length
+        ? images.map(item => `<div><div class="meta">${escapeHtml(item.label)}</div><img src="/${escapeHtml(item.path)}" alt="${escapeHtml(item.label)}"/></div>`).join('')
+        : '<div class="meta">No image paths available for this row.</div>';
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '';
+      const dt = new Date(iso);
+      return Number.isNaN(dt.getTime()) ? iso : dt.toLocaleString();
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function bind() {
+      q('applyBtn').addEventListener('click', loadRows);
+      q('resetBtn').addEventListener('click', () => {
+        ['fBook','fModel','fProvider','fStatus','fDateFrom','fDateTo','fQMin','fQMax'].forEach(id => q(id).value = '');
+        q('fStatus').value = 'all';
+        loadRows();
+      });
+      document.querySelectorAll('th[data-sort]').forEach(th => {
+        th.addEventListener('click', () => {
+          const key = th.dataset.sort;
+          if (state.sortedBy === key) {
+            state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+          } else {
+            state.sortedBy = key;
+            state.sortDir = key === 'timestamp' ? 'desc' : 'asc';
+          }
+          state.rows = sortRows(state.rows);
+          renderTable();
+        });
+      });
+    }
+
+    bind();
+    loadCatalogs().then(loadRows);
+  </script>
+  <script src="/src/static/navbar.js"></script>
+</body>
+</html>

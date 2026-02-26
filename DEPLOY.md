@@ -1,69 +1,120 @@
-# Deployment Guide
+# DEPLOY.md - Alexandria Cover Designer v2.0.0
 
-## Local Docker
-1. Copy `.env.example` to `.env` and set required variables.
-2. Build and start:
+## 1. Prerequisites
+- Docker 24+ and Docker Compose.
+- Python 3.11+ (for local non-Docker runs).
+- API keys for enabled providers (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, etc.).
+- Optional: Google Drive credentials JSON for Drive sync.
+
+## 2. Environment Setup
+1. Copy template:
+```bash
+cp .env.example .env
+```
+2. Set required values in `.env`.
+3. Recommended production toggles:
+```bash
+USE_SQLITE=true
+SQLITE_DB_PATH=data/alexandria.db
+JOB_WORKER_MODE=external
+JOB_WORKERS=2
+```
+
+## 3. Validation (Required Before Deploy)
+Run from repo root:
+```bash
+.venv/bin/python scripts/validate_config.py
+.venv/bin/python scripts/validate_environment.py
+.venv/bin/pytest tests --maxfail=1
+.venv/bin/pytest --cov=src --cov-config=/dev/null --cov-fail-under=85 -q
+python3 -m compileall src scripts
+```
+
+## 4. Multi-Catalog Configuration
+Catalog definitions live in `config/catalogs.json`.
+- Each catalog can point to dedicated catalog/prompt/input/output paths.
+- API/UI catalog selector uses this file.
+- Keep catalog IDs lowercase and URL-safe.
+
+## 5. SQLite Setup and Migration
+1. Enable SQLite:
+```bash
+export USE_SQLITE=true
+```
+2. Migrate existing JSON runtime data:
+```bash
+.venv/bin/python scripts/migrate_to_sqlite.py --catalog classics --db-path data/alexandria.db
+```
+3. Validate schema/readability:
+```bash
+sqlite3 data/alexandria.db '.tables'
+```
+
+## 6. Google Drive Setup (Optional)
+1. Enable Drive API in Google Cloud.
+2. Place credentials file at `config/credentials.json` or set `GOOGLE_CREDENTIALS_PATH`.
+3. Configure folder IDs (`GDRIVE_OUTPUT_FOLDER_ID` and optional subfolders).
+4. Verify from API:
+- `GET /api/drive/status`
+- `POST /api/drive/push`
+- `POST /api/drive/sync`
+
+## 7. Docker Deploy
+### Build
+```bash
+docker build -t alexandria-cover-designer:v2 .
+```
+
+### Run single container
+```bash
+docker run -d -p 8001:8001 --name designer \
+  --env-file .env \
+  -v "$(pwd)/data:/app/data" \
+  -v "$(pwd)/config:/app/config" \
+  -v "$(pwd)/Output Covers:/app/Output Covers" \
+  alexandria-cover-designer:v2
+```
+
+### Run with compose
 ```bash
 docker compose up -d --build
 ```
-3. Verify:
-- Health: `http://localhost:8001/api/health`
-- Iterate page: `http://localhost:8001/iterate`
-- Review page: `http://localhost:8001/review`
 
-## Railway Deployment
-1. Create a Railway project.
-2. Connect your GitHub repo.
-3. Ensure Railway uses the included `Dockerfile` (also configured in `railway.toml`).
-4. Add environment variables from the table below.
-5. Deploy.
-6. Verify health endpoint: `https://<your-railway-domain>/api/health`.
+## 8. Post-Deploy Checks
+- `GET /api/health` returns HTTP 200.
+- `GET /api/version` returns `2.0.0`.
+- `GET /iterate` loads.
+- `GET /api/docs` loads.
+- No traceback during stop (`docker stop designer`).
 
-## Environment Variables
+## 9. Monitoring and Alerting
+Minimum production signals:
+- `/api/health` (liveness/readiness).
+- `/api/metrics` (error counters, cache, job telemetry).
+- `/api/workers` (worker heartbeat).
+- `/api/analytics/budget` (spend guardrails).
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `AI_PROVIDER` | Yes | Default provider for generation (`openrouter`, `openai`, etc.) |
-| `AI_MODEL` | Yes | Default model used by pipeline |
-| `ALL_MODELS` | Optional | Comma-separated models used by all-model mode |
-| `OPENROUTER_API_KEY` | Required if using OpenRouter | OpenRouter API key |
-| `OPENAI_API_KEY` | Required if using OpenAI | OpenAI API key |
-| `GOOGLE_API_KEY` | Required if using Google | Google Generative API key |
-| `FAL_API_KEY` | Required if using fal.ai | fal.ai API key |
-| `REPLICATE_API_TOKEN` | Required if using Replicate | Replicate API token |
-| `INPUT_DIR` | Optional | Input cover directory (default `Input Covers`) |
-| `OUTPUT_DIR` | Optional | Output cover directory (default `Output Covers`) |
-| `TMP_DIR` | Optional | Temp directory (default `tmp`) |
-| `DATA_DIR` | Optional | Data directory (default `data`) |
-| `CONFIG_DIR` | Optional | Config directory (default `config`) |
-| `MIN_QUALITY_SCORE` | Optional | Quality threshold |
-| `BOOK_SCOPE_LIMIT` | Optional | Default initial scope size |
-| `MAX_EXPORT_VARIANTS` | Optional | Export fallback variant cap |
-| `GDRIVE_OUTPUT_FOLDER_ID` | Optional | Google Drive target folder id |
-| `GOOGLE_CREDENTIALS_PATH` | Optional | Drive OAuth/service credentials path |
-| `HOST` | Optional | Bind host for web server (default `0.0.0.0`) |
-| `PORT` | Optional | Web server port (default `8001`) |
+Alert suggestions:
+- health status not healthy/degraded for >5m.
+- worker heartbeat stale.
+- sustained 5xx spikes.
+- budget threshold >80% or hard-stop reached.
 
-## Google Drive Sync Setup
+## 10. Backup and Restore
+- Backup script paths: `scripts/disaster_recovery.py` + `src/disaster_recovery.py`.
+- Backup what matters:
+  - `data/` (including SQLite and logs)
+  - `config/`
+  - `Output Covers/`
+- Suggested cadence: nightly snapshot + pre-release snapshot.
+- Validate backups by running restore to a staging path and checking `/api/health`.
 
-### OAuth / service credentials flow
-1. Go to Google Cloud Console.
-2. Enable **Google Drive API** for the project.
-3. Create credentials:
-- OAuth 2.0 Client ID (Desktop app), or
-- Service Account JSON.
-4. Save JSON as `config/credentials.json` (or set `GOOGLE_CREDENTIALS_PATH`).
-5. Run sync:
-```bash
-python3 -m src.gdrive_sync --local-output-dir "Output Covers" --drive-folder-id "$GDRIVE_OUTPUT_FOLDER_ID" --credentials-path config/credentials.json
-```
-
-### rclone fallback
-Use when OAuth setup is blocked/unavailable. Configure an `rclone` Google Drive remote named `gdrive`, then run:
-```bash
-bash scripts/rclone_sync.sh
-```
-
-## Which sync method to use
-- Use `src.gdrive_sync` when you have Google credentials and want native API-based incremental sync.
-- Use `scripts/rclone_sync.sh` when native OAuth setup is unavailable or blocked.
+## 11. Production Checklist
+- [ ] `.env` configured with valid provider keys.
+- [ ] `validate_config.py` pass.
+- [ ] `validate_environment.py` pass.
+- [ ] tests and coverage gate pass.
+- [ ] SQLite migration complete (if `USE_SQLITE=true`).
+- [ ] Drive credentials configured (if Drive features enabled).
+- [ ] Docker build/run verified.
+- [ ] Backup/restore rehearsal completed.

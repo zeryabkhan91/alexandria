@@ -1,0 +1,198 @@
+{
+  "templates": [
+    {
+      "id": "standing_front",
+      "name": "Standing Book — Front View",
+      "category": "product",
+      "description": "Single upright book with front cover facing camera.",
+      "base_image": "config/mockup_templates/standing_front_base.png",
+      "mask_image": "config/mockup_templates/standing_front_mask.png",
+      "transform": {
+        "cover_corners": [[340, 130], [860, 130], [860, 1060], [340, 1060]],
+        "spine_corners": [[280, 140], [340, 130], [340, 1060], [280, 1070]],
+        "shadow": {"offset_x": 18, "offset_y": 22, "blur": 30, "opacity": 0.35},
+        "lighting": {"direction": "top-left", "intensity": 0.14}
+      },
+      "output_size": [1200, 1200],
+      "use_case": "Amazon product page, website hero"
+    },
+    {
+      "id": "standing_angled",
+      "name": "Standing Book — Angled",
+      "category": "product",
+      "description": "Book at a 30-degree angle showing front cover and spine.",
+      "base_image": "config/mockup_templates/standing_angled_base.png",
+      "mask_image": "config/mockup_templates/standing_angled_mask.png",
+      "transform": {
+        "cover_corners": [[430, 180], [910, 260], [830, 1030], [360, 950]],
+        "spine_corners": [[340, 170], [430, 180], [360, 950], [285, 940]],
+        "shadow": {"offset_x": 28, "offset_y": 24, "blur": 34, "opacity": 0.38},
+        "lighting": {"direction": "top-left", "intensity": 0.18}
+      },
+      "output_size": [1200, 1200],
+      "use_case": "Primary 3D product visual"
+    },
+    {
+      "id": "laying_flat",
+      "name": "Laying Flat",
+      "category": "product",
+      "description": "Book laying flat with slight top perspective.",
+      "base_image": "config/mockup_templates/laying_flat_base.png",
+      "mask_image": "config/mockup_templates/laying_flat_mask.png",
+      "transform": {
+        "cover_corners": [[260, 150], [1170, 110], [1160, 860], [250, 900]],
+        "spine_corners": [[220, 155], [260, 150], [250, 900], [210, 905]],
+        "shadow": {"offset_x": 12, "offset_y": 24, "blur": 26, "opacity": 0.3},
+        "lighting": {"direction": "top-right", "intensity": 0.12}
+      },
+      "output_size": [1400, 1000],
+      "use_case": "Detail/product pages"
+    },
+    {
+      "id": "open_spread",
+      "name": "Open Spread",
+      "category": "product",
+      "description": "Book open in reading position with covers visible.",
+      "base_image": "config/mockup_templates/open_spread_base.png",
+      "mask_image": "config/mockup_templates/open_spread_mask.png",
+      "transform": {
+        "left_cover_corners": [[230, 250], [640, 210], [650, 860], [260, 900]],
+        "right_cover_corners": [[760, 210], [1170, 250], [1140, 900], [750, 860]],
+        "spine_corners": [[640, 210], [760, 210], [750, 860], [650, 860]],
+        "shadow": {"offset_x": 10, "offset_y": 20, "blur": 24, "opacity": 0.25},
+        "lighting": {"direction": "top-center", "intensity": 0.16}
+      },
+      "output_size": [1400, 1000],
+      "use_case": "Interior + product storytelling"
+    },
+    {
+      "id": "stack_three",
+      "name": "Stack of Three",
+      "category": "product",
+      "description": "Three-copy stack with top book showing full cover.",
+      "base_image": "config/mockup_templates/stack_three_base.png",
+      "mask_image": "config/mockup_templates/stack_three_mask.png",
+      "transform": {
+        "stack": [
+          {"cover_corners": [[260, 560], [900, 520], [920, 1020], [270, 1060]], "spine_corners": [[210, 565], [260, 560], [270, 1060], [220, 1065]], "alpha": 0.65},
+          {"cover_corners": [[310, 360], [980, 330], [1000, 860], [320, 900]], "spine_corners": [[255, 365], [310, 360], [320, 900], [265, 905]], "alpha": 0.8},
+          {"cover_corners": [[370, 140], [1060, 190], [1020, 780], [340, 730]], "spine_corners": [[300, 130], [370, 140], [340, 730], [270, 720]], "alpha": 1.0}
+        ],
+        "shadow": {"offset_x": 20, "offset_y": 28, "blur": 34, "opacity": 0.34},
+        "lighting": {"direction": "top-left", "intensity": 0.14}
+      },
+      "output_size": [1400, 1200],
+      "use_case": "Bundle and merchandising visuals"
+    },
+    {
+      "id": "desk_scene",
+      "name": "Desk Scene",
+      "category": "lifestyle",
+      "description": "Book on dark wood desk with reading accessories.",
+      "base_image": "config/mockup_templates/desk_scene_base.png",
+      "mask_image": "config/mockup_templates/desk_scene_mask.png",
+      "transform": {
+        "cover_corners": [[570, 250], [1040, 310], [990, 1080], [520, 1020]],
+        "spine_corners": [[510, 245], [570, 250], [520, 1020], [465, 1015]],
+        "shadow": {"offset_x": 26, "offset_y": 22, "blur": 32, "opacity": 0.35},
+        "lighting": {"direction": "left", "intensity": 0.18}
+      },
+      "output_size": [1600, 1200],
+      "use_case": "Lifestyle marketing"
+    },
+    {
+      "id": "bookshelf",
+      "name": "Bookshelf",
+      "category": "lifestyle",
+      "description": "Book slightly pulled forward on a wooden bookshelf.",
+      "base_image": "config/mockup_templates/bookshelf_base.png",
+      "mask_image": "config/mockup_templates/bookshelf_mask.png",
+      "transform": {
+        "cover_corners": [[610, 220], [980, 250], [960, 1030], [600, 1000]],
+        "spine_corners": [[560, 215], [610, 220], [600, 1000], [552, 995]],
+        "shadow": {"offset_x": 18, "offset_y": 20, "blur": 28, "opacity": 0.33},
+        "lighting": {"direction": "right", "intensity": 0.12}
+      },
+      "output_size": [1600, 1200],
+      "use_case": "Library and bookstore context"
+    },
+    {
+      "id": "reading_chair",
+      "name": "Reading Chair",
+      "category": "lifestyle",
+      "description": "Book resting on leather armchair arm.",
+      "base_image": "config/mockup_templates/reading_chair_base.png",
+      "mask_image": "config/mockup_templates/reading_chair_mask.png",
+      "transform": {
+        "cover_corners": [[650, 330], [1090, 390], [1030, 1120], [600, 1060]],
+        "spine_corners": [[590, 325], [650, 330], [600, 1060], [548, 1055]],
+        "shadow": {"offset_x": 24, "offset_y": 26, "blur": 30, "opacity": 0.35},
+        "lighting": {"direction": "top-right", "intensity": 0.15}
+      },
+      "output_size": [1600, 1200],
+      "use_case": "Cozy reading social content"
+    },
+    {
+      "id": "window_light",
+      "name": "Window Light",
+      "category": "lifestyle",
+      "description": "Book standing in warm afternoon window light.",
+      "base_image": "config/mockup_templates/window_light_base.png",
+      "mask_image": "config/mockup_templates/window_light_mask.png",
+      "transform": {
+        "cover_corners": [[610, 240], [980, 230], [980, 1010], [620, 1020]],
+        "spine_corners": [[560, 250], [610, 240], [620, 1020], [570, 1030]],
+        "shadow": {"offset_x": 16, "offset_y": 30, "blur": 34, "opacity": 0.37},
+        "lighting": {"direction": "left", "intensity": 0.22}
+      },
+      "output_size": [1600, 1200],
+      "use_case": "Seasonal marketing and web banners"
+    },
+    {
+      "id": "library_table",
+      "name": "Library Table",
+      "category": "lifestyle",
+      "description": "Book centered on library table with brass lamp.",
+      "base_image": "config/mockup_templates/library_table_base.png",
+      "mask_image": "config/mockup_templates/library_table_mask.png",
+      "transform": {
+        "cover_corners": [[560, 200], [1030, 230], [990, 1060], [530, 1030]],
+        "spine_corners": [[500, 195], [560, 200], [530, 1030], [476, 1025]],
+        "shadow": {"offset_x": 22, "offset_y": 24, "blur": 30, "opacity": 0.33},
+        "lighting": {"direction": "top-left", "intensity": 0.14}
+      },
+      "output_size": [1600, 1200],
+      "use_case": "Academic and premium positioning"
+    },
+    {
+      "id": "kindle_tablet",
+      "name": "Kindle/Tablet",
+      "category": "digital",
+      "description": "Book cover displayed on tablet/e-reader screen.",
+      "base_image": "config/mockup_templates/kindle_tablet_base.png",
+      "mask_image": "config/mockup_templates/kindle_tablet_mask.png",
+      "transform": {
+        "cover_corners": [[430, 180], [980, 160], [1030, 920], [480, 940]],
+        "shadow": {"offset_x": 14, "offset_y": 18, "blur": 24, "opacity": 0.28},
+        "lighting": {"direction": "top-left", "intensity": 0.1}
+      },
+      "output_size": [1400, 1000],
+      "use_case": "Ebook storefront assets"
+    },
+    {
+      "id": "social_card",
+      "name": "Social Card",
+      "category": "digital",
+      "description": "Pre-designed social card frame for OG image usage.",
+      "base_image": "config/mockup_templates/social_card_base.png",
+      "mask_image": "config/mockup_templates/social_card_mask.png",
+      "transform": {
+        "cover_corners": [[90, 65], [450, 80], [430, 585], [80, 570]],
+        "shadow": {"offset_x": 10, "offset_y": 10, "blur": 16, "opacity": 0.25},
+        "lighting": {"direction": "top-left", "intensity": 0.08}
+      },
+      "output_size": [1200, 630],
+      "use_case": "Facebook/LinkedIn OG previews"
+    }
+  ]
+}

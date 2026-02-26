@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-02-20T22:17:09.785586+00:00",
+  "updated_at": "2026-02-21T17:04:50.657939+00:00",
   "style_anchors": [
     {
       "name": "allegorical_symbolic",
@@ -23,6 +23,17 @@
       ]
     },
     {
+      "name": "dramatic_oil_opt_20260221170436",
+      "description": "Optimized variant of dramatic_oil",
+      "style_text": "classical oil painting, masterpiece quality, warm golden lighting, renaissance art style, detailed brushwork, gallery-quality illustration, circular vignette composition, rich color palette, dramatic chiaroscuro, no text, no letters, no words, no watermarks, copper plate engraving",
+      "tags": [
+        "oil",
+        "dramatic",
+        "classical",
+        "optimized"
+      ]
+    },
+    {
       "name": "engraving_detailed",
       "description": "Ultra-detailed copperplate engraving and etching line work.",
       "style_text": "copper plate engraving, fine line work, meticulous etching detail, circular vignette composition",
@@ -30,6 +41,17 @@
         "engraving",
         "detailed",
         "linework"
+      ]
+    },
+    {
+      "name": "engraving_detailed_opt_20260221170443",
+      "description": "Optimized variant of engraving_detailed",
+      "style_text": "copper plate engraving, fine line work, meticulous etching detail, circular vignette composition, dense etching hatchwork",
+      "tags": [
+        "engraving",
+        "detailed",
+        "linework",
+        "optimized"
       ]
     },
     {
@@ -43,6 +65,17 @@
       ]
     },
     {
+      "name": "gothic_moody_opt_20260221170445",
+      "description": "Optimized variant of gothic_moody",
+      "style_text": "gothic romantic atmosphere, moody shadows, dramatic rim lighting, painterly depth, copper plate engraving",
+      "tags": [
+        "gothic",
+        "moody",
+        "dramatic",
+        "optimized"
+      ]
+    },
+    {
       "name": "warm_sepia_sketch",
       "description": "Hand-drawn 19th-century sketch aesthetic with sepia warmth.",
       "style_text": "classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks",
@@ -50,6 +83,17 @@
         "sketch",
         "sepia",
         "classical"
+      ]
+    },
+    {
+      "name": "warm_sepia_sketch_opt_20260221170447",
+      "description": "Optimized variant of warm_sepia_sketch",
+      "style_text": "classical copper plate engraving, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks",
+      "tags": [
+        "sketch",
+        "sepia",
+        "classical",
+        "optimized"
       ]
     },
     {
@@ -61,233 +105,246 @@
         "soft",
         "pastoral"
       ]
+    },
+    {
+      "name": "watercolor_soft_opt_20260221170450",
+      "description": "Optimized variant of watercolor_soft",
+      "style_text": "soft watercolor washes, delicate brush texture, gentle tonal transitions, classical composition, dense etching hatchwork",
+      "tags": [
+        "watercolor",
+        "soft",
+        "pastoral",
+        "optimized"
+      ]
     }
   ],
   "prompts": [
     {
-      "id": "afb630b3-7aff-463a-b9f0-ea1e82052ef6",
-      "name": "Dramatic Chiaroscuro Moment",
-      "prompt_template": "Masterpiece-style classical oil painting of the pivotal dramatic moment in {title}, with cinematic light contrast.",
+      "id": "3cb72b01-44c2-48bf-8aaf-c1d5f9923822",
+      "name": "7A Winner #1 — Variant 4",
+      "prompt_template": "Dramatic oil painting of desperate final embrace in a candlelit crypt amid roses and cold marble, classical oil painting, masterpiece quality, warm golden lighting, renaissance art style, detailed brushwork, gallery-quality illustration, circular vignette composition, rich color palette, dramatic chiaroscuro, no text, no letters, no words, no watermarks, inspired by the narrative of {title}",
       "style_anchors": [
         "dramatic_oil"
       ],
       "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
-      "source_book": "Moby Dick",
-      "source_model": "gpt-image-1-high",
-      "quality_score": 0.84,
-      "saved_by": "auto",
-      "created_at": "2026-02-20T21:46:52.526494+00:00",
-      "notes": "High-end quality ceiling prompt for shortlist comparisons.",
+      "source_book": "11. Romeo and Juliet",
+      "source_model": "openai/gpt-image-1",
+      "quality_score": 0.7441,
+      "saved_by": "codex",
+      "created_at": "2026-02-21T12:02:23.061869+00:00",
+      "notes": "Derived from book 11 variant 4 during Prompt 7A.",
       "tags": [
-        "dramatic",
-        "oil",
-        "high_quality"
+        "winner",
+        "7a",
+        "title_agnostic",
+        "variant_4",
+        "openai-gpt-image-1"
       ]
     },
     {
-      "id": "e3881adb-d7d8-42d2-8fec-bab831401e32",
-      "name": "Etching with Narrative Depth",
-      "prompt_template": "Dense copperplate-style etching of a narrative turning point from {title}, emphasizing layered storytelling details.",
-      "style_anchors": [
-        "engraving_detailed",
-        "warm_sepia_sketch"
-      ],
-      "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
-      "source_book": "Moby Dick",
-      "source_model": "gpt-image-1-medium",
-      "quality_score": 0.82,
-      "saved_by": "auto",
-      "created_at": "2026-02-20T21:46:52.526515+00:00",
-      "notes": "Reliable prompt for rich compositions with many micro-details.",
-      "tags": [
-        "etching",
-        "detail",
-        "narrative"
-      ]
-    },
-    {
-      "id": "5e53a0e9-a404-4145-a198-5dcd2f26cdb8",
-      "name": "Gothic Tension Scene",
-      "prompt_template": "Atmospheric gothic interpretation of the most psychologically intense moment from {title}.",
-      "style_anchors": [
-        "dramatic_oil",
-        "gothic_moody"
-      ],
-      "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
-      "source_book": "Moby Dick",
-      "source_model": "imagen-4-ultra",
-      "quality_score": 0.81,
-      "saved_by": "auto",
-      "created_at": "2026-02-20T21:46:52.526499+00:00",
-      "notes": "Useful for darker classics and tragic narratives.",
-      "tags": [
-        "gothic",
-        "mood",
-        "dramatic"
-      ]
-    },
-    {
-      "id": "b79c8f7c-d5a8-43e8-97d7-cfabd50dcc1e",
-      "name": "Iconic Scene Sketch Baseline",
-      "prompt_template": "Detailed pen-and-ink engraving of the most iconic scene from {title}, rendered as a circular vignette.",
-      "style_anchors": [
-        "warm_sepia_sketch",
-        "engraving_detailed"
-      ],
-      "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
-      "source_book": "Moby Dick",
-      "source_model": "flux-2-pro",
-      "quality_score": 0.8,
-      "saved_by": "auto",
-      "created_at": "2026-02-20T21:46:52.526319+00:00",
-      "notes": "Strong baseline for classical literary titles.",
-      "tags": [
-        "iconic",
-        "sketch",
-        "baseline"
-      ]
-    },
-    {
-      "id": "6a43c875-7ef2-4b59-b006-32ffcaf1b7ce",
-      "name": "Heroic Oil Tableau",
-      "prompt_template": "Heroic classical oil tableau depicting the defining confrontation from {title}, with rich golden highlights.",
-      "style_anchors": [
-        "dramatic_oil"
-      ],
-      "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
-      "source_book": "Moby Dick",
-      "source_model": "flux-2-pro",
-      "quality_score": 0.79,
-      "saved_by": "auto",
-      "created_at": "2026-02-20T21:46:52.526511+00:00",
-      "notes": "Performs well on action-driven works.",
-      "tags": [
-        "heroic",
-        "oil",
-        "tableau"
-      ]
-    },
-    {
-      "id": "d01eb89e-bcda-4518-8cb2-f7c7d4b1e1f6",
-      "name": "Character Portrait Etching",
-      "prompt_template": "Classical engraved portrait of the central character from {title}, with expressive posture and period costume.",
-      "style_anchors": [
-        "warm_sepia_sketch",
-        "engraving_detailed"
-      ],
-      "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
-      "source_book": "Moby Dick",
-      "source_model": "gpt-image-1-medium",
-      "quality_score": 0.78,
-      "saved_by": "auto",
-      "created_at": "2026-02-20T21:46:52.526480+00:00",
-      "notes": "Works well when character focus is more recognizable than scene focus.",
-      "tags": [
-        "portrait",
-        "character",
-        "sketch"
-      ]
-    },
-    {
-      "id": "a4d6c2d9-e764-43db-a746-126d097f4bce",
-      "name": "Baroque Allegory",
-      "prompt_template": "Classical allegorical illustration for {title}, with period motifs and layered symbolic storytelling.",
+      "id": "31174db5-372a-4009-8fe6-cace9d41e2fe",
+      "name": "7A Winner #2 — Variant 5",
+      "prompt_template": "period-inspired mixed-media engraving symbolizing core themes represented by allegorical objects, contrasting light, and recursive geometry, period-appropriate artistic style, hand-crafted aesthetic, classical composition, warm tones matching navy-and-gold cover design, unique artistic interpretation, circular vignette composition, no text, no letters, no words, no watermarks, inspired by the narrative of {title}",
       "style_anchors": [
         "allegorical_symbolic",
-        "engraving_detailed"
+        "watercolor_soft"
       ],
       "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
-      "source_book": "Moby Dick",
-      "source_model": "nano-banana-pro",
-      "quality_score": 0.76,
-      "saved_by": "auto",
-      "created_at": "2026-02-20T21:46:52.526507+00:00",
-      "notes": "Balances uniqueness with consistency for batch candidates.",
+      "source_book": "10. The Enchanted April",
+      "source_model": "openai/gpt-image-1",
+      "quality_score": 0.7413,
+      "saved_by": "codex",
+      "created_at": "2026-02-21T12:02:23.062003+00:00",
+      "notes": "Derived from book 10 variant 5 during Prompt 7A.",
       "tags": [
-        "allegory",
-        "symbolic",
-        "baroque"
+        "winner",
+        "7a",
+        "title_agnostic",
+        "variant_5",
+        "openai-gpt-image-1"
       ]
     },
     {
-      "id": "18e920d4-4c6b-41fb-8382-fd303748c93a",
-      "name": "API Saved Prompt",
-      "prompt_template": "Classical engraving from {title}",
+      "id": "3b9c47ff-f178-4231-bdd9-71b882807638",
+      "name": "7A Winner #3 — Variant 5",
+      "prompt_template": "Victorian narrative engraving symbolizing compassion symbolized by a lantern glowing in fog and rain, period-appropriate artistic style, hand-crafted aesthetic, classical composition, warm tones matching navy-and-gold cover design, unique artistic interpretation, circular vignette composition, no text, no letters, no words, no watermarks, inspired by the narrative of {title}",
       "style_anchors": [
-        "warm_sepia_sketch"
-      ],
-      "negative_prompt": "",
-      "source_book": "iteration",
-      "source_model": "manual",
-      "quality_score": 0.75,
-      "saved_by": "tim",
-      "created_at": "2026-02-20T22:17:09.785562+00:00",
-      "notes": "saved from iterate page",
-      "tags": [
-        "api-test"
-      ]
-    },
-    {
-      "id": "218cec2a-f490-4b3d-90c2-2c4f71d91afc",
-      "name": "Soft Symbolic Watercolor",
-      "prompt_template": "Symbolic watercolor composition for {title}, using allegorical objects to represent the book's core themes.",
-      "style_anchors": [
-        "watercolor_soft",
-        "allegorical_symbolic"
+        "allegorical_symbolic",
+        "watercolor_soft"
       ],
       "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
-      "source_book": "Moby Dick",
-      "source_model": "imagen-4-fast",
-      "quality_score": 0.75,
-      "saved_by": "auto",
-      "created_at": "2026-02-20T21:46:52.526503+00:00",
-      "notes": "Good fallback when literal scenes feel crowded inside circular crops.",
+      "source_book": "16. The Pickwick Papers",
+      "source_model": "openai/gpt-image-1",
+      "quality_score": 0.7399,
+      "saved_by": "codex",
+      "created_at": "2026-02-21T12:02:23.062013+00:00",
+      "notes": "Derived from book 16 variant 5 during Prompt 7A.",
       "tags": [
-        "symbolic",
-        "watercolor",
-        "alternative"
+        "winner",
+        "7a",
+        "title_agnostic",
+        "variant_5",
+        "openai-gpt-image-1"
       ]
     },
     {
-      "id": "84a94cf0-25ff-4646-8910-5599241bccc2",
-      "name": "Painterly Pastoral Variant",
-      "prompt_template": "Pastoral yet classical rendering of a key emotional scene from {title}, favoring gentle brushwork over hard outlines.",
+      "id": "6e537cf1-fe2a-4644-aa57-dbf608f126b0",
+      "name": "7A Winner #4 — Variant 4",
+      "prompt_template": "Dramatic oil painting of climactic turning point under turbulent light, motion, and heightened emotional stakes, classical oil painting, masterpiece quality, warm golden lighting, renaissance art style, detailed brushwork, gallery-quality illustration, circular vignette composition, rich color palette, dramatic chiaroscuro, no text, no letters, no words, no watermarks, inspired by the narrative of {title}",
       "style_anchors": [
-        "watercolor_soft",
         "dramatic_oil"
       ],
       "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
-      "source_book": "Moby Dick",
-      "source_model": "imagen-4-fast",
-      "quality_score": 0.74,
-      "saved_by": "auto",
-      "created_at": "2026-02-20T21:46:52.526519+00:00",
-      "notes": "Adds tonal diversity while staying aligned with the cover aesthetic.",
+      "source_book": "20. Middlemarch",
+      "source_model": "openai/gpt-image-1",
+      "quality_score": 0.7355,
+      "saved_by": "codex",
+      "created_at": "2026-02-21T12:02:23.062020+00:00",
+      "notes": "Derived from book 20 variant 4 during Prompt 7A.",
       "tags": [
-        "pastoral",
-        "painterly",
-        "variant"
+        "winner",
+        "7a",
+        "title_agnostic",
+        "variant_4",
+        "openai-gpt-image-1"
       ]
     },
     {
-      "id": "1b9e4cb3-9d27-4da8-b6b1-9d87b00fe06b",
-      "name": "Setting-Led Sketch Landscape",
-      "prompt_template": "19th-century style book illustration of the defining setting from {title}, emphasizing depth and architectural detail.",
+      "id": "57791767-623f-4bcb-aade-475764de9d2a",
+      "name": "7A Winner #5 — Variant 3",
+      "prompt_template": "Detailed 19th-century book illustration of key story environment with layered architecture, atmospheric depth, and symbolic objects, classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks, inspired by the narrative of {title}",
       "style_anchors": [
         "warm_sepia_sketch",
         "engraving_detailed"
       ],
       "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
-      "source_book": "Moby Dick",
-      "source_model": "flux-2-schnell",
-      "quality_score": 0.73,
-      "saved_by": "auto",
-      "created_at": "2026-02-20T21:46:52.526489+00:00",
-      "notes": "Fast and cheap exploration pattern for geography-heavy books.",
+      "source_book": "17. The Wind in the Willows",
+      "source_model": "openai/gpt-image-1",
+      "quality_score": 0.7329,
+      "saved_by": "codex",
+      "created_at": "2026-02-21T12:02:23.062026+00:00",
+      "notes": "Derived from book 17 variant 3 during Prompt 7A.",
       "tags": [
-        "setting",
-        "landscape",
-        "sketch"
+        "winner",
+        "7a",
+        "title_agnostic",
+        "variant_3",
+        "openai-gpt-image-1"
+      ]
+    },
+    {
+      "id": "6776b8f4-df16-465c-aac5-95c4f8efce6e",
+      "name": "7A Winner #6 — Variant 3",
+      "prompt_template": "Detailed 19th-century book illustration of narrow Petersburg courtyards, wet cobblestones, oppressive tenement walls, and pale dawn haze, classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks, inspired by the narrative of {title}",
+      "style_anchors": [
+        "warm_sepia_sketch",
+        "engraving_detailed"
+      ],
+      "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+      "source_book": "19. Crime and Punishment",
+      "source_model": "openai/gpt-image-1",
+      "quality_score": 0.7314,
+      "saved_by": "codex",
+      "created_at": "2026-02-21T12:02:23.062034+00:00",
+      "notes": "Derived from book 19 variant 3 during Prompt 7A.",
+      "tags": [
+        "winner",
+        "7a",
+        "title_agnostic",
+        "variant_3",
+        "openai-gpt-image-1"
+      ]
+    },
+    {
+      "id": "30505ab8-9d7d-4f66-bcfd-0fa9e381ac25",
+      "name": "7A Winner #7 — Variant 2",
+      "prompt_template": "Classical engraving portrait of gaunt young intellectual under a streetlamp, restless eyes, fevered expression, threadbare coat, classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks, inspired by the narrative of {title}",
+      "style_anchors": [
+        "warm_sepia_sketch",
+        "engraving_detailed"
+      ],
+      "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+      "source_book": "19. Crime and Punishment",
+      "source_model": "openai/gpt-image-1",
+      "quality_score": 0.7282,
+      "saved_by": "codex",
+      "created_at": "2026-02-21T12:02:23.062039+00:00",
+      "notes": "Derived from book 19 variant 2 during Prompt 7A.",
+      "tags": [
+        "winner",
+        "7a",
+        "title_agnostic",
+        "variant_2",
+        "openai-gpt-image-1"
+      ]
+    },
+    {
+      "id": "9f7098ce-d3fb-4767-aa02-184ab83edcd9",
+      "name": "7A Winner #8 — Variant 1",
+      "prompt_template": "Detailed pen-and-ink engraving of pivotal narrative tableau with period costume, emotional tension, and dramatic environmental storytelling, classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks, inspired by the narrative of {title}",
+      "style_anchors": [
+        "warm_sepia_sketch",
+        "engraving_detailed"
+      ],
+      "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+      "source_book": "17. The Wind in the Willows",
+      "source_model": "openai/gpt-image-1",
+      "quality_score": 0.7281,
+      "saved_by": "codex",
+      "created_at": "2026-02-21T12:02:23.062045+00:00",
+      "notes": "Derived from book 17 variant 1 during Prompt 7A.",
+      "tags": [
+        "winner",
+        "7a",
+        "title_agnostic",
+        "variant_1",
+        "openai-gpt-image-1"
+      ]
+    },
+    {
+      "id": "6426a181-3c2a-4cbd-b9b3-29356a3c117a",
+      "name": "7A Winner #9 — Variant 2",
+      "prompt_template": "Classical engraving portrait of central protagonist in historically grounded attire, expressive face, and purposeful posture, classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks, inspired by the narrative of {title}",
+      "style_anchors": [
+        "warm_sepia_sketch",
+        "engraving_detailed"
+      ],
+      "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+      "source_book": "17. The Wind in the Willows",
+      "source_model": "openai/gpt-image-1",
+      "quality_score": 0.7258,
+      "saved_by": "codex",
+      "created_at": "2026-02-21T12:02:23.062050+00:00",
+      "notes": "Derived from book 17 variant 2 during Prompt 7A.",
+      "tags": [
+        "winner",
+        "7a",
+        "title_agnostic",
+        "variant_2",
+        "openai-gpt-image-1"
+      ]
+    },
+    {
+      "id": "36d399a2-06b5-4a2a-9029-dc7f9f24fc80",
+      "name": "7A Winner #10 — Variant 2",
+      "prompt_template": "Classical engraving portrait of the creature, stitched and sorrowful, lit by laboratory coils and violent lightning shadows, classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks, inspired by the narrative of {title}",
+      "style_anchors": [
+        "warm_sepia_sketch",
+        "engraving_detailed"
+      ],
+      "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+      "source_book": "5. Frankenstein' Or, The Modern Prometheus",
+      "source_model": "openai/gpt-image-1",
+      "quality_score": 0.7246,
+      "saved_by": "codex",
+      "created_at": "2026-02-21T12:02:23.062055+00:00",
+      "notes": "Derived from book 5 variant 2 during Prompt 7A.",
+      "tags": [
+        "winner",
+        "7a",
+        "title_agnostic",
+        "variant_2",
+        "openai-gpt-image-1"
       ]
     }
   ]

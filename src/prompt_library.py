@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -11,8 +10,14 @@ from typing import Iterable, Sequence
 
 try:
     from src import config
+    from src import safe_json
+    from src.logger import get_logger
 except ModuleNotFoundError:  # pragma: no cover
     import config  # type: ignore
+    import safe_json  # type: ignore
+    from logger import get_logger  # type: ignore
+
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -63,6 +68,10 @@ class PromptLibrary:
             raise ValueError("Prompt template must include '{title}' placeholder for title-agnostic reuse.")
         self._prompts[prompt.id] = prompt
         self._persist()
+        logger.info(
+            "Saved prompt to library",
+            extra={"prompt_id": prompt.id, "prompt_name": prompt.name, "score": prompt.quality_score},
+        )
 
     def get_prompts(self, tags: list[str] | None = None) -> list[LibraryPrompt]:
         """Get prompts, optionally filtered by tags."""
@@ -137,6 +146,7 @@ class PromptLibrary:
         """Add or update a style anchor."""
         self._style_anchors[anchor.name] = anchor
         self._persist()
+        logger.info("Upserted style anchor", extra={"anchor": anchor.name})
 
     def _load_or_seed(self) -> None:
         if self.library_path.exists():
@@ -150,36 +160,54 @@ class PromptLibrary:
         self._persist()
 
     def _load(self) -> None:
-        payload = json.loads(self.library_path.read_text(encoding="utf-8"))
+        payload = safe_json.load_json(self.library_path, {})
+        if not isinstance(payload, dict):
+            payload = {}
         style_payload = payload.get("style_anchors", [])
         prompts_payload = payload.get("prompts", [])
 
-        self._style_anchors = {
-            item["name"]: StyleAnchor(
-                name=item["name"],
-                description=item["description"],
-                style_text=item["style_text"],
-                tags=list(item.get("tags", [])),
+        anchors: dict[str, StyleAnchor] = {}
+        for item in style_payload if isinstance(style_payload, list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            tags_raw = item.get("tags", [])
+            tags = [str(tag).strip() for tag in tags_raw] if isinstance(tags_raw, list) else []
+            anchors[name] = StyleAnchor(
+                name=name,
+                description=str(item.get("description", "")).strip(),
+                style_text=str(item.get("style_text", "")).strip(),
+                tags=[tag for tag in tags if tag],
             )
-            for item in style_payload
-        }
-        self._prompts = {
-            item["id"]: LibraryPrompt(
-                id=item["id"],
-                name=item["name"],
-                prompt_template=item["prompt_template"],
-                style_anchors=list(item.get("style_anchors", [])),
-                negative_prompt=item.get("negative_prompt", ""),
-                source_book=item.get("source_book", ""),
-                source_model=item.get("source_model", ""),
-                quality_score=float(item.get("quality_score", 0.0)),
-                saved_by=item.get("saved_by", "auto"),
-                created_at=item.get("created_at", _utc_now()),
-                notes=item.get("notes", ""),
-                tags=list(item.get("tags", [])),
+        self._style_anchors = anchors
+
+        prompts: dict[str, LibraryPrompt] = {}
+        for item in prompts_payload if isinstance(prompts_payload, list) else []:
+            if not isinstance(item, dict):
+                continue
+            prompt_id = str(item.get("id", "")).strip()
+            template = str(item.get("prompt_template", "")).strip()
+            if not prompt_id or not template:
+                continue
+            style_raw = item.get("style_anchors", [])
+            tags_raw = item.get("tags", [])
+            prompts[prompt_id] = LibraryPrompt(
+                id=prompt_id,
+                name=str(item.get("name", "")).strip() or prompt_id,
+                prompt_template=template,
+                style_anchors=[str(anchor).strip() for anchor in style_raw] if isinstance(style_raw, list) else [],
+                negative_prompt=str(item.get("negative_prompt", "")).strip(),
+                source_book=str(item.get("source_book", "")).strip(),
+                source_model=str(item.get("source_model", "")).strip(),
+                quality_score=float(item.get("quality_score", 0.0) or 0.0),
+                saved_by=str(item.get("saved_by", "auto") or "auto"),
+                created_at=str(item.get("created_at", _utc_now()) or _utc_now()),
+                notes=str(item.get("notes", "")).strip(),
+                tags=[str(tag).strip() for tag in tags_raw] if isinstance(tags_raw, list) else [],
             )
-            for item in prompts_payload
-        }
+        self._prompts = prompts
 
     def _persist(self) -> None:
         payload = {
@@ -195,10 +223,13 @@ class PromptLibrary:
                 )
             ],
         }
-        self.library_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        safe_json.atomic_write_json(self.library_path, payload)
+        logger.debug("Persisted prompt library", extra={"path": str(self.library_path), "anchors": len(self._style_anchors), "prompts": len(self._prompts)})
 
     def _seed_library(self) -> tuple[list[StyleAnchor], list[LibraryPrompt]]:
-        templates = json.loads(config.PROMPT_TEMPLATES_PATH.read_text(encoding="utf-8"))
+        templates = safe_json.load_json(config.PROMPT_TEMPLATES_PATH, {})
+        if not isinstance(templates, dict):
+            templates = {}
         negative_prompt = templates.get("negative_prompt", "")
 
         style_groups = templates.get("style_groups", {})

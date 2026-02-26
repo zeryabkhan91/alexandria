@@ -28,7 +28,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from PIL import Image, ImageDraw
 import requests
@@ -47,6 +47,7 @@ try:
     from src import config
     from src import cost_tracker
     from src import cover_compositor
+    from src import disaster_recovery
     from src import delivery_pipeline
     from src import drive_manager
     from src import error_metrics
@@ -79,6 +80,7 @@ except ModuleNotFoundError:  # pragma: no cover
     import config  # type: ignore
     import cost_tracker  # type: ignore
     import cover_compositor  # type: ignore
+    import disaster_recovery  # type: ignore
     import delivery_pipeline  # type: ignore
     import drive_manager  # type: ignore
     import error_metrics  # type: ignore
@@ -668,6 +670,7 @@ class JobWorkerPool:
         credentials_path: str = "",
         dry_run: bool = False,
         max_attempts: int = 3,
+        metadata: dict[str, Any] | None = None,
     ) -> tuple[job_store.JobRecord, bool]:
         normalized_models = sorted({str(item).strip() for item in models if str(item).strip()})
         normalized_prompt = " ".join(str(prompt or "").split())
@@ -690,6 +693,14 @@ class JobWorkerPool:
             "credentials_path": str(credentials_path or "").strip(),
             "dry_run": bool(dry_run),
         }
+        if isinstance(metadata, dict):
+            for key, value in metadata.items():
+                token = str(key or "").strip()
+                if not token:
+                    continue
+                if token in payload:
+                    continue
+                payload[token] = value
         job, created = self.store.create_or_get_job(
             job_id=str(uuid.uuid4()),
             idempotency_key=str(idempotency_key),
@@ -716,6 +727,7 @@ class JobWorkerPool:
                 continue
 
             attempt_number = int(job.attempts or 0) + 1
+            batch_id = str((job.payload or {}).get("batch_id", "") or "").strip()
             self._write_heartbeat(worker_id=worker_id, state="running", job_id=job.id)
             job_event_broker.publish(
                 "job_started",
@@ -727,6 +739,7 @@ class JobWorkerPool:
                     "status": "running",
                     "attempt_number": attempt_number,
                     "progress": 0.0,
+                    "batch_id": batch_id,
                 },
             )
             job_event_broker.publish(
@@ -738,6 +751,7 @@ class JobWorkerPool:
                     "job_type": job.job_type,
                     "status": "running",
                     "progress": 0.0,
+                    "batch_id": batch_id,
                 },
             )
             attempt_id = self.store.record_attempt_start(
@@ -748,7 +762,29 @@ class JobWorkerPool:
             try:
                 execution_payload = dict(job.payload or {})
                 execution_payload["job_id"] = job.id
+                if batch_id:
+                    execution_payload["batch_id"] = batch_id
                 result = _execute_generation_payload(execution_payload)
+                result_rows = result.get("results", []) if isinstance(result, dict) else []
+                if isinstance(result_rows, list):
+                    for row in result_rows:
+                        if not isinstance(row, dict):
+                            continue
+                        job_event_broker.publish(
+                            "variant_complete",
+                            {
+                                "job_id": job.id,
+                                "catalog_id": job.catalog_id,
+                                "book_number": int(job.book_number or 0),
+                                "batch_id": batch_id,
+                                "variant": _safe_int(row.get("variant", row.get("variant_id", 0)), 0),
+                                "model": str(row.get("model", "")).strip(),
+                                "success": bool(row.get("success", False)),
+                                "quality_score": _safe_float(row.get("quality_score"), 0.0),
+                                "image_path": row.get("image_path"),
+                                "composited_path": row.get("composited_path"),
+                            },
+                        )
                 row = self.store.mark_completed(job.id, result=result)
                 self.store.record_attempt_end(
                     attempt_id,
@@ -764,6 +800,7 @@ class JobWorkerPool:
                         "job_type": job.job_type,
                         "status": "completed",
                         "progress": 1.0,
+                        "batch_id": batch_id,
                     },
                 )
                 job_event_broker.publish(
@@ -775,6 +812,7 @@ class JobWorkerPool:
                         "job_type": job.job_type,
                         "status": "completed",
                         "result_count": len(result.get("results", [])),
+                        "batch_id": batch_id,
                     },
                 )
                 if row is not None:
@@ -788,8 +826,10 @@ class JobWorkerPool:
                             "status": row.status,
                             "attempts": int(row.attempts or 0),
                             "result": row.result,
+                            "batch_id": batch_id,
                         },
-                )
+                    )
+                    _batch_publish_progress_for_job(row)
                 self._write_heartbeat(worker_id=worker_id, state="idle")
             except JobStageError as exc:
                 if exc.retryable:
@@ -819,8 +859,11 @@ class JobWorkerPool:
                             "stage": exc.stage,
                             "retry_delay_seconds": delay,
                             "attempt_number": attempt_number,
+                            "batch_id": batch_id,
                         },
                     )
+                    if state is not None:
+                        _batch_publish_progress_for_job(state)
                 else:
                     row = self.store.mark_failed(
                         job.id,
@@ -846,8 +889,11 @@ class JobWorkerPool:
                             "error": str(exc),
                             "stage": exc.stage,
                             "attempt_number": attempt_number,
+                            "batch_id": batch_id,
                         },
                     )
+                    if row is not None:
+                        _batch_publish_progress_for_job(row)
                     logger.error(
                         "Async generation job failed",
                         extra={"job_id": job.id, "error": str(exc), "stage": exc.stage},
@@ -880,8 +926,11 @@ class JobWorkerPool:
                         "stage": "generate",
                         "retry_delay_seconds": delay,
                         "attempt_number": attempt_number,
+                        "batch_id": batch_id,
                     },
                 )
+                if state is not None:
+                    _batch_publish_progress_for_job(state)
                 self._write_heartbeat(worker_id=worker_id, state="idle")
             except Exception as exc:  # pragma: no cover - defensive
                 row = self.store.mark_failed(
@@ -906,8 +955,11 @@ class JobWorkerPool:
                         "status": row.status if row is not None else "failed",
                         "error": str(exc),
                         "attempt_number": attempt_number,
+                        "batch_id": batch_id,
                     },
                 )
+                if row is not None:
+                    _batch_publish_progress_for_job(row)
                 logger.error("Async generation job failed", extra={"job_id": job.id, "error": str(exc)})
                 self._write_heartbeat(worker_id=worker_id, state="idle")
 
@@ -926,6 +978,8 @@ slo_alert_manager = SLOAlertManager(
 )
 _slo_tracker_lock = threading.Lock()
 _slo_trackers_by_path: dict[str, RollingSLOTracker] = {str(SLO_METRICS_PATH.resolve()): slo_tracker}
+_similarity_recompute_lock = threading.Lock()
+_similarity_recompute_jobs: dict[str, dict[str, Any]] = {}
 _slo_alert_manager_lock = threading.Lock()
 _slo_alert_managers_by_path: dict[str, SLOAlertManager] = {str(SLO_ALERT_STATE_PATH.resolve()): slo_alert_manager}
 job_db_store = job_store.JobStore(JOBS_DB_PATH)
@@ -1885,6 +1939,10 @@ def _delivery_tracking_path_for_runtime(runtime: config.Config) -> Path:
     return config.delivery_tracking_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
 
 
+def _batch_runs_path_for_runtime(runtime: config.Config) -> Path:
+    return config.batch_runs_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+
+
 def _report_schedules_path_for_runtime(runtime: config.Config) -> Path:
     return config.report_schedules_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
 
@@ -1911,6 +1969,615 @@ def _catalog_id_from_winner_path(path: Path) -> str:
 
 def _book_metadata_path_for_runtime(runtime: config.Config) -> Path:
     return book_metadata.metadata_path(data_dir=runtime.data_dir, catalog_id=runtime.catalog_id)
+
+
+def _batch_runs_default_payload() -> dict[str, Any]:
+    return {"updated_at": "", "batches": {}}
+
+
+def _load_batch_runs_payload(runtime: config.Config) -> dict[str, Any]:
+    path = _batch_runs_path_for_runtime(runtime)
+    payload = _load_json(path, _batch_runs_default_payload())
+    if not isinstance(payload, dict):
+        payload = _batch_runs_default_payload()
+    batches = payload.get("batches", {})
+    if not isinstance(batches, dict):
+        batches = {}
+    payload["batches"] = batches
+    return payload
+
+
+def _save_batch_runs_payload(runtime: config.Config, payload: dict[str, Any]) -> None:
+    path = _batch_runs_path_for_runtime(runtime)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    next_payload = dict(payload) if isinstance(payload, dict) else _batch_runs_default_payload()
+    batches = next_payload.get("batches", {})
+    if not isinstance(batches, dict):
+        batches = {}
+    next_payload["batches"] = batches
+    next_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    safe_json.atomic_write_json(path, next_payload)
+
+
+def _load_batch_entry(runtime: config.Config, batch_id: str) -> dict[str, Any] | None:
+    payload = _load_batch_runs_payload(runtime)
+    batches = payload.get("batches", {})
+    if not isinstance(batches, dict):
+        return None
+    row = batches.get(str(batch_id), None)
+    return dict(row) if isinstance(row, dict) else None
+
+
+def _upsert_batch_entry(runtime: config.Config, entry: dict[str, Any]) -> None:
+    batch_id = str(entry.get("id", "")).strip()
+    if not batch_id:
+        raise ValueError("batch entry must include id")
+    with state_lock:
+        payload = _load_batch_runs_payload(runtime)
+        batches = payload.get("batches", {})
+        if not isinstance(batches, dict):
+            batches = {}
+        next_entry = dict(entry)
+        next_entry["id"] = batch_id
+        next_entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+        batches[batch_id] = next_entry
+        payload["batches"] = batches
+        _save_batch_runs_payload(runtime, payload)
+
+
+def _catalog_book_title_map(runtime: config.Config) -> dict[int, str]:
+    payload = _load_json(runtime.book_catalog_path, [])
+    out: dict[int, str] = {}
+    if not isinstance(payload, list):
+        return out
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        number = _safe_int(row.get("number"), 0)
+        if number <= 0:
+            continue
+        title = str(row.get("title", "")).strip()
+        author = str(row.get("author", "")).strip()
+        label = title
+        if author:
+            label = f"{title} — {author}" if title else author
+        out[number] = label or f"Book {number}"
+    return out
+
+
+def _job_result_rows(job: job_store.JobRecord | None) -> list[dict[str, Any]]:
+    if job is None or not isinstance(job.result, dict):
+        return []
+    rows = job.result.get("results", [])
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _job_result_cost_total(job: job_store.JobRecord | None) -> float:
+    total = 0.0
+    for row in _job_result_rows(job):
+        total += _safe_float(row.get("cost"), 0.0)
+    return round(total, 6)
+
+
+def _job_result_variant_count(job: job_store.JobRecord | None) -> int:
+    rows = _job_result_rows(job)
+    if not rows:
+        return 0
+    success_rows = [row for row in rows if bool(row.get("success", False))]
+    return len(success_rows) if success_rows else len(rows)
+
+
+def _job_result_preview(job: job_store.JobRecord | None) -> tuple[str, str]:
+    for row in _job_result_rows(job):
+        rel = str(row.get("composited_path") or row.get("image_path") or "").strip()
+        if not rel:
+            continue
+        return rel, f"/api/thumbnail?path={quote(rel, safe='')}&size=small"
+    return "", ""
+
+
+def _job_elapsed_seconds(job: job_store.JobRecord | None) -> float:
+    if job is None:
+        return 0.0
+    started = _safe_iso_datetime(job.started_at)
+    finished = _safe_iso_datetime(job.finished_at)
+    if started is None or finished is None:
+        return 0.0
+    delta = (finished - started).total_seconds()
+    return max(0.0, float(delta))
+
+
+def _count_batch_statuses(rows: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"queued": 0, "running": 0, "retrying": 0, "paused": 0, "completed": 0, "failed": 0, "cancelled": 0}
+    for row in rows:
+        status = str(row.get("status", "queued")).strip().lower()
+        if status not in counts:
+            status = "queued"
+        counts[status] += 1
+    return counts
+
+
+def _reconcile_batch_entry(
+    runtime: config.Config,
+    batch_id: str,
+    *,
+    enforce_budget: bool = True,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], dict[str, Any]]:
+    entry = _load_batch_entry(runtime, batch_id)
+    if not isinstance(entry, dict):
+        return None, [], {}
+
+    raw_books = entry.get("books", [])
+    if not isinstance(raw_books, list):
+        raw_books = []
+
+    quality_lookup = _load_quality_lookup(_quality_scores_path_for_runtime(runtime))
+    quality_by_book: dict[int, float] = {}
+    for (book_number, _variant), score in quality_lookup.items():
+        quality_by_book[book_number] = max(quality_by_book.get(book_number, 0.0), _safe_float(score, 0.0))
+
+    books_out: list[dict[str, Any]] = []
+    quality_scores: list[float] = []
+    durations: list[float] = []
+    cost_so_far = 0.0
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for row in raw_books:
+        if not isinstance(row, dict):
+            continue
+        book_number = _safe_int(row.get("book_number"), 0)
+        title = str(row.get("title", f"Book {book_number}")).strip() or f"Book {book_number}"
+        job_id = str(row.get("job_id", "")).strip()
+        job = job_db_store.get_job(job_id) if job_id else None
+
+        status = str(row.get("status", "queued")).strip().lower() or "queued"
+        if job is not None:
+            status = str(job.status).strip().lower() or status
+        if status not in {"queued", "running", "retrying", "paused", "completed", "failed", "cancelled"}:
+            status = "queued"
+
+        result_cost = _job_result_cost_total(job)
+        cost_so_far += result_cost
+
+        quality_score = _safe_float(row.get("quality_score"), 0.0)
+        if quality_score <= 0 and book_number > 0:
+            quality_score = _safe_float(quality_by_book.get(book_number), 0.0)
+        if status == "completed" and quality_score > 0:
+            quality_scores.append(quality_score)
+
+        elapsed = _job_elapsed_seconds(job)
+        if status == "completed" and elapsed > 0:
+            durations.append(elapsed)
+
+        preview_rel, preview_thumb = _job_result_preview(job)
+        variants_generated = _job_result_variant_count(job)
+
+        error_message = str(row.get("error", "")).strip()
+        if job is not None and isinstance(job.error, dict):
+            error_message = str(job.error.get("message", error_message)).strip()
+
+        books_out.append(
+            {
+                "book_number": book_number,
+                "title": title,
+                "job_id": job_id,
+                "status": status,
+                "attempts": int(job.attempts) if job is not None else _safe_int(row.get("attempts"), 0),
+                "max_attempts": int(job.max_attempts) if job is not None else _safe_int(row.get("max_attempts"), 0),
+                "cost_usd": round(result_cost, 6),
+                "quality_score": round(quality_score, 4),
+                "variants_generated": variants_generated,
+                "preview_path": preview_rel,
+                "thumbnail_url": preview_thumb,
+                "error": error_message,
+                "started_at": str(job.started_at if job is not None else row.get("started_at", "") or ""),
+                "finished_at": str(job.finished_at if job is not None else row.get("finished_at", "") or ""),
+                "updated_at": str(job.updated_at if job is not None else row.get("updated_at", now_iso) or now_iso),
+            }
+        )
+
+    counts = _count_batch_statuses(books_out)
+    total = len(books_out)
+    terminal = int(counts.get("completed", 0)) + int(counts.get("failed", 0)) + int(counts.get("cancelled", 0))
+    remaining = max(0, total - terminal)
+
+    settings = entry.get("settings", {})
+    if not isinstance(settings, dict):
+        settings = {}
+        entry["settings"] = settings
+    budget_usd = _safe_float(settings.get("budgetUsd"), 0.0)
+
+    budget_pause_applied = False
+    if enforce_budget and budget_usd > 0 and cost_so_far >= budget_usd and remaining > 0 and not bool(entry.get("pause_requested", False)):
+        paused_jobs = 0
+        for row in books_out:
+            if str(row.get("status", "")).lower() not in {"queued", "retrying"}:
+                continue
+            job_id = str(row.get("job_id", "")).strip()
+            if not job_id:
+                continue
+            updated = job_db_store.mark_paused(job_id, reason="Batch paused at budget limit")
+            if updated is None:
+                continue
+            row["status"] = "paused"
+            row["attempts"] = int(updated.attempts)
+            row["max_attempts"] = int(updated.max_attempts)
+            row["updated_at"] = str(updated.updated_at or now_iso)
+            paused_jobs += 1
+        if paused_jobs > 0:
+            budget_pause_applied = True
+            entry["pause_requested"] = True
+            entry["paused_reason"] = "Budget limit reached"
+            entry["status"] = "paused"
+            counts = _count_batch_statuses(books_out)
+            terminal = int(counts.get("completed", 0)) + int(counts.get("failed", 0)) + int(counts.get("cancelled", 0))
+            remaining = max(0, total - terminal)
+
+    worker_status = _worker_runtime_status()
+    worker_rows = worker_status.get("workers", {})
+    if not isinstance(worker_rows, dict):
+        worker_rows = {}
+    workers_active = sum(1 for row in worker_rows.values() if isinstance(row, dict) and str(row.get("state", "")).lower() == "running")
+    workers_configured = max(
+        1,
+        _safe_int(worker_status.get("worker_count"), _safe_int(getattr(runtime, "job_workers", JOB_WORKER_COUNT), JOB_WORKER_COUNT)),
+    )
+    if workers_active <= 0 and _safe_int(counts.get("running"), 0) > 0:
+        workers_active = min(workers_configured, _safe_int(counts.get("running"), 0))
+
+    eta_seconds: int | None = None
+    if remaining <= 0:
+        eta_seconds = 0
+    elif durations:
+        avg_duration = sum(durations) / max(1, len(durations))
+        parallelism = max(1, workers_active or workers_configured)
+        eta_seconds = int(round((remaining * avg_duration) / parallelism))
+
+    cancel_requested = bool(entry.get("cancel_requested", False))
+    pause_requested = bool(entry.get("pause_requested", False))
+    batch_status = str(entry.get("status", "queued")).strip().lower() or "queued"
+    if cancel_requested and remaining <= 0:
+        batch_status = "cancelled"
+    elif total > 0 and terminal >= total:
+        batch_status = "completed"
+    elif pause_requested and _safe_int(counts.get("running"), 0) > 0:
+        batch_status = "pausing"
+    elif pause_requested:
+        batch_status = "paused"
+    elif _safe_int(counts.get("running"), 0) > 0:
+        batch_status = "running"
+    elif (_safe_int(counts.get("queued"), 0) + _safe_int(counts.get("retrying"), 0)) > 0:
+        batch_status = "queued"
+    elif _safe_int(counts.get("paused"), 0) > 0:
+        batch_status = "paused"
+
+    if batch_status in {"completed", "cancelled"} and not str(entry.get("finished_at", "")).strip():
+        entry["finished_at"] = now_iso
+    elif batch_status not in {"completed", "cancelled"}:
+        entry["finished_at"] = ""
+
+    summary = {
+        "total": total,
+        "completed": _safe_int(counts.get("completed"), 0),
+        "failed": _safe_int(counts.get("failed"), 0),
+        "cancelled": _safe_int(counts.get("cancelled"), 0),
+        "running": _safe_int(counts.get("running"), 0),
+        "queued": _safe_int(counts.get("queued"), 0),
+        "retrying": _safe_int(counts.get("retrying"), 0),
+        "paused": _safe_int(counts.get("paused"), 0),
+        "remaining": remaining,
+        "percent_complete": round(((_safe_int(counts.get("completed"), 0) / total) * 100.0), 2) if total > 0 else 0.0,
+        "cost_so_far_usd": round(cost_so_far, 6),
+        "budget_usd": round(budget_usd, 6),
+        "average_quality_score": round(sum(quality_scores) / len(quality_scores), 4) if quality_scores else 0.0,
+        "eta_seconds": eta_seconds,
+        "workers_active": workers_active,
+        "workers_configured": workers_configured,
+    }
+
+    next_books: list[dict[str, Any]] = []
+    for row in books_out:
+        next_books.append(
+            {
+                "book_number": _safe_int(row.get("book_number"), 0),
+                "title": str(row.get("title", "")).strip(),
+                "job_id": str(row.get("job_id", "")).strip(),
+                "status": str(row.get("status", "queued")).strip().lower() or "queued",
+                "cost_usd": round(_safe_float(row.get("cost_usd"), 0.0), 6),
+                "quality_score": round(_safe_float(row.get("quality_score"), 0.0), 4),
+                "attempts": _safe_int(row.get("attempts"), 0),
+                "max_attempts": _safe_int(row.get("max_attempts"), 0),
+                "error": str(row.get("error", "")).strip(),
+                "started_at": str(row.get("started_at", "")),
+                "finished_at": str(row.get("finished_at", "")),
+                "updated_at": str(row.get("updated_at", now_iso)),
+            }
+        )
+
+    changed = False
+    if str(entry.get("status", "")).strip().lower() != batch_status:
+        changed = True
+    if _safe_float(entry.get("cost_so_far_usd"), -1.0) != summary["cost_so_far_usd"]:
+        changed = True
+    if entry.get("books") != next_books:
+        changed = True
+    if entry.get("summary") != summary:
+        changed = True
+    if budget_pause_applied:
+        changed = True
+
+    entry["status"] = batch_status
+    entry["books"] = next_books
+    entry["summary"] = summary
+    entry["cost_so_far_usd"] = summary["cost_so_far_usd"]
+    entry["updated_at"] = now_iso
+
+    if changed:
+        _upsert_batch_entry(runtime, entry)
+    if budget_pause_applied:
+        job_event_broker.publish(
+            "batch_paused",
+            {
+                "batch_id": str(entry.get("id", batch_id)),
+                "catalog_id": runtime.catalog_id,
+                "status": str(entry.get("status", "paused")),
+                "reason": "Budget limit reached",
+                "costSoFar": _safe_float(summary.get("cost_so_far_usd"), 0.0),
+                "budgetUsd": _safe_float(summary.get("budget_usd"), 0.0),
+            },
+        )
+    return entry, books_out, summary
+
+
+def _batch_status_payload(
+    runtime: config.Config,
+    batch_id: str,
+    *,
+    limit: int = 25,
+    offset: int = 0,
+) -> dict[str, Any] | None:
+    entry, rows, summary = _reconcile_batch_entry(runtime, batch_id, enforce_budget=True)
+    if not isinstance(entry, dict):
+        return None
+    page, pagination = _paginate_rows(rows, limit=limit, offset=offset)
+    return {
+        "ok": True,
+        "catalog": runtime.catalog_id,
+        "batchId": str(entry.get("id", "")),
+        "status": str(entry.get("status", "queued")),
+        "created_at": str(entry.get("created_at", "")),
+        "updated_at": str(entry.get("updated_at", "")),
+        "started_at": str(entry.get("started_at", "")),
+        "finished_at": str(entry.get("finished_at", "")),
+        "settings": entry.get("settings", {}),
+        "summary": summary,
+        "progress": {
+            "completed": summary.get("completed", 0),
+            "total": summary.get("total", 0),
+            "percent": summary.get("percent_complete", 0.0),
+            "failed": summary.get("failed", 0),
+            "cancelled": summary.get("cancelled", 0),
+            "remaining": summary.get("remaining", 0),
+        },
+        "cost": {
+            "so_far_usd": summary.get("cost_so_far_usd", 0.0),
+            "budget_usd": summary.get("budget_usd", 0.0),
+            "remaining_usd": round(
+                max(0.0, _safe_float(summary.get("budget_usd"), 0.0) - _safe_float(summary.get("cost_so_far_usd"), 0.0)),
+                6,
+            ),
+            "budget_exceeded": bool(
+                _safe_float(summary.get("budget_usd"), 0.0) > 0
+                and _safe_float(summary.get("cost_so_far_usd"), 0.0) >= _safe_float(summary.get("budget_usd"), 0.0)
+            ),
+        },
+        "eta_seconds": summary.get("eta_seconds"),
+        "workers": {
+            "active": summary.get("workers_active", 0),
+            "configured": summary.get("workers_configured", 0),
+        },
+        "books": page,
+        "count": len(page),
+        "pagination": pagination,
+        "review_url": f"/review?catalog={quote(runtime.catalog_id, safe='')}",
+    }
+
+
+def _batch_list_payload(runtime: config.Config, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    payload = _load_batch_runs_payload(runtime)
+    batches = payload.get("batches", {})
+    if not isinstance(batches, dict):
+        batches = {}
+    rows: list[dict[str, Any]] = []
+    for batch_id, item in batches.items():
+        if not isinstance(item, dict):
+            continue
+        summary = item.get("summary", {})
+        if not isinstance(summary, dict):
+            summary = {}
+        rows.append(
+            {
+                "batchId": str(batch_id),
+                "status": str(item.get("status", "queued")),
+                "created_at": str(item.get("created_at", "")),
+                "updated_at": str(item.get("updated_at", "")),
+                "finished_at": str(item.get("finished_at", "")),
+                "books_total": _safe_int(summary.get("total"), _safe_int(item.get("books_total"), 0)),
+                "books_completed": _safe_int(summary.get("completed"), 0),
+                "books_failed": _safe_int(summary.get("failed"), 0),
+                "books_cancelled": _safe_int(summary.get("cancelled"), 0),
+                "cost_so_far_usd": round(_safe_float(summary.get("cost_so_far_usd"), _safe_float(item.get("cost_so_far_usd"), 0.0)), 6),
+            }
+        )
+    rows.sort(key=lambda row: str(row.get("created_at", "")), reverse=True)
+    page, pagination = _paginate_rows(rows, limit=limit, offset=offset)
+    return {"ok": True, "catalog": runtime.catalog_id, "batches": page, "count": len(page), "pagination": pagination}
+
+
+def _apply_batch_action(runtime: config.Config, *, batch_id: str, action: str, reason: str = "") -> dict[str, Any] | None:
+    action_token = str(action or "").strip().lower()
+    entry = _load_batch_entry(runtime, batch_id)
+    if not isinstance(entry, dict):
+        return None
+    now_iso = datetime.now(timezone.utc).isoformat()
+    books = entry.get("books", [])
+    if not isinstance(books, list):
+        books = []
+    touched = 0
+
+    if action_token == "pause":
+        for row in books:
+            if not isinstance(row, dict):
+                continue
+            job_id = str(row.get("job_id", "")).strip()
+            if not job_id:
+                continue
+            current = job_db_store.get_job(job_id)
+            if current is None:
+                continue
+            if current.status not in {"queued", "retrying"}:
+                continue
+            updated = job_db_store.mark_paused(job_id, reason=reason or "batch paused")
+            if updated is not None:
+                touched += 1
+        entry["pause_requested"] = True
+        entry["paused_reason"] = str(reason or "batch paused")
+    elif action_token == "cancel":
+        for row in books:
+            if not isinstance(row, dict):
+                continue
+            job_id = str(row.get("job_id", "")).strip()
+            if not job_id:
+                continue
+            current = job_db_store.get_job(job_id)
+            if current is None:
+                continue
+            if current.status not in {"queued", "retrying", "paused"}:
+                continue
+            updated = job_db_store.mark_cancelled(job_id, reason=reason or "batch cancelled")
+            if updated is not None:
+                touched += 1
+        entry["cancel_requested"] = True
+    elif action_token == "resume":
+        for row in books:
+            if not isinstance(row, dict):
+                continue
+            job_id = str(row.get("job_id", "")).strip()
+            if not job_id:
+                continue
+            current = job_db_store.get_job(job_id)
+            if current is None:
+                continue
+            if current.status != "paused":
+                continue
+            updated = job_db_store.resume_job(job_id)
+            if updated is not None:
+                touched += 1
+        entry["pause_requested"] = False
+        entry["paused_reason"] = ""
+    else:
+        raise ValueError(f"Unsupported batch action: {action}")
+
+    entry["updated_at"] = now_iso
+    _upsert_batch_entry(runtime, entry)
+    snapshot = _batch_status_payload(runtime, batch_id, limit=25, offset=0)
+    if snapshot is None:
+        return None
+    snapshot["action"] = action_token
+    snapshot["jobs_touched"] = touched
+    return snapshot
+
+
+def _mark_batch_completion_emitted(runtime: config.Config, *, batch_id: str) -> None:
+    entry = _load_batch_entry(runtime, batch_id)
+    if not isinstance(entry, dict):
+        return
+    if bool(entry.get("completion_event_emitted", False)):
+        return
+    entry["completion_event_emitted"] = True
+    _upsert_batch_entry(runtime, entry)
+
+
+def _batch_publish_progress_for_job(job: job_store.JobRecord) -> None:
+    payload_raw = getattr(job, "payload", {})
+    payload = payload_raw if isinstance(payload_raw, dict) else {}
+    batch_id = str(payload.get("batch_id", "")).strip()
+    if not batch_id:
+        return
+    runtime = config.get_config(job.catalog_id)
+    entry, rows, summary = _reconcile_batch_entry(runtime, batch_id, enforce_budget=True)
+    if not isinstance(entry, dict):
+        return
+    row = next((item for item in rows if str(item.get("job_id", "")) == str(job.id)), None)
+    if isinstance(row, dict):
+        event_name = "book_complete" if str(job.status) == "completed" else "book_failed"
+        job_event_broker.publish(
+            event_name,
+            {
+                "batch_id": batch_id,
+                "job_id": str(job.id),
+                "catalog_id": runtime.catalog_id,
+                "book": _safe_int(row.get("book_number"), 0),
+                "title": str(row.get("title", "")),
+                "status": str(row.get("status", "")),
+                "variants": _safe_int(row.get("variants_generated"), 0),
+                "qualityScore": _safe_float(row.get("quality_score"), 0.0),
+                "cost": _safe_float(row.get("cost_usd"), 0.0),
+                "elapsed": _job_elapsed_seconds(job),
+                "error": str(row.get("error", "")),
+            },
+        )
+
+    job_event_broker.publish(
+        "batch_progress",
+        {
+            "batch_id": batch_id,
+            "catalog_id": runtime.catalog_id,
+            "status": str(entry.get("status", "queued")),
+            "completed": _safe_int(summary.get("completed"), 0),
+            "failed": _safe_int(summary.get("failed"), 0),
+            "cancelled": _safe_int(summary.get("cancelled"), 0),
+            "total": _safe_int(summary.get("total"), 0),
+            "eta_seconds": summary.get("eta_seconds"),
+            "costSoFar": _safe_float(summary.get("cost_so_far_usd"), 0.0),
+            "budgetUsd": _safe_float(summary.get("budget_usd"), 0.0),
+            "workersActive": _safe_int(summary.get("workers_active"), 0),
+            "workersConfigured": _safe_int(summary.get("workers_configured"), 0),
+        },
+    )
+
+    total = _safe_int(summary.get("total"), 0)
+    completed_or_terminal = (
+        _safe_int(summary.get("completed"), 0)
+        + _safe_int(summary.get("failed"), 0)
+        + _safe_int(summary.get("cancelled"), 0)
+    )
+    if total > 0 and completed_or_terminal >= total and not bool(entry.get("completion_event_emitted", False)):
+        _mark_batch_completion_emitted(runtime, batch_id=batch_id)
+        job_event_broker.publish(
+            "batch_complete",
+            {
+                "batch_id": batch_id,
+                "catalog_id": runtime.catalog_id,
+                "status": str(entry.get("status", "completed")),
+                "completed": _safe_int(summary.get("completed"), 0),
+                "failed": _safe_int(summary.get("failed"), 0),
+                "cancelled": _safe_int(summary.get("cancelled"), 0),
+                "total": total,
+                "totalCost": _safe_float(summary.get("cost_so_far_usd"), 0.0),
+                "averageQuality": _safe_float(summary.get("average_quality_score"), 0.0),
+            },
+        )
+
+
+def _create_snapshot_before_operation(runtime: config.Config, *, operation: str) -> dict[str, Any]:
+    try:
+        snapshot = disaster_recovery.create_snapshot(runtime=runtime)
+        return {"ok": True, "operation": operation, **snapshot.to_dict()}
+    except Exception as exc:
+        return {"ok": False, "operation": operation, "error": str(exc)}
 
 
 def _catalogs_payload_with_stats(*, active_catalog: str) -> dict[str, Any]:
@@ -2351,7 +3018,7 @@ def _provider_connectivity_payload(*, runtime: config.Config, force: bool = Fals
         if provider in model_counts:
             model_counts[provider] += 1
 
-    report = pipeline_runner.test_api_keys(runtime=runtime, providers=provider_names, timeout=4.0)
+    report = pipeline_runner.test_api_keys(runtime=runtime, providers=provider_names)
     rows = report.get("providers", []) if isinstance(report, dict) else []
     by_provider: dict[str, dict[str, Any]] = {}
     if isinstance(rows, list):
@@ -2424,6 +3091,27 @@ def _composite_validation_summary(*, runtime: config.Config) -> dict[str, Any]:
         "books_with_invalid": invalid_books,
         "invalid_variants": invalid_variants,
         "total_variants_checked": total_variants,
+    }
+
+
+def _backup_health_payload(*, runtime: config.Config) -> dict[str, Any]:
+    root = runtime.data_dir / "snapshots"
+    if not root.exists():
+        return {"lastBackup": "", "backupCount": 0, "backupSizeTotalMb": 0.0}
+    snapshot_dirs = [path for path in root.iterdir() if path.is_dir()]
+    snapshot_dirs.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    total_size = 0
+    for snap in snapshot_dirs:
+        for file_path in snap.rglob("*"):
+            if file_path.is_file():
+                total_size += int(file_path.stat().st_size)
+    last_backup = ""
+    if snapshot_dirs:
+        last_backup = datetime.fromtimestamp(snapshot_dirs[0].stat().st_mtime, timezone.utc).isoformat()
+    return {
+        "lastBackup": last_backup,
+        "backupCount": len(snapshot_dirs),
+        "backupSizeTotalMb": round(total_size / (1024 * 1024), 3),
     }
 
 
@@ -2545,6 +3233,7 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
             "books_below_threshold": books_below_threshold,
             "composite_validation": _composite_validation_summary(runtime=runtime),
         },
+        "backup": _backup_health_payload(runtime=runtime),
         "jobs": {
             "status_counts": status_counts,
             "workers_configured": JOB_WORKER_COUNT,
@@ -3013,6 +3702,12 @@ def serve_review_webapp(
                     allowed_roots=[PROJECT_ROOT / "src" / "static"],
                     cache_control="no-store",
                 )
+            if path == "/batch":
+                return self._serve_project_relative(
+                    "/src/static/batch.html",
+                    allowed_roots=[PROJECT_ROOT / "src" / "static"],
+                    cache_control="no-store",
+                )
             if path == "/catalogs":
                 return self._serve_project_relative(
                     "/src/static/catalogs.html",
@@ -3262,6 +3957,96 @@ def serve_review_webapp(
             if path == "/api/analytics/completion":
                 payload = _completion_payload(runtime=runtime_req)
                 return _cache_and_send({"ok": True, **payload})
+            if path == "/api/analytics/cost-projection":
+                books_count = max(1, min(100000, _safe_int(query.get("books", ["1"])[0], 1)))
+                max_variants = _max_generation_variants(runtime_req)
+                variants = max(1, min(max_variants, _safe_int(query.get("variants", [str(runtime_req.variants_per_cover)])[0], runtime_req.variants_per_cover)))
+                models_raw = str(query.get("models", [""])[0] or "").strip()
+                models = [token.strip() for token in models_raw.split(",") if token.strip()] if models_raw else []
+                if not models:
+                    models = runtime_req.all_models[:1] if runtime_req.all_models else [runtime_req.ai_model]
+                model_quality = _quality_by_model_payload(runtime=runtime_req).get("models", [])
+                model_stats: dict[str, dict[str, Any]] = {}
+                if isinstance(model_quality, list):
+                    for row in model_quality:
+                        if not isinstance(row, dict):
+                            continue
+                        key = str(row.get("model", "")).strip()
+                        if not key:
+                            continue
+                        model_stats[key] = row
+
+                per_model_images = books_count * variants
+                breakdown: dict[str, dict[str, Any]] = {}
+                total_cost = 0.0
+                total_images = 0
+                weighted_seconds = 0.0
+                per_model_cost_rows: list[tuple[str, float]] = []
+
+                for model in models:
+                    model_name = str(model).strip()
+                    if not model_name:
+                        continue
+                    cost_per_image = _safe_float(runtime_req.get_model_cost(model_name), 0.04)
+                    images = per_model_images
+                    subtotal = round(images * cost_per_image, 6)
+                    total_cost += subtotal
+                    total_images += images
+                    seconds_per_image = _safe_float(model_stats.get(model_name, {}).get("avg_generation_time_seconds"), 22.0)
+                    if seconds_per_image <= 0:
+                        seconds_per_image = 22.0
+                    weighted_seconds += seconds_per_image * images
+                    per_model_cost_rows.append((model_name, cost_per_image))
+                    breakdown[model_name] = {
+                        "images": images,
+                        "costPerImage": round(cost_per_image, 6),
+                        "total": subtotal,
+                    }
+
+                avg_seconds_per_image = (weighted_seconds / total_images) if total_images > 0 else 22.0
+                configured_workers = max(1, _safe_int(getattr(runtime_req, "job_workers", JOB_WORKER_COUNT), JOB_WORKER_COUNT))
+                model_parallel = max(1, min(len(models), max(1, _safe_int(getattr(runtime_req, "batch_concurrency", 1), 1))))
+                effective_parallel = max(1, configured_workers * model_parallel)
+                estimated_time_hours = round((total_images * avg_seconds_per_image) / (effective_parallel * 3600.0), 3) if total_images > 0 else 0.0
+                estimated_storage_gb = round((total_images * 0.00018), 3)
+
+                recommendations: list[str] = []
+                if per_model_cost_rows:
+                    sorted_by_cost = sorted(per_model_cost_rows, key=lambda item: item[1])
+                    cheapest_model, cheapest_cost = sorted_by_cost[0]
+                    recommendations.append(f"Cheapest selected model: {cheapest_model} (${cheapest_cost:.4f}/image).")
+                    if len(sorted_by_cost) > 1:
+                        priciest_model, priciest_cost = sorted_by_cost[-1]
+                        ratio = (priciest_cost / cheapest_cost) if cheapest_cost > 0 else 0.0
+                        if ratio > 1.0:
+                            recommendations.append(
+                                f"{cheapest_model} is about {ratio:.1f}x cheaper than {priciest_model} for this run."
+                            )
+                recommendations.append(
+                    f"At {effective_parallel} effective workers, estimated completion is about {estimated_time_hours:.2f} hours."
+                )
+                suggested_budget = round(total_cost * 1.2, 2)
+                warning_budget = round(suggested_budget * 0.8, 2)
+                recommendations.append(
+                    f"Suggested batch budget: ${suggested_budget:.2f} with warning threshold around ${warning_budget:.2f}."
+                )
+
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "books": books_count,
+                        "variants": variants,
+                        "models": models,
+                        "totalImages": total_images,
+                        "estimatedCostUsd": round(total_cost, 6),
+                        "breakdown": breakdown,
+                        "estimatedTimeHours": estimated_time_hours,
+                        "estimatedStorageGb": estimated_storage_gb,
+                        "effectiveParallelWorkers": effective_parallel,
+                        "recommendations": recommendations,
+                    }
+                )
             if path == "/api/analytics/audit":
                 limit, offset = _parse_pagination(query, default_limit=100, max_limit=5000)
                 action_filter = str(query.get("action", [""])[0] or "").strip().lower()
@@ -3325,7 +4110,7 @@ def serve_review_webapp(
                     )
                 content_type = "application/pdf" if report_path.suffix.lower() == ".pdf" else "application/json"
                 return self._send_file(report_path, content_type=content_type, cache_control="no-store")
-            if path == "/api/drive/status":
+            if path == "/api/drive/status" or path == "/api/drive/sync-status":
                 source_default = (
                     getattr(runtime_req, "gdrive_source_folder_id", "")
                     or getattr(runtime_req, "gdrive_input_folder_id", "")
@@ -3375,6 +4160,7 @@ def serve_review_webapp(
                     {
                         "ok": True,
                         "catalog": runtime_req.catalog_id,
+                        "endpoint": path,
                         "connected": connected,
                         "mode": mode,
                         "source_folder_id": str(source_default or ""),
@@ -3538,6 +4324,20 @@ def serve_review_webapp(
                     catalog_id=runtime_req.catalog_id,
                     tracking_path=_delivery_tracking_path_for_runtime(runtime_req),
                 )
+                export_map = _export_status_by_book(runtime=runtime_req)
+                merged_rows: list[dict[str, Any]] = []
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    book = _safe_int(row.get("book_number"), 0)
+                    exports = export_map.get(book, {})
+                    changed = any(bool(item.get("changed_since_last_export", False)) for item in exports.values() if isinstance(item, dict))
+                    merged_rows.append({**row, "exports": exports, "changed_since_last_export": changed})
+                limit, offset = _parse_pagination(query, default_limit=50, max_limit=1000)
+                page, pagination = _paginate_rows(merged_rows, limit=limit, offset=offset)
+                return _cache_and_send({"ok": True, "catalog": runtime_req.catalog_id, "items": page, "count": len(page), "pagination": pagination})
+            if path == "/api/export/status":
+                rows = _export_status_rows(runtime=runtime_req)
                 limit, offset = _parse_pagination(query, default_limit=50, max_limit=1000)
                 page, pagination = _paginate_rows(rows, limit=limit, offset=offset)
                 return _cache_and_send({"ok": True, "catalog": runtime_req.catalog_id, "items": page, "count": len(page), "pagination": pagination})
@@ -3545,6 +4345,49 @@ def serve_review_webapp(
                 return _cache_and_send(_archive_stats_payload(runtime=runtime_req))
             if path == "/api/storage/usage":
                 return _cache_and_send(_storage_usage_payload(runtime=runtime_req))
+            if path == "/api/batch-generate":
+                limit, offset = _parse_pagination(query, default_limit=25, max_limit=500)
+                return self._send_json(_batch_list_payload(runtime_req, limit=limit, offset=offset))
+            if path.startswith("/api/batch-generate/") and path.endswith("/status"):
+                token = path.split("/api/batch-generate/", 1)[1].split("/status", 1)[0].strip("/")
+                if not token:
+                    return self._send_error(
+                        code="BATCH_ID_REQUIRED",
+                        message="batch id is required",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                limit, offset = _parse_pagination(query, default_limit=25, max_limit=1000)
+                payload = _batch_status_payload(runtime_req, token, limit=limit, offset=offset)
+                if payload is None:
+                    return self._send_error(
+                        code="BATCH_NOT_FOUND",
+                        message="batch not found",
+                        details={"batch_id": token},
+                        status=HTTPStatus.NOT_FOUND,
+                        endpoint=path,
+                    )
+                return self._send_json(payload)
+            if path.startswith("/api/events/batch/"):
+                token = path.split("/api/events/batch/", 1)[1].strip("/")
+                if not token:
+                    return self._send_error(
+                        code="BATCH_ID_REQUIRED",
+                        message="batch id is required",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                return self._serve_job_events(catalog_id=runtime_req.catalog_id, batch_id=token)
+            if path.startswith("/api/events/job/"):
+                token = path.split("/api/events/job/", 1)[1].strip("/")
+                if not token:
+                    return self._send_error(
+                        code="JOB_ID_REQUIRED",
+                        message="job id is required",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                return self._serve_job_events(catalog_id=runtime_req.catalog_id, job_id=token)
             if path == "/api/jobs":
                 limit, offset = _parse_pagination(query, default_limit=20, max_limit=500)
                 raw_status = str(query.get("status", [""])[0] or "").strip()
@@ -3818,6 +4661,15 @@ def serve_review_webapp(
                 if book > 0 and isinstance(details, list):
                     details = [row for row in details if isinstance(row, dict) and _safe_int(row.get("book"), 0) == book]
                 return _cache_and_send({"book": book if book > 0 else None, "results": details, "raw": payload})
+            if path == "/api/similarity/recompute/status":
+                status_payload = _similarity_recompute_snapshot(catalog_id=runtime_req.catalog_id)
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "recompute": status_payload,
+                    }
+                )
             if path == "/api/similarity-matrix":
                 threshold = _safe_float(query.get("threshold", ["0.25"])[0], 0.25)
                 matrix_payload = _load_similarity_matrix(runtime_req=runtime_req, threshold=threshold)
@@ -4286,6 +5138,228 @@ def serve_review_webapp(
                 _invalidate_cache("/api/catalogs")
                 return self._send_json({"ok": True, "catalog": payload_out})
 
+            if path == "/api/batch-generate":
+                if _is_generation_budget_blocked(runtime_req):
+                    budget = _budget_status_for_runtime(runtime_req)
+                    return self._send_error(
+                        code="BUDGET_EXCEEDED",
+                        message="Generation budget limit reached. Increase budget or apply override before starting a batch.",
+                        details=budget,
+                        status=HTTPStatus.PAYMENT_REQUIRED,
+                        endpoint=path,
+                    )
+
+                catalog_title_map = _catalog_book_title_map(runtime_req)
+                books_payload = body.get("books")
+                parsed_books: list[int] = []
+                if isinstance(books_payload, list):
+                    parsed_books = [_safe_int(item, 0) for item in books_payload]
+                elif isinstance(books_payload, str):
+                    token = books_payload.strip().lower()
+                    if token in {"all", "*"}:
+                        parsed_books = sorted(catalog_title_map.keys())
+                    else:
+                        try:
+                            parsed_books = _parse_books(books_payload) or []
+                        except Exception:
+                            parsed_books = []
+                elif books_payload is None:
+                    parsed_books = []
+
+                books = sorted({book for book in parsed_books if book > 0 and (not catalog_title_map or book in catalog_title_map)})
+                if not books:
+                    return self._send_error(
+                        code="BOOKS_REQUIRED",
+                        message="Provide at least one valid book number in books[]",
+                        details={"received": books_payload},
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+
+                models_raw = body.get("models", [])
+                models = [str(item).strip() for item in models_raw if str(item).strip()] if isinstance(models_raw, list) else []
+                if not models:
+                    models = runtime_req.all_models[:]
+                if not models:
+                    return self._send_error(
+                        code="MODELS_REQUIRED",
+                        message="At least one model is required",
+                        details={"models": models_raw},
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+
+                variants = _safe_int(body.get("variants"), runtime_req.variants_per_cover)
+                max_variants = _max_generation_variants(runtime_req)
+                if variants < 1 or variants > max_variants:
+                    return self._send_error(
+                        code="VARIANT_COUNT_OUT_OF_RANGE",
+                        message=f"variants must be between 1 and {max_variants}",
+                        details={"received": body.get("variants"), "max_variants": max_variants},
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+
+                prompt = str(body.get("prompt", "")).strip()
+                prompt_source = str(body.get("promptSource", "template") or "template").strip().lower() or "template"
+                provider = str(body.get("provider", "all") or "all").strip().lower() or "all"
+                budget_usd = max(0.0, _safe_float(body.get("budgetUsd"), 0.0))
+                max_attempts = max(1, _safe_int(body.get("max_attempts"), 3))
+                requested_dry_run = bool(body.get("dry_run", False))
+                cover_source = str(body.get("cover_source", "catalog") or "catalog").strip().lower() or "catalog"
+                if cover_source != "catalog":
+                    return self._send_error(
+                        code="BATCH_COVER_SOURCE_UNSUPPORTED",
+                        message="Batch generation currently supports catalog cover source only.",
+                        details={"cover_source": cover_source},
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+
+                backup = _create_snapshot_before_operation(runtime_req, operation="batch_generate")
+                batch_id = str(uuid.uuid4())
+                created_at = datetime.now(timezone.utc).isoformat()
+                queued_books: list[dict[str, Any]] = []
+                job_ids: list[str] = []
+
+                for book_number in books:
+                    idempotency_key = (
+                        f"batch:{runtime_req.catalog_id}:{batch_id}:{book_number}:"
+                        f"{hashlib.sha1(json.dumps({'models': sorted(models), 'variants': variants, 'provider': provider}, sort_keys=True).encode('utf-8')).hexdigest()[:12]}"
+                    )
+                    try:
+                        job, _created = job_worker_pool.enqueue_generate_job(
+                            catalog_id=runtime_req.catalog_id,
+                            book=book_number,
+                            models=models,
+                            variants=variants,
+                            prompt=prompt,
+                            provider=provider,
+                            cover_source="catalog",
+                            dry_run=requested_dry_run,
+                            idempotency_key=idempotency_key,
+                            max_attempts=max_attempts,
+                            metadata={
+                                "batch_id": batch_id,
+                                "prompt_source": prompt_source,
+                                "batch_budget_usd": budget_usd,
+                            },
+                        )
+                    except job_store.IdempotencyConflictError as exc:
+                        return self._send_error(
+                            code="IDEMPOTENCY_CONFLICT",
+                            message="idempotency conflict while creating batch jobs",
+                            details=exc.to_dict(),
+                            status=HTTPStatus.CONFLICT,
+                            endpoint=path,
+                        )
+                    job_ids.append(str(job.id))
+                    queued_books.append(
+                        {
+                            "book_number": int(book_number),
+                            "title": str(catalog_title_map.get(book_number, f"Book {book_number}")),
+                            "job_id": str(job.id),
+                            "status": str(job.status),
+                            "cost_usd": 0.0,
+                            "quality_score": 0.0,
+                            "attempts": int(job.attempts),
+                            "max_attempts": int(job.max_attempts),
+                            "error": "",
+                            "started_at": "",
+                            "finished_at": "",
+                            "updated_at": str(job.updated_at or created_at),
+                        }
+                    )
+
+                entry = {
+                    "id": batch_id,
+                    "catalog": runtime_req.catalog_id,
+                    "created_at": created_at,
+                    "updated_at": created_at,
+                    "started_at": created_at,
+                    "finished_at": "",
+                    "status": "queued",
+                    "pause_requested": False,
+                    "cancel_requested": False,
+                    "paused_reason": "",
+                    "completion_event_emitted": False,
+                    "settings": {
+                        "models": sorted({str(item).strip() for item in models if str(item).strip()}),
+                        "variants": int(variants),
+                        "promptSource": prompt_source,
+                        "prompt": prompt,
+                        "provider": provider,
+                        "budgetUsd": round(budget_usd, 6),
+                        "dryRun": requested_dry_run,
+                        "maxAttempts": max_attempts,
+                        "coverSource": "catalog",
+                    },
+                    "books": queued_books,
+                    "job_ids": job_ids,
+                    "books_total": len(queued_books),
+                    "cost_so_far_usd": 0.0,
+                }
+                _upsert_batch_entry(runtime_req, entry)
+                snapshot = _batch_status_payload(runtime_req, batch_id, limit=25, offset=0) or {"ok": True}
+                job_event_broker.publish(
+                    "batch_started",
+                    {
+                        "batch_id": batch_id,
+                        "catalog_id": runtime_req.catalog_id,
+                        "books_total": len(queued_books),
+                        "models": entry["settings"].get("models", []),
+                        "variants": variants,
+                        "budget_usd": budget_usd,
+                    },
+                )
+                return self._send_json(
+                    {
+                        "ok": True,
+                        "batchId": batch_id,
+                        "booksQueued": len(queued_books),
+                        "jobIds": job_ids,
+                        "backup": backup,
+                        "status_url": f"/api/batch-generate/{batch_id}/status",
+                        "event_url": f"/api/events/batch/{batch_id}",
+                        "snapshot": snapshot,
+                    }
+                )
+
+            if path.startswith("/api/batch-generate/") and (
+                path.endswith("/pause") or path.endswith("/resume") or path.endswith("/cancel")
+            ):
+                token = path.split("/api/batch-generate/", 1)[1].split("/", 1)[0].strip("/")
+                action = path.rsplit("/", 1)[1].strip().lower()
+                if not token:
+                    return self._send_error(
+                        code="BATCH_ID_REQUIRED",
+                        message="batch id is required",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                reason = str(body.get("reason", f"batch {action}")).strip()
+                snapshot = _apply_batch_action(runtime_req, batch_id=token, action=action, reason=reason)
+                if snapshot is None:
+                    return self._send_error(
+                        code="BATCH_NOT_FOUND",
+                        message="batch not found",
+                        details={"batch_id": token},
+                        status=HTTPStatus.NOT_FOUND,
+                        endpoint=path,
+                    )
+                job_event_broker.publish(
+                    f"batch_{action}",
+                    {
+                        "batch_id": token,
+                        "catalog_id": runtime_req.catalog_id,
+                        "action": action,
+                        "reason": reason,
+                        "status": snapshot.get("status", ""),
+                        "jobs_touched": snapshot.get("jobs_touched", 0),
+                    },
+                )
+                return self._send_json(snapshot)
+
             if path == "/api/jobs":
                 job_type = str(body.get("job_type", "generate")).strip().lower() or "generate"
                 if job_type != "generate":
@@ -4407,7 +5481,15 @@ def serve_review_webapp(
                         "created": created,
                     },
                 )
-                return self._send_json({"ok": True, "created": created, "job": job.to_dict()})
+                return self._send_json(
+                    {
+                        "ok": True,
+                        "created": created,
+                        "job": job.to_dict(),
+                        "poll_url": f"/api/jobs/{job.id}",
+                        "event_url": f"/api/events/job/{job.id}",
+                    }
+                )
 
             if path == "/api/cache/clear":
                 pattern = str(body.get("pattern", query.get("pattern", [""])[0])).strip()
@@ -4469,6 +5551,7 @@ def serve_review_webapp(
                 db_path = Path(db_path_token)
                 if not db_path.is_absolute():
                     db_path = PROJECT_ROOT / db_path
+                backup = _create_snapshot_before_operation(runtime_req, operation="migrate_to_sqlite")
                 try:
                     from scripts import migrate_to_sqlite as migrate_script  # local import to avoid startup side effects
 
@@ -4486,7 +5569,7 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 _invalidate_cache("*", catalog_id=runtime_req.catalog_id)
-                return self._send_json({"ok": True, "summary": summary})
+                return self._send_json({"ok": True, "summary": summary, "backup": backup})
             if path == "/api/analytics/budget":
                 limit_usd = _safe_float(body.get("limit_usd"), runtime_req.max_cost_usd)
                 warning_threshold = _safe_float(body.get("warning_threshold"), 0.8)
@@ -5254,6 +6337,150 @@ def serve_review_webapp(
                 )
                 return self._send_json(summary)
 
+            if path == "/api/export/all":
+                books_payload = body.get("books", "all")
+                books: list[int] | None
+                if isinstance(books_payload, list):
+                    books = sorted({_safe_int(item, 0) for item in books_payload if _safe_int(item, 0) > 0}) or None
+                else:
+                    books_token = str(books_payload or "all").strip().lower()
+                    books = None if books_token in {"all", "*", ""} else (_parse_books(books_token) or None)
+
+                platforms_raw = body.get("platforms", ["amazon", "ingram", "social", "web"])
+                if isinstance(platforms_raw, str):
+                    platforms = [token.strip().lower() for token in platforms_raw.split(",") if token.strip()]
+                elif isinstance(platforms_raw, list):
+                    platforms = [str(token).strip().lower() for token in platforms_raw if str(token).strip()]
+                else:
+                    platforms = []
+                valid_platforms = [token for token in platforms if token in {"amazon", "ingram", "social", "web"}]
+                if not valid_platforms:
+                    valid_platforms = ["amazon", "ingram", "social", "web"]
+
+                platform_results: dict[str, dict[str, Any]] = {}
+                export_ids: dict[str, str] = {}
+                failures: list[dict[str, Any]] = []
+
+                for platform in valid_platforms:
+                    try:
+                        if platform == "amazon":
+                            summary = export_amazon.export_catalog(
+                                catalog_id=runtime_req.catalog_id,
+                                catalog_path=runtime_req.book_catalog_path,
+                                output_root=runtime_req.output_dir,
+                                selections_path=_winner_path_for_runtime(runtime_req),
+                                quality_path=_quality_scores_path_for_runtime(runtime_req),
+                                exports_root=EXPORTS_ROOT,
+                                books=books,
+                            )
+                        elif platform == "ingram":
+                            summary = export_ingram.export_catalog(
+                                catalog_id=runtime_req.catalog_id,
+                                catalog_path=runtime_req.book_catalog_path,
+                                output_root=runtime_req.output_dir,
+                                selections_path=_winner_path_for_runtime(runtime_req),
+                                quality_path=_quality_scores_path_for_runtime(runtime_req),
+                                exports_root=EXPORTS_ROOT,
+                                books=books,
+                            )
+                        elif platform == "social":
+                            summary = export_social.export_catalog(
+                                catalog_id=runtime_req.catalog_id,
+                                catalog_path=runtime_req.book_catalog_path,
+                                output_root=runtime_req.output_dir,
+                                selections_path=_winner_path_for_runtime(runtime_req),
+                                quality_path=_quality_scores_path_for_runtime(runtime_req),
+                                exports_root=EXPORTS_ROOT,
+                                books=books,
+                                platforms=body.get("social_platforms", "all"),
+                                watermark=bool(body.get("watermark", True)),
+                            )
+                        else:
+                            summary = export_web.export_catalog(
+                                catalog_id=runtime_req.catalog_id,
+                                catalog_path=runtime_req.book_catalog_path,
+                                output_root=runtime_req.output_dir,
+                                selections_path=_winner_path_for_runtime(runtime_req),
+                                quality_path=_quality_scores_path_for_runtime(runtime_req),
+                                exports_root=EXPORTS_ROOT,
+                                books=books,
+                            )
+                        export_id = _register_export_result(runtime=runtime_req, export_type=platform, summary=summary)
+                        summary["ok"] = bool(summary.get("ok", True))
+                        summary["export_id"] = export_id
+                        platform_results[platform] = summary
+                        export_ids[platform] = export_id
+                    except Exception as exc:
+                        failures.append({"platform": platform, "error": str(exc)})
+                        platform_results[platform] = {"ok": False, "error": str(exc), "results": []}
+
+                batch_stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+                combined_root = EXPORTS_ROOT / "all" / runtime_req.catalog_id / f"bundle-{batch_stamp}"
+                combined_root.mkdir(parents=True, exist_ok=True)
+                if books:
+                    selected_books = sorted(set(books))
+                else:
+                    selected_books = sorted(
+                        {
+                            _safe_int(item.get("book_number"), 0)
+                            for summary in platform_results.values()
+                            for item in (summary.get("results", []) if isinstance(summary, dict) else [])
+                            if isinstance(item, dict)
+                            and _safe_int(item.get("book_number"), 0) > 0
+                        }
+                    )
+                for platform in valid_platforms:
+                    source_root = EXPORTS_ROOT / platform / runtime_req.catalog_id
+                    if not source_root.exists():
+                        continue
+                    destination_root = combined_root / platform
+                    destination_root.mkdir(parents=True, exist_ok=True)
+                    if selected_books:
+                        for book in selected_books:
+                            src = source_root / str(book)
+                            if not src.exists():
+                                continue
+                            dst = destination_root / str(book)
+                            if dst.exists():
+                                shutil.rmtree(dst)
+                            shutil.copytree(src, dst)
+                    else:
+                        for child in sorted(source_root.iterdir()):
+                            dst = destination_root / child.name
+                            if child.is_dir():
+                                if dst.exists():
+                                    shutil.rmtree(dst)
+                                shutil.copytree(child, dst)
+                            elif child.is_file():
+                                shutil.copy2(child, dst)
+
+                combined_summary = {
+                    "ok": len(failures) == 0 and all(bool(row.get("ok", False)) for row in platform_results.values()),
+                    "catalog": runtime_req.catalog_id,
+                    "export_type": "all",
+                    "books_requested": len(selected_books),
+                    "books_exported": len(selected_books),
+                    "file_count": _file_count(combined_root),
+                    "export_path": str(combined_root),
+                    "platforms": valid_platforms,
+                    "platform_results": platform_results,
+                    "errors": failures,
+                }
+                combined_export_id = _register_export_result(runtime=runtime_req, export_type="all", summary=combined_summary)
+                _invalidate_cache("/api/exports", "/api/storage/usage", "/api/delivery/tracking", "/api/export/status")
+                return self._send_json(
+                    {
+                        "ok": combined_summary["ok"],
+                        "catalog": runtime_req.catalog_id,
+                        "platforms": valid_platforms,
+                        "export_ids": export_ids,
+                        "combined_export_id": combined_export_id,
+                        "combined_download_url": f"/api/exports/{combined_export_id}/download",
+                        "combined_path": _to_project_relative(combined_root),
+                        "summary": combined_summary,
+                    }
+                )
+
             if path == "/api/export/amazon" or path.startswith("/api/export/amazon/"):
                 book = 0
                 if path.startswith("/api/export/amazon/"):
@@ -5299,7 +6526,7 @@ def serve_review_webapp(
                     duration_seconds=0.0,
                     metadata={"books_requested": summary.get("books_requested", 0), "export_id": export_id},
                 )
-                _invalidate_cache("/api/exports", "/api/storage/usage")
+                _invalidate_cache("/api/exports", "/api/export/status", "/api/delivery/tracking", "/api/storage/usage")
                 return self._send_json(summary)
 
             if path == "/api/export/ingram" or path.startswith("/api/export/ingram/"):
@@ -5347,7 +6574,7 @@ def serve_review_webapp(
                     duration_seconds=0.0,
                     metadata={"books_requested": summary.get("books_requested", 0), "export_id": export_id},
                 )
-                _invalidate_cache("/api/exports", "/api/storage/usage")
+                _invalidate_cache("/api/exports", "/api/export/status", "/api/delivery/tracking", "/api/storage/usage")
                 return self._send_json(summary)
 
             if path == "/api/export/social" or path.startswith("/api/export/social/"):
@@ -5398,7 +6625,7 @@ def serve_review_webapp(
                     duration_seconds=0.0,
                     metadata={"books_requested": summary.get("books_requested", 0), "platforms": platforms_token, "export_id": export_id},
                 )
-                _invalidate_cache("/api/exports", "/api/storage/usage")
+                _invalidate_cache("/api/exports", "/api/export/status", "/api/delivery/tracking", "/api/storage/usage")
                 return self._send_json(summary)
 
             if path == "/api/export/web":
@@ -5434,7 +6661,7 @@ def serve_review_webapp(
                     duration_seconds=0.0,
                     metadata={"books_requested": summary.get("books_requested", 0), "export_id": export_id},
                 )
-                _invalidate_cache("/api/exports", "/api/storage/usage")
+                _invalidate_cache("/api/exports", "/api/export/status", "/api/delivery/tracking", "/api/storage/usage")
                 return self._send_json(summary)
 
             if path == "/api/delivery/enable":
@@ -5655,7 +6882,12 @@ def serve_review_webapp(
                         "job": job.to_dict(),
                         "idempotency_key": idempotency_key,
                         "poll_url": f"/api/jobs/{job.id}",
+                        "event_url": f"/api/events/job/{job.id}",
                     }
+                    batch_token = str((job.payload or {}).get("batch_id", "")).strip() if isinstance(job.payload, dict) else ""
+                    if batch_token:
+                        payload["batch_id"] = batch_token
+                        payload["batch_event_url"] = f"/api/events/batch/{batch_token}"
                     if job.status == "completed" and job.result:
                         payload.update(job.result)
                     _record_audit_event(
@@ -5923,7 +7155,7 @@ def serve_review_webapp(
             if path == "/api/archive/old-exports":
                 days = max(1, _safe_int(body.get("days", query.get("days", ["30"])[0]), 30))
                 archived = _archive_old_exports(days=days, runtime=runtime_req)
-                _invalidate_cache("/api/archive/stats", "/api/storage/usage", "/api/exports")
+                _invalidate_cache("/api/archive/stats", "/api/storage/usage", "/api/exports", "/api/export/status", "/api/delivery/tracking")
                 return self._send_json({"ok": True, "summary": archived})
 
             if path.startswith("/api/archive/restore/"):
@@ -5947,6 +7179,7 @@ def serve_review_webapp(
                 selections_path = Path(str(body.get("selections_path", _winner_path_for_runtime(runtime_req))))
                 if not selections_path.is_absolute():
                     selections_path = PROJECT_ROOT / selections_path
+                backup = _create_snapshot_before_operation(runtime_req, operation="archive_non_winners") if not dry_run else {"ok": False, "skipped": True, "reason": "dry_run"}
 
                 cmd = [
                     sys.executable,
@@ -6001,7 +7234,70 @@ def serve_review_webapp(
                         "summary": summary,
                     },
                 )
-                return self._send_json({"ok": True, "summary": summary, "dry_run": dry_run})
+                return self._send_json({"ok": True, "summary": summary, "dry_run": dry_run, "backup": backup})
+
+            if path == "/api/similarity/recompute":
+                threshold = _safe_float(
+                    body.get(
+                        "threshold",
+                        query.get("threshold", ["0.25"])[0] if isinstance(query.get("threshold"), list) else 0.25,
+                    ),
+                    0.25,
+                )
+                force = bool(body.get("force", False))
+                started = _start_similarity_recompute(
+                    runtime_req=runtime_req,
+                    threshold=threshold,
+                    reason=str(body.get("reason", "manual")).strip() or "manual",
+                    force=force,
+                )
+                _invalidate_cache("/api/similarity-matrix", "/api/similarity-alerts", "/api/similarity-clusters")
+                return self._send_json({"ok": True, **started})
+
+            if path == "/api/similarity/update":
+                book = _safe_int(
+                    body.get(
+                        "book",
+                        query.get("book", ["0"])[0] if isinstance(query.get("book"), list) else 0,
+                    ),
+                    0,
+                )
+                if book <= 0:
+                    return self._send_error(
+                        code="INVALID_BOOK_NUMBER",
+                        message="book must be a positive integer",
+                        details={"book": body.get("book", query.get("book", [""])[0] if isinstance(query.get("book"), list) else "")},
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                threshold = _safe_float(
+                    body.get(
+                        "threshold",
+                        query.get("threshold", ["0.25"])[0] if isinstance(query.get("threshold"), list) else 0.25,
+                    ),
+                    0.25,
+                )
+                payload = similarity_detector.update_similarity_for_book(
+                    output_dir=runtime_req.output_dir,
+                    book_number=book,
+                    threshold=threshold,
+                    catalog_path=runtime_req.book_catalog_path,
+                    winner_selections_path=_winner_path_for_runtime(runtime_req),
+                    regions_path=config.cover_regions_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir),
+                    hashes_path=_similarity_hashes_path_for_runtime(runtime_req),
+                    matrix_path=_similarity_matrix_path_for_runtime(runtime_req),
+                    clusters_path=_similarity_clusters_path_for_runtime(runtime_req),
+                )
+                if not bool(payload.get("ok", False)):
+                    return self._send_error(
+                        code="SIMILARITY_UPDATE_FAILED",
+                        message=str(payload.get("error", "Failed to update similarity data for book")),
+                        details=payload,
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                _invalidate_cache("/api/similarity-matrix", "/api/similarity-alerts", "/api/similarity-clusters", "/api/review-data")
+                return self._send_json({"ok": True, **payload})
 
             if path == "/api/dismiss-similarity":
                 book_a = _safe_int(body.get("book_a"), 0)
@@ -6086,7 +7382,7 @@ def serve_review_webapp(
                         status=HTTPStatus.NOT_FOUND,
                         endpoint=path,
                     )
-                _invalidate_cache("/api/exports", "/api/archive/stats", "/api/storage/usage")
+                _invalidate_cache("/api/exports", "/api/export/status", "/api/delivery/tracking", "/api/archive/stats", "/api/storage/usage")
                 return self._send_json({"ok": True, "export_id": token, "deleted": True})
 
             if path.startswith("/api/jobs/"):
@@ -6250,7 +7546,15 @@ def serve_review_webapp(
             except Exception:  # pragma: no cover - best effort
                 pass
 
-        def _serve_job_events(self, *, catalog_id: str | None = None):
+        def _serve_job_events(
+            self,
+            *,
+            catalog_id: str | None = None,
+            job_id: str | None = None,
+            batch_id: str | None = None,
+        ):
+            scoped_job_id = str(job_id or "").strip()
+            scoped_batch_id = str(batch_id or "").strip()
             token, client_queue = job_event_broker.subscribe()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -6263,6 +7567,8 @@ def serve_review_webapp(
                 bootstrap = {
                     "event": "ready",
                     "catalog_id": str(catalog_id or ""),
+                    "job_id": scoped_job_id,
+                    "batch_id": scoped_batch_id,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
                 self.wfile.write(f"event: ready\ndata: {json.dumps(bootstrap, ensure_ascii=False)}\n\n".encode("utf-8"))
@@ -6279,6 +7585,14 @@ def serve_review_webapp(
                     if catalog_id:
                         event_catalog = str(event.get("catalog_id", "") or "")
                         if event_catalog and event_catalog != str(catalog_id):
+                            continue
+                    if scoped_job_id:
+                        event_job = str(event.get("job_id", "") or "")
+                        if event_job != scoped_job_id:
+                            continue
+                    if scoped_batch_id:
+                        event_batch = str(event.get("batch_id", "") or "")
+                        if event_batch != scoped_batch_id:
                             continue
                     event_name = str(event.get("event", "message") or "message")
                     payload = json.dumps(event, ensure_ascii=False)
@@ -6841,23 +8155,113 @@ def _drive_schedule_path(runtime: config.Config) -> Path:
     return config.drive_schedule_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
 
 
+def _default_drive_schedules(catalog_id: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "push-6h",
+            "name": "Push new winners",
+            "enabled": True,
+            "interval_hours": 6,
+            "mode": "push",
+            "catalogs": [catalog_id],
+        },
+        {
+            "id": "full-24h",
+            "name": "Full bidirectional sync",
+            "enabled": True,
+            "interval_hours": 24,
+            "mode": "bidirectional",
+            "catalogs": [catalog_id],
+        },
+    ]
+
+
+def _normalize_drive_schedule_rows(rows: list[dict[str, Any]], *, catalog_id: str) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for idx, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            continue
+        requested_interval = max(1, _safe_int(raw.get("interval_hours"), 6))
+        allowed = [1, 4, 6, 12, 24]
+        interval_hours = min(allowed, key=lambda value: abs(value - requested_interval))
+        mode_token = str(raw.get("mode", "push")).strip().lower() or "push"
+        if mode_token not in {"push", "pull", "bidirectional", "sync"}:
+            mode_token = "push"
+        name = str(raw.get("name", "")).strip() or ("Push new winners" if mode_token == "push" else "Full bidirectional sync")
+        schedule_id = str(raw.get("id", "")).strip() or f"schedule-{idx + 1}"
+        catalogs = raw.get("catalogs")
+        if not isinstance(catalogs, list) or not catalogs:
+            catalogs = [catalog_id]
+        normalized.append(
+            {
+                "id": schedule_id,
+                "name": name,
+                "enabled": bool(raw.get("enabled", True)),
+                "interval_hours": interval_hours,
+                "mode": mode_token,
+                "catalogs": [str(item).strip() for item in catalogs if str(item).strip()] or [catalog_id],
+            }
+        )
+    return normalized
+
+
 def _load_drive_schedule(runtime: config.Config) -> dict[str, Any]:
-    payload = _load_json(_drive_schedule_path(runtime), {"enabled": False, "interval_hours": 0, "mode": "push"})
-    return payload if isinstance(payload, dict) else {"enabled": False, "interval_hours": 0, "mode": "push"}
+    payload = _load_json(_drive_schedule_path(runtime), {})
+    if not isinstance(payload, dict):
+        payload = {}
+    raw_schedules = payload.get("schedules")
+    schedules: list[dict[str, Any]]
+    if isinstance(raw_schedules, list) and raw_schedules:
+        schedules = _normalize_drive_schedule_rows([row for row in raw_schedules if isinstance(row, dict)], catalog_id=runtime.catalog_id)
+    else:
+        legacy = {
+            "enabled": bool(payload.get("enabled", True)),
+            "interval_hours": _safe_int(payload.get("interval_hours"), 6),
+            "mode": str(payload.get("mode", "push")).strip().lower() or "push",
+            "catalogs": payload.get("catalogs", [runtime.catalog_id]) if isinstance(payload.get("catalogs"), list) else [runtime.catalog_id],
+        }
+        schedules = _normalize_drive_schedule_rows([legacy], catalog_id=runtime.catalog_id)
+        if not schedules:
+            schedules = _default_drive_schedules(runtime.catalog_id)
+
+    if not schedules:
+        schedules = _default_drive_schedules(runtime.catalog_id)
+
+    primary = schedules[0]
+    return {
+        "enabled": any(bool(row.get("enabled", False)) for row in schedules),
+        "interval_hours": _safe_int(primary.get("interval_hours"), 6),
+        "mode": str(primary.get("mode", "push")),
+        "catalogs": primary.get("catalogs", [runtime.catalog_id]),
+        "schedules": schedules,
+        "updated_at": str(payload.get("updated_at", datetime.now(timezone.utc).isoformat())),
+    }
 
 
 def _save_drive_schedule(runtime: config.Config, payload: dict[str, Any]) -> dict[str, Any]:
-    requested_interval = max(1, _safe_int(payload.get("interval_hours"), 4))
-    allowed = [1, 4, 12, 24]
-    interval_hours = min(allowed, key=lambda value: abs(value - requested_interval))
-    mode_token = str(payload.get("mode", "bidirectional")).strip().lower() or "bidirectional"
-    if mode_token not in {"push", "pull", "bidirectional", "sync"}:
-        mode_token = "bidirectional"
+    requested_rows = payload.get("schedules")
+    if isinstance(requested_rows, list) and requested_rows:
+        schedules = _normalize_drive_schedule_rows([row for row in requested_rows if isinstance(row, dict)], catalog_id=runtime.catalog_id)
+    else:
+        legacy = {
+            "id": str(payload.get("id", "manual")).strip() or "manual",
+            "name": str(payload.get("name", "Manual schedule")).strip() or "Manual schedule",
+            "enabled": bool(payload.get("enabled", True)),
+            "interval_hours": _safe_int(payload.get("interval_hours"), 6),
+            "mode": str(payload.get("mode", "bidirectional")).strip().lower() or "bidirectional",
+            "catalogs": payload.get("catalogs", [runtime.catalog_id]) if isinstance(payload.get("catalogs"), list) else [runtime.catalog_id],
+        }
+        schedules = _normalize_drive_schedule_rows([legacy], catalog_id=runtime.catalog_id)
+    if not schedules:
+        schedules = _default_drive_schedules(runtime.catalog_id)
+
+    primary = schedules[0]
     output = {
-        "enabled": bool(payload.get("enabled", True)),
-        "interval_hours": interval_hours,
-        "mode": mode_token,
-        "catalogs": payload.get("catalogs", [runtime.catalog_id]) if isinstance(payload.get("catalogs"), list) else [runtime.catalog_id],
+        "enabled": any(bool(row.get("enabled", False)) for row in schedules),
+        "interval_hours": _safe_int(primary.get("interval_hours"), 6),
+        "mode": str(primary.get("mode", "push")),
+        "catalogs": primary.get("catalogs", [runtime.catalog_id]),
+        "schedules": schedules,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     safe_json.atomic_write_json(_drive_schedule_path(runtime), output)
@@ -6866,6 +8270,162 @@ def _save_drive_schedule(runtime: config.Config, payload: dict[str, Any]) -> dic
 
 def _export_manifest_path(runtime: config.Config) -> Path:
     return config.exports_manifest_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+
+
+def _export_tracking_path(runtime: config.Config) -> Path:
+    return config.catalog_scoped_data_path("export_tracking.json", catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+
+
+def _load_export_tracking(runtime: config.Config) -> dict[str, Any]:
+    payload = _load_json(_export_tracking_path(runtime), {"updated_at": "", "items": []})
+    if not isinstance(payload, dict):
+        payload = {"updated_at": "", "items": []}
+    rows = payload.get("items", [])
+    if not isinstance(rows, list):
+        rows = []
+    payload["items"] = [row for row in rows if isinstance(row, dict)]
+    return payload
+
+
+def _save_export_tracking(runtime: config.Config, payload: dict[str, Any]) -> None:
+    rows = payload.get("items", [])
+    if not isinstance(rows, list):
+        rows = []
+    safe_json.atomic_write_json(
+        _export_tracking_path(runtime),
+        {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "items": rows[-10000:],
+        },
+    )
+
+
+def _winner_signature_map(*, runtime: config.Config) -> dict[int, str]:
+    titles, folder_by_book = _catalog_maps(catalog_path=runtime.book_catalog_path)
+    winners_payload = _load_winner_payload(_winner_path_for_runtime(runtime))
+    selections = winners_payload.get("selections", {}) if isinstance(winners_payload, dict) else {}
+    if not isinstance(selections, dict):
+        selections = {}
+    out: dict[int, str] = {}
+    for key, value in selections.items():
+        book = _safe_int(key, 0)
+        if book <= 0:
+            continue
+        winner_variant = _safe_int(value.get("winner") if isinstance(value, dict) else value, 0)
+        if winner_variant <= 0:
+            continue
+        folder = folder_by_book.get(book, "")
+        image = _find_first_jpg(runtime.output_dir / folder / f"Variant-{winner_variant}") if folder else None
+        signature = f"missing:{winner_variant}:{titles.get(book, f'Book {book}')}"
+        if image and image.exists():
+            stat = image.stat()
+            signature = hashlib.sha1(
+                f"{winner_variant}:{int(stat.st_size)}:{int(stat.st_mtime)}:{_to_project_relative(image)}".encode("utf-8")
+            ).hexdigest()
+        out[book] = signature
+    return out
+
+
+def _record_export_tracking(
+    *,
+    runtime: config.Config,
+    export_type: str,
+    summary: dict[str, Any],
+    export_id: str,
+) -> None:
+    export_token = str(export_type or "").strip().lower()
+    if export_token not in {"amazon", "ingram", "social", "web"}:
+        return
+    payload = _load_export_tracking(runtime)
+    items = payload.get("items", [])
+    if not isinstance(items, list):
+        items = []
+
+    index_map: dict[tuple[int, str], dict[str, Any]] = {}
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        book = _safe_int(row.get("book_number"), 0)
+        platform = str(row.get("platform", "")).strip().lower()
+        if book > 0 and platform:
+            index_map[(book, platform)] = row
+
+    signature_map = _winner_signature_map(runtime=runtime)
+    now = datetime.now(timezone.utc).isoformat()
+    results = summary.get("results", []) if isinstance(summary.get("results"), list) else []
+    errors = summary.get("errors", []) if isinstance(summary.get("errors"), list) else []
+    error_books = {_safe_int(row.get("book_number"), 0) for row in errors if isinstance(row, dict)}
+
+    for row in results:
+        if not isinstance(row, dict):
+            continue
+        book = _safe_int(row.get("book_number"), 0)
+        if book <= 0:
+            continue
+        key = (book, export_token)
+        current = index_map.get(key, {"book_number": book, "platform": export_token})
+        current.update(
+            {
+                "book_number": book,
+                "platform": export_token,
+                "catalog": runtime.catalog_id,
+                "status": "failed" if book in error_books else "exported",
+                "last_exported_at": now,
+                "export_id": export_id,
+                "file_count": _safe_int(row.get("file_count"), 0),
+                "export_path": str(row.get("export_path", "")).strip(),
+                "source_signature": signature_map.get(book, ""),
+                "updated_at": now,
+            }
+        )
+        index_map[key] = current
+
+    items = sorted(index_map.values(), key=lambda row: (_safe_int(row.get("book_number"), 0), str(row.get("platform", ""))))
+    payload["items"] = items
+    _save_export_tracking(runtime, payload)
+
+
+def _export_status_rows(*, runtime: config.Config) -> list[dict[str, Any]]:
+    payload = _load_export_tracking(runtime)
+    rows = payload.get("items", [])
+    if not isinstance(rows, list):
+        rows = []
+    signature_map = _winner_signature_map(runtime=runtime)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        book = _safe_int(row.get("book_number"), 0)
+        if book <= 0:
+            continue
+        current_sig = signature_map.get(book, "")
+        stored_sig = str(row.get("source_signature", "")).strip()
+        changed = bool(current_sig and stored_sig and current_sig != stored_sig)
+        out.append(
+            {
+                **row,
+                "book_number": book,
+                "platform": str(row.get("platform", "")).strip().lower(),
+                "changed_since_last_export": changed,
+                "current_source_signature": current_sig,
+            }
+        )
+    out.sort(key=lambda row: (_safe_int(row.get("book_number"), 0), str(row.get("platform", ""))))
+    return out
+
+
+def _export_status_by_book(*, runtime: config.Config) -> dict[int, dict[str, Any]]:
+    rows = _export_status_rows(runtime=runtime)
+    out: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        book = _safe_int(row.get("book_number"), 0)
+        if book <= 0:
+            continue
+        platform = str(row.get("platform", "")).strip().lower()
+        if not platform:
+            continue
+        out.setdefault(book, {})[platform] = row
+    return out
 
 
 def _load_export_manifest(runtime: config.Config) -> dict[str, Any]:
@@ -6939,6 +8499,7 @@ def _register_export_result(*, runtime: config.Config, export_type: str, summary
     exports.append(row)
     manifest["exports"] = exports
     _save_export_manifest(runtime, manifest)
+    _record_export_tracking(runtime=runtime, export_type=export_type, summary=summary, export_id=token)
     return token
 
 
@@ -7991,38 +9552,143 @@ def _winner_image_map(*, runtime: config.Config) -> dict[int, str]:
     return out
 
 
+def _similarity_recompute_snapshot(*, catalog_id: str) -> dict[str, Any]:
+    with _similarity_recompute_lock:
+        row = _similarity_recompute_jobs.get(str(catalog_id), {})
+    if not isinstance(row, dict) or not row:
+        return {"status": "idle", "catalog": str(catalog_id)}
+    return dict(row)
+
+
+def _start_similarity_recompute(
+    *,
+    runtime_req: config.Config,
+    threshold: float,
+    reason: str,
+    force: bool = False,
+) -> dict[str, Any]:
+    catalog_id = str(runtime_req.catalog_id)
+    with _similarity_recompute_lock:
+        current = _similarity_recompute_jobs.get(catalog_id, {})
+        if not force and str(current.get("status", "")).lower() == "running":
+            return {"ok": True, "started": False, "job": dict(current)}
+        job_id = str(uuid.uuid4())
+        started_at = datetime.now(timezone.utc).isoformat()
+        state = {
+            "job_id": job_id,
+            "catalog": catalog_id,
+            "status": "running",
+            "threshold": float(threshold),
+            "reason": str(reason or "manual"),
+            "started_at": started_at,
+            "updated_at": started_at,
+        }
+        _similarity_recompute_jobs[catalog_id] = state
+
+    def _runner() -> None:
+        started_ts = time.time()
+        try:
+            summary = similarity_detector.run_similarity_analysis(
+                output_dir=runtime_req.output_dir,
+                threshold=threshold,
+                catalog_path=runtime_req.book_catalog_path,
+                winner_selections_path=_winner_path_for_runtime(runtime_req),
+                regions_path=config.cover_regions_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir),
+                hashes_path=_similarity_hashes_path_for_runtime(runtime_req),
+                matrix_path=_similarity_matrix_path_for_runtime(runtime_req),
+                clusters_path=_similarity_clusters_path_for_runtime(runtime_req),
+            )
+            status = "completed"
+            error_text = ""
+        except Exception as exc:  # pragma: no cover - background hardening
+            summary = {}
+            status = "failed"
+            error_text = str(exc)
+            logger.error("Similarity recompute failed", extra={"catalog": catalog_id, "error": error_text})
+        finished_at = datetime.now(timezone.utc).isoformat()
+        with _similarity_recompute_lock:
+            existing = _similarity_recompute_jobs.get(catalog_id, {})
+            if str(existing.get("job_id", "")) != job_id:
+                return
+            existing.update(
+                {
+                    "status": status,
+                    "updated_at": finished_at,
+                    "finished_at": finished_at,
+                    "duration_seconds": round(max(0.0, time.time() - started_ts), 3),
+                    "summary": summary if isinstance(summary, dict) else {},
+                    "error": error_text,
+                }
+            )
+            _similarity_recompute_jobs[catalog_id] = existing
+        _invalidate_cache("/api/similarity-matrix", "/api/similarity-alerts", "/api/similarity-clusters")
+
+    thread = threading.Thread(
+        target=_runner,
+        name=f"similarity-recompute-{catalog_id}",
+        daemon=True,
+    )
+    thread.start()
+    return {"ok": True, "started": True, "job": _similarity_recompute_snapshot(catalog_id=catalog_id)}
+
+
 def _load_similarity_matrix(*, runtime_req: config.Config, threshold: float) -> dict[str, Any]:
     matrix_path = _similarity_matrix_path_for_runtime(runtime_req)
-    hashes_path = _similarity_hashes_path_for_runtime(runtime_req)
-    clusters_path = _similarity_clusters_path_for_runtime(runtime_req)
-
     payload = _load_json(matrix_path, {})
-    needs_refresh = True
-    if isinstance(payload, dict):
-        existing_threshold = _safe_float(payload.get("alert_threshold"), -1.0)
-        pairs = payload.get("pairs", [])
-        if isinstance(pairs, list) and pairs and abs(existing_threshold - threshold) < 1e-9:
-            needs_refresh = False
-
-    if needs_refresh:
-        similarity_detector.run_similarity_analysis(
-            output_dir=runtime_req.output_dir,
-            threshold=threshold,
-            catalog_path=runtime_req.book_catalog_path,
-            winner_selections_path=_winner_path_for_runtime(runtime_req),
-            regions_path=config.cover_regions_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir),
-            hashes_path=hashes_path,
-            matrix_path=matrix_path,
-            clusters_path=clusters_path,
-        )
-        payload = _load_json(matrix_path, {})
-
     if not isinstance(payload, dict):
-        payload = {"pairs": [], "total_pairs": 0, "alerts": 0, "alert_threshold": threshold}
+        payload = {}
+
+    pairs = payload.get("pairs", [])
+    if not isinstance(pairs, list):
+        pairs = []
+
+    # Cache-first policy: avoid synchronous recompute on hot read paths.
+    if not pairs:
+        winners_count = len(_winner_image_map(runtime=runtime_req))
+        if winners_count > 0 and winners_count <= similarity_detector.EXHAUSTIVE_PAIR_LIMIT:
+            # Small catalogs can refresh quickly inline.
+            try:
+                similarity_detector.run_similarity_analysis(
+                    output_dir=runtime_req.output_dir,
+                    threshold=threshold,
+                    catalog_path=runtime_req.book_catalog_path,
+                    winner_selections_path=_winner_path_for_runtime(runtime_req),
+                    regions_path=config.cover_regions_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir),
+                    hashes_path=_similarity_hashes_path_for_runtime(runtime_req),
+                    matrix_path=matrix_path,
+                    clusters_path=_similarity_clusters_path_for_runtime(runtime_req),
+                )
+                payload = _load_json(matrix_path, {})
+                if not isinstance(payload, dict):
+                    payload = {}
+                pairs = payload.get("pairs", [])
+                if not isinstance(pairs, list):
+                    pairs = []
+            except Exception:
+                pairs = []
+        elif winners_count > 0:
+            _start_similarity_recompute(runtime_req=runtime_req, threshold=threshold, reason="cache_miss", force=False)
+
+    normalized_pairs: list[dict[str, Any]] = []
+    for row in pairs:
+        if not isinstance(row, dict):
+            continue
+        similarity = _safe_float(row.get("similarity"), 1.0)
+        updated = dict(row)
+        updated["alert"] = similarity < threshold
+        normalized_pairs.append(updated)
+
+    alerts = sum(1 for row in normalized_pairs if bool(row.get("alert", False)))
+    output = dict(payload)
+    output["pairs"] = normalized_pairs
+    output["total_pairs"] = len(normalized_pairs)
+    output["alerts"] = alerts
+    output["alert_threshold"] = threshold
+    output["recompute"] = _similarity_recompute_snapshot(catalog_id=runtime_req.catalog_id)
 
     titles, _ = _catalog_maps(catalog_path=runtime_req.book_catalog_path)
     images = _winner_image_map(runtime=runtime_req)
-    payload["books"] = {
+    output["books"] = {
         str(book): {
             "book_number": book,
             "title": titles.get(book, f"Book {book}"),
@@ -8030,7 +9696,7 @@ def _load_similarity_matrix(*, runtime_req: config.Config, threshold: float) -> 
         }
         for book in sorted(set(titles.keys()).union(images.keys()))
     }
-    return payload
+    return output
 
 
 def _load_quality_trend_series(*, runtime: config.Config) -> list[dict[str, Any]]:
@@ -8487,6 +10153,7 @@ def _build_api_docs_html() -> str:
         ("GET", "/catalogs", "Catalog UI", "-", "-", "Generate winner catalogs/contact sheets/all-variants PDFs."),
         ("GET", "/history", "History UI", "-", "-", "Generation history viewer with filters."),
         ("GET", "/dashboard", "Dashboard UI", "-", "-", "Cost/quality dashboard."),
+        ("GET", "/batch", "Batch UI", "-", "-", "Batch generation planning and live progress page."),
         ("GET", "/similarity", "Similarity UI", "-", "-", "Cross-book similarity heatmap, alerts, and clusters."),
         ("GET", "/mockups", "Mockup UI", "-", "-", "Mockup gallery and generation controls."),
         ("GET", "/api/version", "API version", "-", "{\"version\":\"2.0.0\"}", "Current application version."),
@@ -8507,11 +10174,16 @@ def _build_api_docs_html() -> str:
         ("GET", "/api/analytics/quality/distribution", "Quality distribution", "catalog", "{\"bins\":[...]}", "Quality score histogram."),
         ("GET", "/api/analytics/models/compare", "Model compare", "catalog", "{\"models\":[...],\"recommended_model\":\"...\"}", "Quality/cost/speed/failure comparison."),
         ("GET", "/api/analytics/completion", "Catalog completion", "catalog", "{\"completion_percent\":85.8}", "Winner completion and production-readiness summary."),
+        ("GET", "/api/analytics/cost-projection?books=99&variants=5&models=openrouter/google/gemini-2.5-flash-image", "Cost projection", "books,variants,models,catalog", "{\"estimatedCostUsd\":1.48,...}", "Estimate total cost/time/storage before starting large runs."),
         ("POST", "/api/analytics/export-report", "Export analytics report", "{\"period\":\"30d\"}", "{\"report_id\":\"...\"}", "Generate report artifact in data/reports."),
         ("GET", "/api/analytics/reports", "List reports", "-", "{\"reports\":[...]}", "List generated analytics report files."),
         ("POST", "/api/admin/migrate-to-sqlite", "Migrate JSON -> SQLite", "{\"db_path\":\"data/alexandria.db\"}", "{\"ok\":true,\"summary\":{...}}", "One-shot migration command for scale mode."),
         ("GET", "/api/jobs?status=queued,running&limit=50", "List async jobs", "status,limit,book,catalog", "{\"jobs\":[...],\"count\":12}", "List persisted async generation jobs."),
         ("GET", "/api/jobs/{id}", "Get async job", "job_id", "{\"job\":{...},\"attempts\":[...]}", "Inspect one async job including attempt history."),
+        ("GET", "/api/batch-generate", "List batches", "catalog,limit,offset", "{\"batches\":[...],\"pagination\":{...}}", "List recent batch generation runs."),
+        ("GET", "/api/batch-generate/{batchId}/status", "Batch status", "batchId,catalog,limit,offset", "{\"status\":\"running\",\"books\":[...]}", "Get live per-book batch progress with pagination."),
+        ("GET", "/api/events/job/{id}", "Job SSE stream", "id,catalog", "event-stream", "Real-time stream for one async job."),
+        ("GET", "/api/events/batch/{batchId}", "Batch SSE stream", "batchId,catalog", "event-stream", "Real-time stream for one batch run."),
         ("GET", "/api/review-data?catalog=classics&limit=25&offset=0", "Review data", "catalog,limit,offset,sort,order,search,status,tags", "{\"books\":[...],\"pagination\":{...}}", "Paginated review books, winners, and filters."),
         ("GET", "/api/iterate-data?catalog=classics&limit=25&offset=0", "Iterate data", "catalog,limit,offset,sort,order,search,status", "{\"books\":[...],\"pagination\":{...}}", "Paginated iterate books + model configuration."),
         ("GET", "/api/prompt-performance", "Prompt pattern stats", "-", "{\"patterns\":{...}}", "Prompt performance breakdown for intelligent prompting."),
@@ -8524,16 +10196,19 @@ def _build_api_docs_html() -> str:
         ("GET", "/api/review-session/{id}", "Review session", "session_id", "{\"session\":{...}}", "Load a saved speed-review session state."),
         ("GET", "/api/review-stats", "Review stats", "-", "{\"sessions\":[...]}", "Aggregate completed review session metrics."),
         ("GET", "/api/similarity-matrix?threshold=0.25&limit=50&offset=0", "Similarity matrix", "threshold,limit,offset", "{\"pairs\":[...],\"pagination\":{...}}", "Paginated similarity pairs for large catalogs."),
+        ("GET", "/api/similarity/recompute/status", "Similarity recompute status", "catalog", "{\"recompute\":{...}}", "Background recompute status for full similarity cache refresh."),
         ("GET", "/api/similarity-alerts?threshold=0.25", "Similarity alerts", "threshold", "{\"alerts\":[...]}", "Pairs below similarity threshold."),
         ("GET", "/api/similarity-clusters", "Similarity clusters", "-", "{\"clusters\":[...]}", "Connected clusters of visually similar covers."),
         ("GET", "/api/cover-hash/15", "Single cover hash", "-", "{\"hash\":{...}}", "pHash/dHash/histogram values for one winner."),
         ("GET", "/api/mockup-status?limit=25&offset=0", "Mockup status", "limit,offset", "{\"books\":[...],\"pagination\":{...}}", "Paginated per-book mockup completion status."),
         ("GET", "/api/providers/connectivity?force=0", "Provider connectivity", "force,catalog", "{\"providers\":{...}}", "Cached provider connectivity checks used by iterate auto-status."),
         ("GET", "/api/drive/status", "Drive status", "catalog,drive_folder_id,input_folder_id", "{\"connected\":true,...}", "Drive credentials/source/output status and sync summary."),
+        ("GET", "/api/drive/sync-status", "Drive sync status", "catalog,drive_folder_id,input_folder_id", "{\"status\":{...}}", "Alias for drive status focused on sync/pending/error summary."),
         ("GET", "/api/drive/input-covers", "Drive input covers", "catalog,drive_folder_id,input_folder_id,limit", "{\"covers\":[...]}", "List top-level source covers/folders from Google Drive for iterate selection."),
         ("GET", "/api/variant-download?book=15&variant=2", "Variant ZIP download", "book,variant,model,catalog", "binary zip", "Download one generated variant package (JPG/PDF/medallion/metadata)."),
         ("GET", "/api/winner-download?book=15", "Winner ZIP download", "book,catalog", "binary zip", "Download selected winner package for one book."),
         ("GET", "/api/exports", "List exports", "catalog,limit,offset", "{\"exports\":[...],\"pagination\":{...}}", "Export artifacts with size and file counts."),
+        ("GET", "/api/export/status", "Export status tracking", "catalog,limit,offset", "{\"items\":[...]}", "Per-book/per-platform export status including changed-since-last-export flags."),
         ("GET", "/api/exports/{id}/download", "Download export ZIP", "id", "binary zip", "Build and stream a ZIP for a single export artifact."),
         ("GET", "/api/delivery/status", "Delivery status", "catalog", "{\"enabled\":true,...}", "Delivery automation settings and completion summary."),
         ("GET", "/api/delivery/tracking", "Delivery tracking grid", "catalog,limit,offset", "{\"items\":[...]}", "Per-book delivery status across platforms."),
@@ -8553,13 +10228,20 @@ def _build_api_docs_html() -> str:
         ("POST", "/api/providers/reset", "Reset provider runtime", "{\"provider\":\"all|openai|...\"}", "{\"ok\":true}", "Reset provider circuit/rate-limit/runtime counters."),
         ("POST", "/api/test-connection", "Test provider keys", "{\"provider\":\"all|openai|...\"}", "{\"ok\":true,\"report\":{...}}", "Validate provider connectivity."),
         ("POST", "/api/generate", "Generate variants", "{\"book\":2,\"models\":[...],\"variants\":5,\"prompt\":\"...\",\"async\":true,\"dry_run\":false}", "{\"ok\":true,\"job\":{...}}", "Queue async generation job (idempotent). Sync mode (async=false) is disabled by default unless ALLOW_SYNC_GENERATION=1."),
+        ("POST", "/api/batch-generate", "Create batch generation", "{\"books\":[1,2,3],\"models\":[...],\"variants\":5,\"budgetUsd\":25}", "{\"ok\":true,\"batchId\":\"...\"}", "Queue multiple book jobs under one batch id with budget controls."),
+        ("POST", "/api/batch-generate/{batchId}/pause", "Pause batch", "{\"reason\":\"manual\"}", "{\"ok\":true,\"status\":\"paused\"}", "Pause queued jobs in a batch."),
+        ("POST", "/api/batch-generate/{batchId}/resume", "Resume batch", "{}", "{\"ok\":true,\"status\":\"queued\"}", "Resume paused jobs in a batch."),
+        ("POST", "/api/batch-generate/{batchId}/cancel", "Cancel batch", "{\"reason\":\"manual\"}", "{\"ok\":true,\"status\":\"cancelled\"}", "Cancel queued jobs in a batch."),
         ("POST", "/api/jobs/{id}/cancel", "Cancel async job", "{\"reason\":\"...\"}", "{\"ok\":true,\"job\":{...}}", "Cancel queued/retrying/running async job."),
         ("POST", "/api/regenerate", "Re-generate weak book(s)", "{\"book\":15,\"variants\":5,\"use_library\":true}", "{\"ok\":true,\"summary\":{...}}", "Run targeted re-generation workflow."),
+        ("POST", "/api/similarity/recompute", "Recompute similarity cache", "{\"threshold\":0.25}", "{\"ok\":true,\"job\":{...}}", "Trigger background full similarity recompute."),
+        ("POST", "/api/similarity/update", "Incremental similarity update", "{\"book\":15}", "{\"ok\":true}", "Recompute similarity pairs for one book only."),
         ("POST", "/api/export/amazon", "Amazon export", "{\"books\":\"1-20\"}", "{\"ok\":true,\"export_id\":\"...\"}", "Generate Amazon listing assets for winners."),
         ("POST", "/api/export/amazon/{book_number}", "Amazon export (single)", "-", "{\"ok\":true}", "Generate Amazon assets for one title."),
         ("POST", "/api/export/ingram", "Ingram export", "{\"books\":\"1-20\"}", "{\"ok\":true}", "Generate IngramSpark print package."),
         ("POST", "/api/export/social?platforms=instagram,facebook", "Social export", "{\"books\":\"1-20\"}", "{\"ok\":true}", "Generate multi-platform social cards."),
         ("POST", "/api/export/web", "Web export", "{\"books\":\"1-20\"}", "{\"ok\":true}", "Generate web-optimized cover sizes + manifest."),
+        ("POST", "/api/export/all", "Export all pipelines", "{\"books\":\"all\",\"platforms\":[\"amazon\",\"ingram\",\"social\",\"web\"]}", "{\"ok\":true,\"combined_export_id\":\"...\"}", "Run all export pipelines and produce one combined bundle."),
         ("POST", "/api/delivery/enable", "Enable delivery", "-", "{\"ok\":true}", "Enable automatic delivery pipeline for catalog."),
         ("POST", "/api/delivery/disable", "Disable delivery", "-", "{\"ok\":true}", "Disable automatic delivery pipeline for catalog."),
         ("POST", "/api/delivery/batch?platforms=amazon,social", "Batch delivery", "{\"books\":\"1-20\"}", "{\"ok\":true}", "Deliver selected/all winner books across configured platforms."),
@@ -8597,7 +10279,7 @@ def _build_api_docs_html() -> str:
         "th{background:#1f2f52;color:#c4a352;text-align:left;}"
         "code{color:#f5e6c8;}a{color:#c4a352;} .nav a{margin-right:12px;}"
         "</style></head><body>"
-        "<div class='nav'><a href='/iterate'>Iterate</a><a href='/review'>Review</a><a href='/catalogs'>Catalogs</a><a href='/jobs'>Jobs</a><a href='/compare'>Compare</a><a href='/history'>History</a><a href='/dashboard'>Dashboard</a><a href='/similarity'>Similarity</a><a href='/mockups'>Mockups</a></div>"
+        "<div class='nav'><a href='/iterate'>Iterate</a><a href='/review'>Review</a><a href='/batch'>Batch</a><a href='/catalogs'>Catalogs</a><a href='/jobs'>Jobs</a><a href='/compare'>Compare</a><a href='/history'>History</a><a href='/dashboard'>Dashboard</a><a href='/similarity'>Similarity</a><a href='/mockups'>Mockups</a></div>"
         "<h1>Alexandria API Documentation</h1>"
         "<p>Auto-generated endpoint summary from <code>scripts/quality_review.py</code>.</p>"
         "<table><thead><tr><th>Method</th><th>URL</th><th>Name</th><th>Parameters</th><th>Example Response</th><th>Description</th></tr></thead>"

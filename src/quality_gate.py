@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import statistics
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,13 +16,17 @@ from PIL import Image
 try:
     from src import config
     from src import image_generator
+    from src import safe_json
+    from src import similarity_detector
+    from src.logger import get_logger
 except ModuleNotFoundError:  # pragma: no cover
     import config  # type: ignore
     import image_generator  # type: ignore
+    import safe_json  # type: ignore
+    import similarity_detector  # type: ignore
+    from logger import get_logger  # type: ignore
 
-
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -35,7 +39,13 @@ class QualityScore:
     image_path: Path
     technical_score: float
     color_score: float
+    palette_score: float
     artifact_score: float
+    blur_score: float
+    text_contamination_score: float
+    border_safety_score: float
+    prompt_relevance_score: float
+    distinctiveness_score: float
     diversity_score: float
     overall_score: float
     passed: bool
@@ -56,17 +66,49 @@ def score_image(
     book_number: int = 0,
     variant_id: int = 0,
     model: str = "unknown",
+    distinctiveness_score: float = 1.0,
+    prompt: str = "",
 ) -> QualityScore:
     """Score a single generated image."""
-    image = Image.open(image_path).convert("RGB")
+    image_rgba = Image.open(image_path).convert("RGBA")
+    image = image_rgba.convert("RGB")
     rgb = np.array(image, dtype=np.uint8)
+    alpha = np.array(image_rgba, dtype=np.uint8)[..., 3]
 
     technical_score, technical_issues = _technical_quality(rgb)
     color_score, color_issues = _color_compatibility(rgb)
+    palette_score, palette_issues = _palette_alignment(rgb)
     artifact_score, artifact_issues = _artifact_score(rgb)
+    blur_score, blur_issues = _blur_score(rgb)
+    text_score, text_issues = _text_contamination_score(rgb)
+    border_score, border_issues = _border_safety_score(alpha)
+    prompt_score, prompt_issues = _prompt_relevance_score(prompt=prompt, rgb=rgb)
 
-    issues = technical_issues + color_issues + artifact_issues
-    overall = (0.45 * technical_score) + (0.25 * color_score) + (0.30 * artifact_score)
+    issues = (
+        technical_issues
+        + color_issues
+        + palette_issues
+        + artifact_issues
+        + blur_issues
+        + text_issues
+        + border_issues
+        + prompt_issues
+    )
+    # Weighted for the Alexandria style targets:
+    # emphasize technical clarity + artifact cleanliness while adding explicit
+    # checks for text contamination, blur, palette fit, edge safety, and
+    # coarse prompt-to-image alignment.
+    overall = (
+        (0.24 * technical_score)
+        + (0.08 * color_score)
+        + (0.10 * palette_score)
+        + (0.20 * artifact_score)
+        + (0.07 * blur_score)
+        + (0.06 * text_score)
+        + (0.05 * border_score)
+        + (0.04 * prompt_score)
+        + (0.16 * _clip(distinctiveness_score))
+    )
 
     passed = overall >= threshold
     recommendation = "accept" if passed else "regenerate"
@@ -78,7 +120,13 @@ def score_image(
         image_path=image_path,
         technical_score=round(technical_score, 4),
         color_score=round(color_score, 4),
+        palette_score=round(palette_score, 4),
         artifact_score=round(artifact_score, 4),
+        blur_score=round(blur_score, 4),
+        text_contamination_score=round(text_score, 4),
+        border_safety_score=round(border_score, 4),
+        prompt_relevance_score=round(prompt_score, 4),
+        distinctiveness_score=round(_clip(distinctiveness_score), 4),
         diversity_score=1.0,
         overall_score=round(overall, 4),
         passed=passed,
@@ -94,15 +142,28 @@ def score_batch(
 ) -> list[QualityScore]:
     """Score all images in a generated-image directory."""
     candidates = _collect_generated_images(image_dir)
+    prompt_lookup = _build_prompt_lookup()
     scores: list[QualityScore] = []
 
     for item in candidates:
+        distinctiveness = _distinctiveness_score(
+            image_path=item["image_path"],
+            book_number=item["book_number"],
+        )
+        prompt = _resolve_candidate_prompt(
+            prompt_lookup=prompt_lookup,
+            book_number=item["book_number"],
+            variant_id=item["variant_id"],
+            model=item["model"],
+        )
         score = score_image(
             item["image_path"],
             threshold=threshold,
             book_number=item["book_number"],
             variant_id=item["variant_id"],
             model=item["model"],
+            distinctiveness_score=distinctiveness,
+            prompt=prompt,
         )
         scores.append(score)
 
@@ -123,10 +184,25 @@ def run_quality_gate(
     model_rankings_path: Path | None = None,
 ) -> list[QualityScore]:
     """Evaluate, retry failed generations, and write all quality outputs."""
-    output_scores_path = output_scores_path or (config.DATA_DIR / "quality_scores.json")
-    output_report_path = output_report_path or (config.DATA_DIR / "quality_report.md")
-    retry_log_path = retry_log_path or (config.DATA_DIR / "retry_log.json")
-    model_rankings_path = model_rankings_path or (config.DATA_DIR / "model_rankings.json")
+    runtime = config.get_config()
+    catalog_id = getattr(runtime, "catalog_id", None)
+    data_dir = getattr(runtime, "data_dir", None)
+    output_scores_path = output_scores_path or config.quality_scores_path(catalog_id=catalog_id, data_dir=data_dir)
+    output_report_path = output_report_path or config.catalog_scoped_data_path(
+        "quality_report.md",
+        catalog_id=catalog_id,
+        data_dir=data_dir,
+    )
+    retry_log_path = retry_log_path or config.catalog_scoped_data_path(
+        "retry_log.json",
+        catalog_id=catalog_id,
+        data_dir=data_dir,
+    )
+    model_rankings_path = model_rankings_path or config.catalog_scoped_data_path(
+        "model_rankings.json",
+        catalog_id=catalog_id,
+        data_dir=data_dir,
+    )
 
     scores = score_batch(generated_dir, threshold=threshold)
 
@@ -164,7 +240,13 @@ def build_model_rankings(scores: list[QualityScore]) -> list[dict[str, Any]]:
         avg_score = statistics.mean(item.overall_score for item in items) if items else 0.0
         avg_technical = statistics.mean(item.technical_score for item in items) if items else 0.0
         avg_color = statistics.mean(item.color_score for item in items) if items else 0.0
+        avg_palette = statistics.mean(item.palette_score for item in items) if items else 0.0
         avg_artifact = statistics.mean(item.artifact_score for item in items) if items else 0.0
+        avg_blur = statistics.mean(item.blur_score for item in items) if items else 0.0
+        avg_text = statistics.mean(item.text_contamination_score for item in items) if items else 0.0
+        avg_border = statistics.mean(item.border_safety_score for item in items) if items else 0.0
+        avg_prompt = statistics.mean(item.prompt_relevance_score for item in items) if items else 0.0
+        avg_distinctiveness = statistics.mean(item.distinctiveness_score for item in items) if items else 0.0
 
         ranking.append(
             {
@@ -176,7 +258,13 @@ def build_model_rankings(scores: list[QualityScore]) -> list[dict[str, Any]]:
                 "average_score": round(avg_score, 4),
                 "average_technical": round(avg_technical, 4),
                 "average_color": round(avg_color, 4),
+                "average_palette": round(avg_palette, 4),
                 "average_artifact": round(avg_artifact, 4),
+                "average_blur": round(avg_blur, 4),
+                "average_text_contamination": round(avg_text, 4),
+                "average_border_safety": round(avg_border, 4),
+                "average_prompt_relevance": round(avg_prompt, 4),
+                "average_distinctiveness": round(avg_distinctiveness, 4),
             }
         )
 
@@ -297,15 +385,187 @@ def _color_compatibility(rgb: np.ndarray) -> tuple[float, list[str]]:
     warmth_index = (mean_r + 0.35 * mean_g) - mean_b
     warm_balance_score = _clip((warmth_index + 35.0) / 140.0)
 
-    ratio_score = 1.0 - abs(warm_ratio - 0.35) / 0.65
+    # Broad target window to support both warm paintings and sepia engravings.
+    ratio_score = 1.0 - abs(warm_ratio - 0.42) / 0.72
     ratio_score = _clip(ratio_score)
 
-    if warm_ratio < 0.08:
+    channel_spread = np.maximum.reduce([r, g, b]) - np.minimum.reduce([r, g, b])
+    mean_chroma = float(channel_spread.mean())
+    chroma_score = _clip((mean_chroma - 8.0) / 60.0)
+    sepia_alignment = _clip(((mean_r - mean_b) - 6.0) / 60.0)
+    style_flex_score = max(chroma_score, sepia_alignment)
+
+    if warmth_index < -10.0:
         issues.append("too_cold_for_cover_palette")
-    if warm_ratio > 0.93:
+    if warm_ratio > 0.96 and mean_chroma < 6.0:
         issues.append("overly_monochrome_warm")
 
-    score = (0.60 * ratio_score) + (0.40 * warm_balance_score)
+    score = (0.45 * warm_balance_score) + (0.35 * ratio_score) + (0.20 * style_flex_score)
+    return _clip(score), issues
+
+
+def _palette_alignment(rgb: np.ndarray) -> tuple[float, list[str]]:
+    issues: list[str] = []
+    arr = rgb.astype(np.float32)
+    flat = arr.reshape(-1, 3)
+    if flat.size == 0:
+        return 0.0, ["empty_image"]
+
+    # Navy/gold palette anchors based on the cover system.
+    palette = np.array(
+        [
+            [26.0, 39.0, 68.0],   # navy
+            [188.0, 150.0, 90.0], # warm gold
+            [122.0, 94.0, 62.0],  # bronze
+        ],
+        dtype=np.float32,
+    )
+    distances = np.linalg.norm(flat[:, None, :] - palette[None, :, :], axis=2)
+    nearest = distances.min(axis=1)
+    coverage = float((nearest < 78.0).mean())
+
+    warm_ratio = float(((flat[:, 0] > flat[:, 2]) & (flat[:, 1] >= flat[:, 2] * 0.7)).mean())
+    cool_ratio = float(((flat[:, 2] > flat[:, 0]) & (flat[:, 2] > flat[:, 1])).mean())
+
+    coverage_score = _clip((coverage - 0.08) / 0.55)
+    warm_score = _clip((warm_ratio - 0.12) / 0.52)
+    cool_score = _clip((cool_ratio - 0.10) / 0.60)
+    score = (0.60 * coverage_score) + (0.20 * warm_score) + (0.20 * cool_score)
+
+    if coverage < 0.06:
+        issues.append("palette_mismatch")
+    if warm_ratio < 0.05 and cool_ratio < 0.08:
+        issues.append("palette_low_harmony")
+
+    return _clip(score), issues
+
+
+def _blur_score(rgb: np.ndarray) -> tuple[float, list[str]]:
+    issues: list[str] = []
+    gray = rgb.astype(np.float32).mean(axis=2)
+    if gray.size == 0:
+        return 0.0, ["empty_image"]
+
+    dx = np.diff(gray, axis=1)
+    dy = np.diff(gray, axis=0)
+    grad_energy = float(np.var(dx) + np.var(dy))
+    lap = np.abs(np.diff(gray, n=2, axis=0)).mean() + np.abs(np.diff(gray, n=2, axis=1)).mean()
+
+    grad_score = _clip((grad_energy - 18.0) / 220.0)
+    lap_score = _clip((float(lap) - 1.8) / 10.0)
+    score = (0.65 * grad_score) + (0.35 * lap_score)
+
+    if grad_energy < 20.0 or lap < 2.0:
+        issues.append("blurred_image")
+    return _clip(score), issues
+
+
+def _text_contamination_score(rgb: np.ndarray) -> tuple[float, list[str]]:
+    issues: list[str] = []
+    gray = rgb.astype(np.float32).mean(axis=2)
+    if gray.size == 0:
+        return 0.0, ["empty_image"]
+
+    dx = np.abs(np.diff(gray, axis=1))
+    dy = np.abs(np.diff(gray, axis=0))
+    edge_map = np.pad(dx, ((0, 0), (0, 1)), mode="constant") + np.pad(dy, ((0, 1), (0, 0)), mode="constant")
+    threshold = float(np.percentile(edge_map, 96))
+    binary = (edge_map >= threshold).astype(np.uint8)
+
+    neighbors = (
+        np.pad(binary, 1)[1:-1, :-2]
+        + np.pad(binary, 1)[1:-1, 2:]
+        + np.pad(binary, 1)[:-2, 1:-1]
+        + np.pad(binary, 1)[2:, 1:-1]
+    )
+    tiny_ratio = float(((binary == 1) & (neighbors <= 2)).mean())
+
+    # OCR-like horizontal/vertical stroke proxy.
+    horiz = np.abs(np.diff(gray, axis=1))
+    vert = np.abs(np.diff(gray, axis=0))
+    horiz_stroke = float((horiz > np.percentile(horiz, 97)).mean())
+    vert_stroke = float((vert > np.percentile(vert, 97)).mean())
+    stroke_ratio = (horiz_stroke + vert_stroke) / 2.0
+
+    contamination = (0.70 * _clip((tiny_ratio - 0.012) / 0.055)) + (0.30 * _clip((stroke_ratio - 0.025) / 0.11))
+    score = 1.0 - contamination
+
+    if tiny_ratio > 0.03:
+        issues.append("text_contamination_risk")
+    if stroke_ratio > 0.10:
+        issues.append("stroke_artifact_risk")
+
+    return _clip(score), issues
+
+
+def _border_safety_score(alpha: np.ndarray) -> tuple[float, list[str]]:
+    issues: list[str] = []
+    if alpha.size == 0:
+        return 0.0, ["empty_alpha"]
+
+    h, w = alpha.shape[:2]
+    center_x = (w - 1) / 2.0
+    center_y = (h - 1) / 2.0
+    radius = min(w, h) / 2.0
+    yy, xx = np.ogrid[:h, :w]
+    dist = np.sqrt((xx - center_x) ** 2 + (yy - center_y) ** 2)
+
+    outer_ring = dist >= (radius - 3.5)
+    outer_alpha = alpha[outer_ring] / 255.0
+    bleed_ratio = float((outer_alpha > 0.05).mean()) if outer_alpha.size else 0.0
+
+    score = 1.0 - _clip((bleed_ratio - 0.01) / 0.35)
+    if bleed_ratio > 0.08:
+        issues.append("border_bleed_risk")
+    return _clip(score), issues
+
+
+def _prompt_relevance_score(*, prompt: str, rgb: np.ndarray) -> tuple[float, list[str]]:
+    issues: list[str] = []
+    token = str(prompt or "").strip().lower()
+    if not token:
+        return 0.75, ["missing_prompt_context"]
+
+    arr = rgb.astype(np.float32)
+    r = arr[..., 0]
+    g = arr[..., 1]
+    b = arr[..., 2]
+    brightness = (r + g + b) / 3.0
+
+    score = 0.70
+
+    maritime_words = {"sea", "ocean", "whale", "ship", "naval", "wave", "storm", "harbor"}
+    gothic_words = {"gothic", "night", "shadow", "castle", "vampire", "dracula"}
+    fire_words = {"golden", "sunset", "fire", "warm", "candle", "torch"}
+
+    if any(word in token for word in maritime_words):
+        blue_ratio = float(((b > r) & (b > g)).mean())
+        maritime_score = _clip((blue_ratio - 0.16) / 0.52)
+        score = (0.40 * score) + (0.60 * maritime_score)
+        if blue_ratio < 0.12:
+            issues.append("prompt_relevance_marine_mismatch")
+    elif any(word in token for word in gothic_words):
+        dark_ratio = float((brightness < 78.0).mean())
+        gothic_score = _clip((dark_ratio - 0.25) / 0.60)
+        score = (0.40 * score) + (0.60 * gothic_score)
+        if dark_ratio < 0.22:
+            issues.append("prompt_relevance_tone_mismatch")
+    elif any(word in token for word in fire_words):
+        warm_ratio = float(((r > g) & (g >= b)).mean())
+        warm_score = _clip((warm_ratio - 0.18) / 0.60)
+        score = (0.40 * score) + (0.60 * warm_score)
+        if warm_ratio < 0.15:
+            issues.append("prompt_relevance_warmth_mismatch")
+
+    # Penalize very low visual complexity for narrative prompts.
+    narrative_words = {"battle", "scene", "portrait", "journey", "adventure", "epic"}
+    if any(word in token for word in narrative_words):
+        edge_energy = float(np.abs(np.diff(brightness, axis=1)).mean() + np.abs(np.diff(brightness, axis=0)).mean())
+        complexity = _clip((edge_energy - 4.0) / 18.0)
+        score = (0.75 * score) + (0.25 * complexity)
+        if complexity < 0.25:
+            issues.append("prompt_relevance_low_complexity")
+
     return _clip(score), issues
 
 
@@ -352,6 +612,107 @@ def _artifact_score(rgb: np.ndarray) -> tuple[float, list[str]]:
     return _clip(score), issues
 
 
+def _distinctiveness_score(*, image_path: Path, book_number: int) -> float:
+    runtime = config.get_config()
+    catalog_id = getattr(runtime, "catalog_id", None)
+    try:
+        result = similarity_detector.check_generated_image_against_winners(
+            image_path=image_path,
+            book_number=book_number,
+            output_dir=runtime.output_dir,
+            catalog_path=runtime.book_catalog_path,
+            winner_selections_path=config.winner_selections_path(catalog_id=catalog_id, data_dir=runtime.data_dir),
+            regions_path=config.cover_regions_path(catalog_id=catalog_id, config_dir=runtime.config_dir),
+            hashes_path=config.similarity_hashes_path(catalog_id=catalog_id, data_dir=runtime.data_dir),
+            threshold=0.25,
+        )
+        distance = _clip(float(result.get("similarity", 1.0) or 1.0))
+        # similarity_detector uses a distance-like score where lower values mean more similar.
+        # Convert to a quality-oriented distinctiveness signal that only penalizes near-duplicates.
+        if distance >= 0.40:
+            return 1.0
+        if distance >= 0.25:
+            return _clip(0.80 + ((distance - 0.25) / 0.15) * 0.20)
+        if distance >= 0.15:
+            return _clip(0.50 + ((distance - 0.15) / 0.10) * 0.30)
+        if distance >= 0.08:
+            return _clip(0.20 + ((distance - 0.08) / 0.07) * 0.30)
+        return 0.0
+    except Exception:  # pragma: no cover - defensive
+        return 1.0
+
+
+def _normalize_model_key(model: str) -> str:
+    token = str(model or "").strip().lower()
+    if "__" in token:
+        token = token.replace("__", "/")
+    return token
+
+
+def _build_prompt_lookup() -> dict[tuple[int, int, str], str]:
+    runtime = config.get_config()
+    lookup: dict[tuple[int, int, str], str] = {}
+    catalog_id = getattr(runtime, "catalog_id", None)
+    data_dir = getattr(runtime, "data_dir", None)
+
+    history_payload = _load_json(
+        config.generation_history_path(catalog_id=catalog_id, data_dir=data_dir),
+        {"items": []},
+    )
+    rows = history_payload.get("items", []) if isinstance(history_payload, dict) else []
+    if not isinstance(rows, list):
+        rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        book = _safe_int(row.get("book_number"), 0)
+        variant = _safe_int(row.get("variant"), 0)
+        model = _normalize_model_key(str(row.get("model", "default")))
+        prompt = str(row.get("prompt", "")).strip()
+        if book <= 0 or variant <= 0 or not prompt:
+            continue
+        lookup[(book, variant, model)] = prompt
+        if model != "default":
+            lookup.setdefault((book, variant, "default"), prompt)
+
+    prompts_payload = _load_json(runtime.prompts_path, {"books": []})
+    books = prompts_payload.get("books", []) if isinstance(prompts_payload, dict) else []
+    if isinstance(books, list):
+        for book_row in books:
+            if not isinstance(book_row, dict):
+                continue
+            book = _safe_int(book_row.get("number"), 0)
+            if book <= 0:
+                continue
+            variants = book_row.get("variants", [])
+            if not isinstance(variants, list):
+                continue
+            for variant_row in variants:
+                if not isinstance(variant_row, dict):
+                    continue
+                variant = _safe_int(variant_row.get("variant_id"), 0)
+                prompt = str(variant_row.get("prompt", "")).strip()
+                if variant <= 0 or not prompt:
+                    continue
+                lookup.setdefault((book, variant, "default"), prompt)
+    return lookup
+
+
+def _resolve_candidate_prompt(
+    *,
+    prompt_lookup: dict[tuple[int, int, str], str],
+    book_number: int,
+    variant_id: int,
+    model: str,
+) -> str:
+    normalized_model = _normalize_model_key(model)
+    return (
+        prompt_lookup.get((book_number, variant_id, normalized_model))
+        or prompt_lookup.get((book_number, variant_id, "default"))
+        or ""
+    )
+
+
 def _apply_diversity_scores(scores: list[QualityScore], *, threshold: float) -> None:
     grouped: dict[tuple[int, str], list[QualityScore]] = {}
     for item in scores:
@@ -376,7 +737,6 @@ def _apply_diversity_scores(scores: list[QualityScore], *, threshold: float) -> 
         identical = diversity_score < 0.25
         for entry in entries:
             entry.diversity_score = round(diversity_score, 4)
-            entry.overall_score = round(entry.overall_score * (0.80 + 0.20 * diversity_score), 4)
             if identical and "not_diverse" not in entry.issues:
                 entry.issues.append("not_diverse")
             entry.passed = entry.overall_score >= threshold
@@ -429,6 +789,11 @@ def _retry_failed_images(
                     book_number=score.book_number,
                     variant_id=score.variant_id,
                     model=score.model,
+                    distinctiveness_score=_distinctiveness_score(
+                        image_path=score.image_path,
+                        book_number=score.book_number,
+                    ),
+                    prompt=tweaked_prompt,
                 )
 
                 retry_log.append(
@@ -449,7 +814,12 @@ def _retry_failed_images(
 
                 score.technical_score = rescored.technical_score
                 score.color_score = rescored.color_score
+                score.palette_score = rescored.palette_score
                 score.artifact_score = rescored.artifact_score
+                score.blur_score = rescored.blur_score
+                score.text_contamination_score = rescored.text_contamination_score
+                score.border_safety_score = rescored.border_safety_score
+                score.prompt_relevance_score = rescored.prompt_relevance_score
                 score.overall_score = rescored.overall_score
                 score.issues = rescored.issues
                 score.passed = rescored.passed
@@ -527,9 +897,12 @@ def _get_prompt_context(prompts_payload: dict[str, Any], book_number: int, varia
 
 
 def _load_prompts(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {"books": []}
-    return json.loads(path.read_text(encoding="utf-8"))
+    payload = safe_json.load_json(path, {"books": []})
+    return payload if isinstance(payload, dict) else {"books": []}
+
+
+def _load_json(path: Path, default: Any) -> Any:
+    return safe_json.load_json(path, default)
 
 
 def _collect_generated_images(image_dir: Path) -> list[dict[str, Any]]:
@@ -539,7 +912,7 @@ def _collect_generated_images(image_dir: Path) -> list[dict[str, Any]]:
         return records
 
     # Pattern A: tmp/generated/{book}/{model}/variant_{n}.png
-    for file_path in sorted(image_dir.glob("*/ */variant_*.png")):
+    for file_path in sorted(image_dir.glob("*/*/variant_*.png")):
         try:
             book_number = int(file_path.parents[1].name)
         except ValueError:
@@ -605,22 +978,87 @@ def _hamming_distance(a: np.ndarray, b: np.ndarray) -> int:
     return int(np.sum(a != b))
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _clip(value: float) -> float:
     return float(max(0.0, min(1.0, value)))
 
 
 def _write_quality_scores(scores: list[QualityScore], path: Path) -> None:
+    existing_rows_by_key: dict[tuple[int, int, str], dict[str, Any]] = {}
+    existing_history: dict[tuple[int, int, str], list[dict[str, Any]]] = {}
+    existing_payload = safe_json.load_json(path, {})
+    existing_rows = existing_payload.get("scores", []) if isinstance(existing_payload, dict) else []
+    if isinstance(existing_rows, list):
+        for row in existing_rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                key = (
+                    int(row.get("book_number", 0) or 0),
+                    int(row.get("variant_id", 0) or 0),
+                    str(row.get("model", "unknown")),
+                )
+            except (TypeError, ValueError):
+                continue
+            existing_rows_by_key[key] = dict(row)
+            history = row.get("history")
+            if isinstance(history, list):
+                existing_history[key] = [item for item in history if isinstance(item, dict)]
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    updated_keys: set[tuple[int, int, str]] = set()
+    for row in scores:
+        item = row.to_dict()
+        key = (int(item.get("book_number", 0)), int(item.get("variant_id", 0)), str(item.get("model", "unknown")))
+        history = list(existing_history.get(key, []))
+        if not history:
+            history = [
+                {
+                    "date": today,
+                    "action": "initial_generation",
+                    "best_score": round(float(item.get("overall_score", 0.0) or 0.0), 4),
+                }
+            ]
+        elif not any(str(entry.get("action", "")).strip().lower() == "initial_generation" for entry in history):
+            history.insert(
+                0,
+                {
+                    "date": today,
+                    "action": "initial_generation",
+                    "best_score": round(float(item.get("overall_score", 0.0) or 0.0), 4),
+                },
+            )
+
+        item["history"] = history
+        existing_rows_by_key[key] = item
+        updated_keys.add(key)
+
+    serialized_scores = sorted(
+        [value for value in existing_rows_by_key.values() if isinstance(value, dict)],
+        key=lambda item: (
+            int(item.get("book_number", 0) or 0),
+            str(item.get("model", "unknown")),
+            int(item.get("variant_id", 0) or 0),
+        ),
+    )
+
     payload = {
         "summary": {
-            "total": len(scores),
-            "passed": sum(1 for row in scores if row.passed),
-            "failed": sum(1 for row in scores if not row.passed),
-            "manual_review": sum(1 for row in scores if row.recommendation == "manual_review"),
+            "total": len(serialized_scores),
+            "passed": sum(1 for row in serialized_scores if bool(row.get("passed", False))),
+            "failed": sum(1 for row in serialized_scores if not bool(row.get("passed", False))),
+            "manual_review": sum(1 for row in serialized_scores if str(row.get("recommendation", "")) == "manual_review"),
+            "updated_rows": len(updated_keys),
         },
-        "scores": [row.to_dict() for row in scores],
+        "scores": serialized_scores,
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    safe_json.atomic_write_json(path, payload)
 
 
 def _write_retry_log(rows: list[dict[str, Any]], path: Path) -> None:
@@ -628,14 +1066,12 @@ def _write_retry_log(rows: list[dict[str, Any]], path: Path) -> None:
         "retry_count": len(rows),
         "items": rows,
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    safe_json.atomic_write_json(path, payload)
 
 
 def _write_model_rankings(rows: list[dict[str, Any]], path: Path) -> None:
     payload = {"rankings": rows}
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    safe_json.atomic_write_json(path, payload)
 
 
 def main() -> int:

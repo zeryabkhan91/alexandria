@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/dashboard.css" />
+<title>Alexandria Dashboard</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a href="/review">Review</a>
+    <a href="/batch">Batch</a>
+    <a href="/history">History</a>
+    <a class="active" href="/dashboard">Dashboard</a>
+    <a href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+    <div class="catalog"><span>Catalog</span><select id="catalogSelect"></select></div>
+  </nav>
+
+  <main>
+    <section class="card">
+      <h1 class="dashboard-title">Cost & Quality Dashboard</h1>
+      <div id="updatedAt" class="meta dashboard-updated">Loading...</div>
+    </section>
+
+    <section class="cards" id="kpis"></section>
+
+    <section class="card projector-card">
+      <h2>Cost Projector</h2>
+      <div class="projector-grid">
+        <label>
+          <span>Books</span>
+          <input id="projectorBooks" type="number" min="1" step="1" value="99" />
+        </label>
+        <label>
+          <span>Variants / Book</span>
+          <input id="projectorVariants" type="number" min="1" step="1" value="5" />
+        </label>
+        <label>
+          <span>Models (multi-select)</span>
+          <select id="projectorModels" multiple></select>
+        </label>
+      </div>
+      <div id="projectorSummary" class="status u-mt-10">Loading projection…</div>
+      <div id="projectorRecommendations" class="status u-mt-8"></div>
+    </section>
+
+    <section class="grid">
+      <div class="chart-wrap">
+        <h2>Cost Per Model</h2>
+        <svg id="chartModel"></svg>
+      </div>
+      <div class="chart-wrap">
+        <h2>Cumulative Cost Over Time</h2>
+        <svg id="chartCumulative"></svg>
+      </div>
+      <div class="chart-wrap">
+        <h2>Cost vs Quality Scatter</h2>
+        <svg id="chartScatter"></svg>
+      </div>
+      <div class="chart-wrap">
+        <h2>Quality Trend Over Re-generation Rounds</h2>
+        <svg id="chartTrend"></svg>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    function q(id) { return document.getElementById(id); }
+    let activeCatalog = 'classics';
+    let dashboardPayload = null;
+    let projectorModels = [];
+    let projectorTimer = null;
+    function catalogQuery() { return `catalog=${encodeURIComponent(activeCatalog)}`; }
+
+    async function init() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('catalog')) activeCatalog = params.get('catalog');
+      await loadCatalogs();
+      await Promise.all([loadDashboardPayload(), loadProjectorModels()]);
+      bindProjectorEvents();
+      await refreshProjection();
+    }
+
+    async function loadCatalogs() {
+      const res = await fetch('/api/catalogs');
+      const payload = await res.json();
+      const catalogs = payload.catalogs || [];
+      if (!activeCatalog && payload.active_catalog) activeCatalog = payload.active_catalog;
+      q('catalogSelect').innerHTML = catalogs.map(c => `<option value="${c.id}" ${c.id===activeCatalog?'selected':''}>${c.name || c.id}</option>`).join('');
+      q('catalogSelect').addEventListener('change', (event) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('catalog', event.target.value);
+        window.location.href = url.toString();
+      });
+    }
+
+    async function loadDashboardPayload() {
+      const res = await fetch(`/api/dashboard-data?${catalogQuery()}`);
+      const data = await res.json();
+      dashboardPayload = data;
+      renderSummary(data.summary || {});
+      renderCharts(data);
+      q('updatedAt').textContent = `Updated: ${new Date(data.generated_at || Date.now()).toLocaleString()}`;
+    }
+
+    async function loadProjectorModels() {
+      const res = await fetch(`/api/providers/runtime?${catalogQuery()}`);
+      const payload = await res.json();
+      const configured = Array.isArray(payload.models_configured) ? payload.models_configured : [];
+      projectorModels = configured;
+      const node = q('projectorModels');
+      node.innerHTML = projectorModels.map((model, index) => `<option value="${model}" ${index === 0 ? 'selected' : ''}>${model}</option>`).join('');
+    }
+
+    function bindProjectorEvents() {
+      const trigger = () => {
+        if (projectorTimer) window.clearTimeout(projectorTimer);
+        projectorTimer = window.setTimeout(() => refreshProjection(), 250);
+      };
+      q('projectorBooks').addEventListener('input', trigger);
+      q('projectorVariants').addEventListener('input', trigger);
+      q('projectorModels').addEventListener('change', trigger);
+    }
+
+    function selectedProjectorModels() {
+      const node = q('projectorModels');
+      const selected = Array.from(node.selectedOptions || []).map((opt) => String(opt.value || '').trim()).filter(Boolean);
+      if (selected.length) return selected;
+      if (projectorModels.length) return [projectorModels[0]];
+      return [];
+    }
+
+    async function refreshProjection() {
+      const books = Math.max(1, Number(q('projectorBooks').value || 1));
+      const variants = Math.max(1, Number(q('projectorVariants').value || 1));
+      const models = selectedProjectorModels();
+      if (!models.length) {
+        q('projectorSummary').textContent = 'No models configured.';
+        q('projectorRecommendations').textContent = '';
+        return;
+      }
+      const url = `/api/analytics/cost-projection?${catalogQuery()}&books=${books}&variants=${variants}&models=${encodeURIComponent(models.join(','))}`;
+      const res = await fetch(url);
+      const payload = await res.json();
+      if (!res.ok || !payload.ok) {
+        q('projectorSummary').textContent = payload.message || payload.error_message || payload.error || 'Projection failed.';
+        q('projectorRecommendations').textContent = '';
+        return;
+      }
+      q('projectorSummary').textContent = [
+        `${Number(payload.totalImages || 0)} images`,
+        `${Number(payload.models?.length || models.length)} model(s)`,
+        `est. ${Number(payload.estimatedTimeHours || 0).toFixed(2)}h`,
+        `est. ${Number(payload.estimatedStorageGb || 0).toFixed(2)}GB`,
+        `est. $${Number(payload.estimatedCostUsd || 0).toFixed(2)}`,
+      ].join(' • ');
+      q('projectorRecommendations').innerHTML = (payload.recommendations || []).map((row) => `• ${String(row)}`).join('<br>');
+    }
+
+    function renderSummary(summary) {
+      const rows = [
+        ['Total Spent', `$${Number(summary.total_spent || 0).toFixed(2)}`],
+        ['Budget Total', `$${Number(summary.budget_total || 0).toFixed(2)}`],
+        ['Budget Remaining', `$${Number(summary.budget_remaining || 0).toFixed(2)}`],
+        ['Books Generated', `${Number(summary.books_generated || 0)} / ${Number(summary.books_cataloged || 0)}`],
+        ['Avg Cost / Book', `$${Number(summary.average_cost_per_book || 0).toFixed(3)}`],
+        ['Projected Remaining', `$${Number(summary.projected_remaining_cost || 0).toFixed(2)}`],
+      ];
+      q('kpis').innerHTML = rows.map(([label, value]) => `
+        <article class="card">
+          <div class="kpi-label">${label}</div>
+          <div class="kpi-value">${value}</div>
+        </article>
+      `).join('');
+    }
+
+    function renderCharts(data) {
+      drawBarChart(q('chartModel'), (data.cost_per_model || []).slice(0, 12).map(r => ({ x: r.model, y: Number(r.cost || 0) })));
+      drawLineChart(q('chartCumulative'), (data.cumulative_cost || []).map(r => ({ x: r.timestamp, y: Number(r.cumulative_cost || 0) })));
+      drawScatterChart(q('chartScatter'), (data.scatter_cost_vs_quality || []).slice(-600).map(r => ({ x: Number(r.cost || 0), y: Number(r.quality || 0), label: r.model })));
+      drawTrendChart(q('chartTrend'), (data.quality_trend || []).map(r => ({ x: r.label, y: Number(r.average_quality || 0) })));
+    }
+
+    function clear(svg) { while (svg.firstChild) svg.removeChild(svg.firstChild); }
+
+    function drawBarChart(svg, points) {
+      clear(svg);
+      const w = svg.clientWidth || 600, h = svg.clientHeight || 280;
+      const maxY = Math.max(1, ...points.map(p => p.y));
+      const pad = 26, chartW = w - (pad * 2), chartH = h - 52;
+      points.forEach((p, i) => {
+        const bw = chartW / Math.max(1, points.length) * 0.72;
+        const gap = chartW / Math.max(1, points.length);
+        const x = pad + (i * gap) + (gap - bw) / 2;
+        const bh = (p.y / maxY) * chartH;
+        const y = h - 24 - bh;
+        appendRect(svg, x, y, bw, bh, '#c4a352');
+        appendText(svg, x + bw / 2, h - 8, truncate(p.x, 11), '#f5e6c8', 9, 'middle');
+      });
+      appendText(svg, 8, 14, '$', '#bfae8f', 11, 'start');
+    }
+
+    function drawLineChart(svg, points) {
+      clear(svg);
+      const w = svg.clientWidth || 600, h = svg.clientHeight || 280;
+      if (!points.length) return;
+      const pad = 26, chartW = w - (pad * 2), chartH = h - 46;
+      const maxY = Math.max(1, ...points.map(p => p.y));
+      const stepX = chartW / Math.max(1, points.length - 1);
+      const d = points.map((p, i) => {
+        const x = pad + (i * stepX);
+        const y = h - 20 - ((p.y / maxY) * chartH);
+        return `${i === 0 ? 'M' : 'L'}${x},${y}`;
+      }).join(' ');
+      appendPath(svg, d, '#c4a352', 'none', 2);
+      appendText(svg, 8, 14, '$ cumulative', '#bfae8f', 11, 'start');
+      appendText(svg, w - 8, h - 8, `${points.length} points`, '#bfae8f', 10, 'end');
+    }
+
+    function drawScatterChart(svg, points) {
+      clear(svg);
+      const w = svg.clientWidth || 600, h = svg.clientHeight || 280;
+      if (!points.length) return;
+      const pad = 30, chartW = w - (pad * 2), chartH = h - 40;
+      const maxX = Math.max(0.01, ...points.map(p => p.x));
+      const maxY = Math.max(1, ...points.map(p => p.y));
+      points.forEach(p => {
+        const x = pad + (p.x / maxX) * chartW;
+        const y = h - 20 - (p.y / maxY) * chartH;
+        appendCircle(svg, x, y, 2.2, 'rgba(196,163,82,0.65)');
+      });
+      appendText(svg, 8, 14, 'x=cost, y=quality', '#bfae8f', 11, 'start');
+    }
+
+    function drawTrendChart(svg, points) {
+      clear(svg);
+      const w = svg.clientWidth || 600, h = svg.clientHeight || 280;
+      if (!points.length) return;
+      const pad = 28, chartW = w - (pad * 2), chartH = h - 48;
+      const maxY = Math.max(1, ...points.map(p => p.y));
+      const stepX = chartW / Math.max(1, points.length - 1);
+      let d = '';
+      points.forEach((p, i) => {
+        const x = pad + (i * stepX);
+        const y = h - 22 - ((p.y / maxY) * chartH);
+        d += `${i === 0 ? 'M' : 'L'}${x},${y} `;
+        appendCircle(svg, x, y, 3, '#c4a352');
+        appendText(svg, x, h - 8, truncate(p.x, 10), '#f5e6c8', 9, 'middle');
+      });
+      appendPath(svg, d.trim(), '#c4a352', 'none', 2);
+      appendText(svg, 8, 14, 'Average quality by round', '#bfae8f', 11, 'start');
+    }
+
+    function appendRect(svg, x, y, w, h, fill) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      el.setAttribute('x', x); el.setAttribute('y', y); el.setAttribute('width', w); el.setAttribute('height', h); el.setAttribute('fill', fill);
+      svg.appendChild(el);
+    }
+    function appendCircle(svg, cx, cy, r, fill) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      el.setAttribute('cx', cx); el.setAttribute('cy', cy); el.setAttribute('r', r); el.setAttribute('fill', fill);
+      svg.appendChild(el);
+    }
+    function appendPath(svg, d, stroke, fill, width) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      el.setAttribute('d', d); el.setAttribute('stroke', stroke); el.setAttribute('fill', fill); el.setAttribute('stroke-width', width);
+      svg.appendChild(el);
+    }
+    function appendText(svg, x, y, text, color, size, anchor) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.setAttribute('x', x); el.setAttribute('y', y); el.setAttribute('fill', color); el.setAttribute('font-size', size); el.setAttribute('text-anchor', anchor);
+      el.textContent = text;
+      svg.appendChild(el);
+    }
+
+    function truncate(value, n) {
+      const text = String(value || '');
+      return text.length > n ? `${text.slice(0, n - 1)}…` : text;
+    }
+
+    init();
+    window.addEventListener('resize', () => {
+      if (dashboardPayload) renderCharts(dashboardPayload);
+    });
+  </script>
+  <script src="/src/static/navbar.js"></script>
+</body>
+</html>

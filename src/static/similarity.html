@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/similarity.css" />
+<title>Alexandria Similarity</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a href="/review">Review</a>
+    <a href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a class="active" href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+    <div class="catalog"><span>Catalog</span><select id="catalogSelect"></select></div>
+  </nav>
+
+  <main>
+    <section class="card">
+      <h1>Cross-Book Similarity</h1>
+      <div class="controls">
+        <label>Alert Threshold <input id="threshold" type="number" min="0" max="1" step="0.01" value="0.25"></label>
+        <button id="refreshBtn">Refresh Analysis</button>
+        <span id="status" class="legend">Loading similarity data...</span>
+      </div>
+    </section>
+
+    <section class="card stats" id="stats"></section>
+
+    <section class="card">
+      <h2>Similarity Heatmap</h2>
+      <div class="heatmap-wrap">
+        <div>
+          <canvas id="heatmap" width="700" height="700"></canvas>
+          <div class="legend">Dark gold = very similar (risk), cool blue = distinct.</div>
+        </div>
+        <div>
+          <div id="selectedPair" class="legend">Click a heatmap cell to inspect the pair.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Similarity Alerts</h2>
+      <div class="u-overflow-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Book A</th>
+              <th>Book B</th>
+              <th>Similarity</th>
+              <th>A</th>
+              <th>B</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="alertsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Clusters</h2>
+      <div id="clusters" class="clusters"></div>
+    </section>
+  </main>
+
+  <div id="pairModal">
+    <div class="modal-card">
+      <div class="u-row-between-center">
+        <strong id="pairTitle" class="u-title-gold-18">Pair</strong>
+        <button id="closeModal" class="ghost">Close</button>
+      </div>
+      <div id="pairMeta" class="legend u-mt-8"></div>
+      <div id="pairGrid" class="pair-grid u-mt-10"></div>
+    </div>
+  </div>
+
+  <script>
+    const state = {
+      catalog: 'classics',
+      catalogs: [],
+      matrix: null,
+      alerts: [],
+      clusters: [],
+      books: {},
+      index: [],
+      indexMap: new Map(),
+    };
+
+    function q(id) { return document.getElementById(id); }
+    function catalogQuery() { return `catalog=${encodeURIComponent(state.catalog)}`; }
+
+    async function init() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('catalog')) state.catalog = params.get('catalog');
+      await loadCatalogs();
+      bindEvents();
+      await loadData();
+    }
+
+    async function loadCatalogs() {
+      const res = await fetch('/api/catalogs');
+      const payload = await res.json();
+      state.catalogs = payload.catalogs || [];
+      if (!state.catalog && payload.active_catalog) state.catalog = payload.active_catalog;
+      q('catalogSelect').innerHTML = state.catalogs.map(c => `<option value="${escapeHtml(c.id)}" ${c.id===state.catalog?'selected':''}>${escapeHtml(c.name || c.id)}</option>`).join('');
+    }
+
+    function bindEvents() {
+      q('catalogSelect').addEventListener('change', (event) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('catalog', event.target.value);
+        window.location.href = url.toString();
+      });
+      q('refreshBtn').addEventListener('click', loadData);
+      q('closeModal').addEventListener('click', () => q('pairModal').style.display = 'none');
+      q('pairModal').addEventListener('click', (event) => {
+        if (event.target === q('pairModal')) q('pairModal').style.display = 'none';
+      });
+    }
+
+    async function loadData() {
+      const threshold = Number(q('threshold').value || 0.25);
+      q('status').textContent = 'Running similarity analysis...';
+
+      const [matrixRes, alertsRes, clustersRes] = await Promise.all([
+        fetch(`/api/similarity-matrix?threshold=${encodeURIComponent(threshold)}&${catalogQuery()}`),
+        fetch(`/api/similarity-alerts?threshold=${encodeURIComponent(threshold)}&${catalogQuery()}`),
+        fetch(`/api/similarity-clusters?${catalogQuery()}`),
+      ]);
+
+      state.matrix = await matrixRes.json();
+      const alertsPayload = await alertsRes.json();
+      state.alerts = alertsPayload.alerts || [];
+      const clustersPayload = await clustersRes.json();
+      state.clusters = clustersPayload.clusters || [];
+      state.books = state.matrix.books || {};
+
+      const nums = Object.keys(state.books).map(Number).filter(Number.isFinite).sort((a,b) => a-b);
+      state.index = nums;
+      state.indexMap = new Map(nums.map((book, idx) => [book, idx]));
+
+      renderStats(threshold);
+      drawHeatmap();
+      renderAlerts();
+      renderClusters();
+      q('status').textContent = `Loaded ${state.matrix.total_pairs || 0} pairs. Alerts: ${state.alerts.length}.`;
+    }
+
+    function renderStats(threshold) {
+      const pairs = state.matrix?.pairs || [];
+      const books = state.index.length;
+      const avg = pairs.length ? pairs.reduce((sum, row) => sum + Number(row.similarity || 0), 0) / pairs.length : 0;
+      const byBook = {};
+      pairs.forEach(row => {
+        const a = Number(row.book_a || 0), b = Number(row.book_b || 0), s = Number(row.similarity || 1);
+        byBook[a] = byBook[a] || [];
+        byBook[b] = byBook[b] || [];
+        byBook[a].push(s);
+        byBook[b].push(s);
+      });
+
+      let mostUnique = null;
+      let mostGeneric = null;
+      Object.entries(byBook).forEach(([book, vals]) => {
+        const mean = vals.reduce((sum, value) => sum + value, 0) / Math.max(1, vals.length);
+        if (!mostUnique || mean > mostUnique.mean) mostUnique = { book: Number(book), mean };
+        if (!mostGeneric || mean < mostGeneric.mean) mostGeneric = { book: Number(book), mean };
+      });
+
+      q('stats').innerHTML = [
+        ['Books', books],
+        ['Pairs', state.matrix.total_pairs || 0],
+        ['Alerts', state.alerts.length],
+        ['Avg Distance', avg.toFixed(3)],
+      ].map(([label, value]) => `<article class="kpi"><div>${escapeHtml(label)}</div><strong>${escapeHtml(value)}</strong></article>`).join('');
+
+      const selected = q('selectedPair');
+      const uniqueText = mostUnique ? `Most unique: #${mostUnique.book} (${mostUnique.mean.toFixed(3)}).` : 'Most unique: n/a.';
+      const genericText = mostGeneric ? `Most generic: #${mostGeneric.book} (${mostGeneric.mean.toFixed(3)}).` : 'Most generic: n/a.';
+      selected.textContent = `${uniqueText} ${genericText} Alert threshold ${threshold.toFixed(2)}.`;
+    }
+
+    function drawHeatmap() {
+      const canvas = q('heatmap');
+      const ctx = canvas.getContext('2d');
+      const n = state.index.length;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!n) return;
+
+      const size = Math.max(1, Math.floor(canvas.width / n));
+      const pairMap = new Map();
+      (state.matrix?.pairs || []).forEach(row => {
+        const a = Number(row.book_a || 0), b = Number(row.book_b || 0);
+        pairMap.set(`${Math.min(a,b)}-${Math.max(a,b)}`, row);
+      });
+
+      for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+          if (i === j) {
+            ctx.fillStyle = 'rgba(196,163,82,0.30)';
+          } else {
+            const a = state.index[i];
+            const b = state.index[j];
+            const key = `${Math.min(a,b)}-${Math.max(a,b)}`;
+            const row = pairMap.get(key);
+            const similarity = Number(row?.similarity ?? 1);
+            const intensity = Math.max(0, Math.min(1, 1 - similarity));
+            const r = Math.round(205 * intensity + 35 * (1 - intensity));
+            const g = Math.round(165 * intensity + 72 * (1 - intensity));
+            const bCh = Math.round(88 * intensity + 158 * (1 - intensity));
+            ctx.fillStyle = `rgb(${r},${g},${bCh})`;
+          }
+          ctx.fillRect(i * size, j * size, size, size);
+        }
+      }
+
+      canvas.onclick = (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = Math.floor((event.clientX - rect.left) / size);
+        const y = Math.floor((event.clientY - rect.top) / size);
+        if (x < 0 || y < 0 || x >= n || y >= n || x === y) return;
+        const bookA = state.index[x];
+        const bookB = state.index[y];
+        const key = `${Math.min(bookA,bookB)}-${Math.max(bookA,bookB)}`;
+        const row = (state.matrix?.pairs || []).find(item => `${Math.min(Number(item.book_a||0),Number(item.book_b||0))}-${Math.max(Number(item.book_a||0),Number(item.book_b||0))}` === key);
+        if (!row) return;
+        openPairModal(row);
+      };
+    }
+
+    function renderAlerts() {
+      const body = q('alertsBody');
+      if (!state.alerts.length) {
+        body.innerHTML = '<tr><td colspan="6">No active similarity alerts.</td></tr>';
+        return;
+      }
+
+      body.innerHTML = state.alerts
+        .sort((a, b) => Number(a.similarity || 1) - Number(b.similarity || 1))
+        .map(row => {
+          const a = Number(row.book_a || 0);
+          const b = Number(row.book_b || 0);
+          const metaA = state.books[String(a)] || {};
+          const metaB = state.books[String(b)] || {};
+          return `
+            <tr>
+              <td><span class="badge">#${a}</span> ${escapeHtml(metaA.title || '')}</td>
+              <td><span class="badge">#${b}</span> ${escapeHtml(metaB.title || '')}</td>
+              <td>${Number(row.similarity || 0).toFixed(3)}</td>
+              <td>${metaA.image ? `<img class="thumb" src="/${escapeHtml(metaA.image)}" />` : ''}</td>
+              <td>${metaB.image ? `<img class="thumb" src="/${escapeHtml(metaB.image)}" />` : ''}</td>
+              <td>
+                <button data-view="${a}:${b}" class="ghost">View Full</button>
+                <button data-dismiss="${a}:${b}">Dismiss</button>
+                <a href="/iterate?catalog=${encodeURIComponent(state.catalog)}&book=${a}" class="u-inline-link u-mt-6 similarity-regenerate-link">Regenerate A</a>
+              </td>
+            </tr>
+          `;
+        }).join('');
+
+      body.querySelectorAll('[data-view]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const [a, b] = btn.dataset.view.split(':').map(Number);
+          const row = (state.matrix?.pairs || []).find(item => Number(item.book_a) === a && Number(item.book_b) === b)
+            || (state.matrix?.pairs || []).find(item => Number(item.book_a) === b && Number(item.book_b) === a);
+          if (row) openPairModal(row);
+        });
+      });
+
+      body.querySelectorAll('[data-dismiss]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const [a, b] = btn.dataset.dismiss.split(':').map(Number);
+          await fetch(`/api/dismiss-similarity?${catalogQuery()}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ book_a: a, book_b: b, catalog: state.catalog }),
+          });
+          await loadData();
+        });
+      });
+    }
+
+    function renderClusters() {
+      const root = q('clusters');
+      if (!state.clusters.length) {
+        root.innerHTML = '<div class="cluster">No similarity clusters detected.</div>';
+        return;
+      }
+      root.innerHTML = state.clusters.map(cluster => `
+        <article class="cluster">
+          <strong>Books: ${(cluster.books || []).map(n => `#${n}`).join(', ')}</strong>
+          <div class="u-mt-6">${escapeHtml(cluster.theme || 'similar visuals')}</div>
+          <div class="legend u-mt-6">Avg similarity: ${Number(cluster.avg_similarity || 0).toFixed(3)}</div>
+        </article>
+      `).join('');
+    }
+
+    function openPairModal(row) {
+      const a = Number(row.book_a || 0);
+      const b = Number(row.book_b || 0);
+      const metaA = state.books[String(a)] || {};
+      const metaB = state.books[String(b)] || {};
+      q('pairTitle').textContent = `Book #${a} vs Book #${b}`;
+      q('pairMeta').textContent = `Similarity ${Number(row.similarity || 0).toFixed(3)} · ${row.reason || 'No reason supplied.'}`;
+      q('pairGrid').innerHTML = `
+        <div>
+          <div class="u-mb-6">${escapeHtml(metaA.title || `Book ${a}`)}</div>
+          ${metaA.image ? `<img src="/${escapeHtml(metaA.image)}">` : '<div>No preview</div>'}
+        </div>
+        <div>
+          <div class="u-mb-6">${escapeHtml(metaB.title || `Book ${b}`)}</div>
+          ${metaB.image ? `<img src="/${escapeHtml(metaB.image)}">` : '<div>No preview</div>'}
+        </div>
+      `;
+      q('pairModal').style.display = 'flex';
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    init();
+  </script>
+  <script src="/src/static/navbar.js"></script>
+</body>
+</html>

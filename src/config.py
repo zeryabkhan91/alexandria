@@ -127,7 +127,7 @@ MODEL_COST_USD: dict[str, float] = {
 
 VARIANTS_PER_COVER = int(os.getenv("VARIANTS_PER_COVER", "5"))
 MAX_GENERATION_VARIANTS = int(os.getenv("MAX_GENERATION_VARIANTS", "50"))
-BATCH_CONCURRENCY = int(os.getenv("BATCH_CONCURRENCY", "1"))
+BATCH_CONCURRENCY = int(os.getenv("BATCH_CONCURRENCY", "2"))
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "1.0"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 PROVIDER_CIRCUIT_FAILURE_THRESHOLD = int(os.getenv("PROVIDER_CIRCUIT_FAILURE_THRESHOLD", "3"))
@@ -540,6 +540,10 @@ def drive_sync_log_path(*, catalog_id: str | None = None, data_dir: Path | None 
 
 def drive_schedule_path(*, catalog_id: str | None = None, data_dir: Path | None = None) -> Path:
     return catalog_scoped_data_path("drive_schedule.json", catalog_id=catalog_id, data_dir=data_dir)
+
+
+def batch_runs_path(*, catalog_id: str | None = None, data_dir: Path | None = None) -> Path:
+    return catalog_scoped_data_path("batch_runs.json", catalog_id=catalog_id, data_dir=data_dir)
 
 
 def exports_manifest_path(*, catalog_id: str | None = None, data_dir: Path | None = None) -> Path:

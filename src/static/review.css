@@ -1,0 +1,89 @@
+/* Page-level styles for /review */
+main {
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+/* Extracted from review.html */
+    :root {
+      --bg: #1a2744;
+      --panel: #243454;
+      --panel-2: #1f2f50;
+      --text: #f5e6c8;
+      --ink: #1b2233;
+      --gold: #c4a352;
+      --muted: #bfae8f;
+      --line: rgba(245,230,200,.2);
+      --auto: #4d87f7;
+      --manual: #3ebf75;
+      --focus: rgba(196,163,82,.35);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: radial-gradient(circle at top left, #243454, #1a2744 42%, #15233e); color: var(--text); }
+    .nav { display: flex; gap: 12px; align-items: center; padding: 14px 18px; background: rgba(20, 31, 55, 0.95); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20; }
+    .nav a { color: var(--gold); text-decoration: none; font-weight: 700; padding: 8px 10px; border-radius: 8px; }
+    .nav a.active { background: rgba(196, 163, 82, 0.18); }
+    .nav .catalog { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .nav .catalog select { border-radius: 8px; border: 1px solid var(--line); background: #1b2a49; color: var(--text); padding: 6px 8px; }
+    header { padding: 14px 18px; border-bottom: 1px solid var(--line); position: sticky; top: 52px; background: rgba(21, 34, 61, 0.96); z-index: 15; }
+    h1 { margin: 0 0 10px; color: var(--gold); }
+    .controls { display: grid; grid-template-columns: 1.2fr 1fr 1fr 1fr auto auto; gap: 8px; }
+    .controls input, .controls select, .controls button { border-radius: 8px; border: 1px solid var(--line); background: #1b2a49; color: var(--text); padding: 8px; }
+    .controls button { border: none; background: var(--gold); color: #162441; font-weight: 700; cursor: pointer; }
+    .toolbar { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .toolbar button { border: none; border-radius: 8px; padding: 8px 10px; font-weight: 700; cursor: pointer; }
+    .btn-auto { background: #89b4ff; color: #102d5b; }
+    .btn-export { background: #9fd9ad; color: #0f4e26; }
+    .btn-archive { background: #ffc88d; color: #5b2d02; }
+    .btn-catalog { background: #d8b15a; color: #10213d; }
+    .progress { margin-top: 10px; }
+    .bar { width: 100%; height: 10px; border-radius: 99px; background: rgba(245,230,200,.2); overflow: hidden; }
+    .fill { height: 100%; width: 0%; background: linear-gradient(90deg, #e5c375, #ffd98f); }
+    .status { font-size: 12px; color: var(--muted); margin-top: 5px; }
+    main { padding: 14px; display: grid; gap: 12px; }
+    .book { background: rgba(249,244,232,0.97); color: var(--ink); border-radius: 14px; padding: 12px; border: 2px solid transparent; }
+    .book.focused { border-color: var(--focus); box-shadow: 0 0 0 2px rgba(196,163,82,.2) inset; }
+    .meta { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 10px; color: #4f5566; font-size: 13px; }
+    .chip { border-radius: 999px; background: #e8ddc3; padding: 3px 8px; font-size: 11px; }
+    .chip.warn { background: #ffe4ad; color: #5d3a00; cursor: pointer; }
+    .images { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+    .thumb { background: #fff; border-radius: 10px; padding: 8px; border: 2px solid transparent; }
+    .thumb.selected-auto { border-color: var(--auto); }
+    .thumb.selected-manual { border-color: var(--manual); }
+    .thumb img { width: 100%; border-radius: 8px; cursor: zoom-in; }
+    .label { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 12px; gap: 6px; }
+    .score { background: #f2e7cb; color: #55420f; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; }
+    #zoomModal, #helpModal, #similarityModal { position: fixed; inset: 0; background: rgba(0,0,0,.82); display: none; align-items: center; justify-content: center; z-index: 30; }
+    #zoomModal img { max-width: 94vw; max-height: 94vh; border-radius: 8px; }
+    .help-card { width: min(700px, 95vw); background: #111a2f; border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+    .help-grid { display: grid; grid-template-columns: 140px 1fr; gap: 8px; margin-top: 10px; }
+    .help-grid div { border-bottom: 1px solid rgba(245,230,200,.08); padding: 4px 0; }
+    .sim-ab-wrap { position: relative; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+    .sim-ab-wrap img { width: 100%; display: block; border-radius: 8px; }
+    .sim-ab-top { position: absolute; inset: 0; overflow: hidden; }
+    @media (max-width: 1050px) {
+      .controls { grid-template-columns: 1fr 1fr; }
+    }
+
+.review-modal-close {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #b8c6df;
+  color: #16284a;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.review-similarity-card {
+  width: min(980px, 96vw);
+}
+
+.review-book-title {
+  margin: 0;
+}
+
+.review-download-link {
+  color: #f5e6c8;
+  text-decoration: underline;
+}

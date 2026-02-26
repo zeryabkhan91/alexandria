@@ -11,6 +11,7 @@
   <nav class="nav">
     <a class="active" href="/iterate">Iterate</a>
     <a href="/review">Review</a>
+    <a href="/batch">Batch</a>
     <a href="/history">History</a>
     <a href="/dashboard">Dashboard</a>
     <a href="/similarity">Similarity</a>
@@ -250,6 +251,7 @@
       modelSelection: new Set(),
       modelSelectionTouched: false,
       heartbeat: null,
+      jobEventSource: null,
       modelCosts: {},
       modelCompare: [],
       recommendedModel: '',
@@ -991,6 +993,7 @@
     }
 
     async function generate() {
+      closeJobEventStream();
       const book = currentBook();
       const models = selectedModels();
       const selectedCover = app.coverSource === 'drive' ? selectedDriveCover() : null;
@@ -1131,7 +1134,10 @@
           maxAttempts: Number(job.max_attempts || 0),
           lastUpdateAt: String(job.updated_at || new Date().toISOString()),
         });
-        await pollGenerationJob(job.id, Number(book.number));
+        const streamed = await streamGenerationJob(job.id, Number(book.number), String(data.event_url || ''));
+        if (!streamed) {
+          await pollGenerationJob(job.id, Number(book.number));
+        }
       } catch (err) {
         const message = String((err && err.message) || err || 'request error');
         qs('resultStatus').textContent = 'Generation request failed before queueing.';
@@ -1145,6 +1151,160 @@
         btnStopLoading(genBtn, false);
         showToast(`Generation request failed: ${message}`, 'error');
       }
+    }
+
+    function closeJobEventStream() {
+      if (app.jobEventSource) {
+        try { app.jobEventSource.close(); } catch (_) {}
+        app.jobEventSource = null;
+      }
+    }
+
+    function _eventPayload(event) {
+      try {
+        return JSON.parse(String(event && event.data ? event.data : '{}'));
+      } catch (_) {
+        return {};
+      }
+    }
+
+    async function _refreshJobOnce(jobId) {
+      const { res, data } = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}?${catalogQuery()}`, { timeoutMs: 15000 });
+      if (!res.ok || !data.ok) return null;
+      return data.job || null;
+    }
+
+    async function streamGenerationJob(jobId, bookNumber, eventUrl) {
+      const genBtn = qs('generateBtn');
+      const baseUrl = (eventUrl && String(eventUrl).trim()) || `/api/events/job/${encodeURIComponent(jobId)}`;
+      const url = baseUrl.includes('?') ? `${baseUrl}&${catalogQuery()}` : `${baseUrl}?${catalogQuery()}`;
+      let source = null;
+      try {
+        source = new EventSource(url);
+      } catch (_) {
+        return false;
+      }
+      app.jobEventSource = source;
+      let terminal = false;
+      let sawEvent = false;
+
+      return await new Promise((resolve) => {
+        const settle = (handled) => {
+          closeJobEventStream();
+          resolve(Boolean(handled));
+        };
+
+        const timeoutHandle = setTimeout(() => {
+          if (!sawEvent && !terminal) settle(false);
+        }, 8000);
+
+        source.addEventListener('ready', (evt) => {
+          sawEvent = true;
+          const payload = _eventPayload(evt);
+          updateHeartbeat({
+            jobId: String(payload.job_id || jobId),
+            status: 'running',
+            stage: 'queue',
+            message: `Connected to live stream for job ${jobId}.`,
+            lastUpdateAt: String(payload.timestamp || new Date().toISOString()),
+          });
+        });
+
+        source.addEventListener('job_progress', (evt) => {
+          sawEvent = true;
+          const payload = _eventPayload(evt);
+          const progress = Math.round(Number(payload.progress || 0) * 100);
+          const status = String(payload.status || 'running');
+          const message = `Job ${jobId}: ${status}${Number.isFinite(progress) ? ` (${progress}%)` : ''}`;
+          qs('resultStatus').textContent = message;
+          updateHeartbeat({
+            jobId: String(payload.job_id || jobId),
+            status,
+            stage: inferJobStage({ status }),
+            message,
+            attempts: Number(payload.attempt_number || 0),
+            lastUpdateAt: String(payload.timestamp || new Date().toISOString()),
+          });
+        });
+
+        source.addEventListener('variant_complete', (evt) => {
+          sawEvent = true;
+          const payload = _eventPayload(evt);
+          const variant = Number(payload.variant || 0);
+          const model = String(payload.model || 'model');
+          const quality = Number(payload.quality_score || 0);
+          const message = `Variant ${variant} complete · ${model}${quality > 0 ? ` · quality ${quality.toFixed(2)}` : ''}`;
+          qs('resultStatus').textContent = message;
+          updateHeartbeat({
+            jobId: String(payload.job_id || jobId),
+            status: 'running',
+            stage: 'generate',
+            message,
+            lastUpdateAt: new Date().toISOString(),
+          });
+        });
+
+        source.addEventListener('job_completed', async (evt) => {
+          terminal = true;
+          clearTimeout(timeoutHandle);
+          const payload = _eventPayload(evt);
+          const result = payload.result || {};
+          if (Array.isArray(result.results) && result.results.length) {
+            app.latestResults = result.results || [];
+            renderResults();
+            await loadHistory(bookNumber);
+            qs('resultStatus').textContent = result.message || 'Generation complete.';
+          } else {
+            const latest = await _refreshJobOnce(jobId);
+            if (latest && latest.result && Array.isArray(latest.result.results)) {
+              app.latestResults = latest.result.results || [];
+              renderResults();
+              await loadHistory(bookNumber);
+              qs('resultStatus').textContent = String((latest.result && latest.result.message) || 'Generation complete.');
+            } else {
+              qs('resultStatus').textContent = 'Generation complete.';
+            }
+          }
+          updateHeartbeat({
+            jobId: String(payload.job_id || jobId),
+            status: 'completed',
+            stage: 'complete',
+            message: String((result && result.message) || 'Generation complete.'),
+            lastUpdateAt: String(payload.timestamp || new Date().toISOString()),
+            error: '',
+          });
+          btnStopLoading(genBtn, true);
+          showToast('Generation complete!', 'success');
+          settle(true);
+        });
+
+        source.addEventListener('job_failed', (evt) => {
+          const payload = _eventPayload(evt);
+          const status = String(payload.status || 'failed');
+          if (!['failed', 'cancelled'].includes(status)) return;
+          terminal = true;
+          clearTimeout(timeoutHandle);
+          const message = String(payload.error || 'Generation job failed.');
+          qs('resultStatus').textContent = `Job ${status}: ${message}`;
+          updateHeartbeat({
+            jobId: String(payload.job_id || jobId),
+            status,
+            stage: inferJobStage({ status }),
+            message: `Job ${status}: ${message}`,
+            lastUpdateAt: String(payload.timestamp || new Date().toISOString()),
+            error: message,
+          });
+          btnStopLoading(genBtn, false);
+          showToast(`Generation ${status}: ${message}`, 'error');
+          settle(true);
+        });
+
+        source.onerror = () => {
+          clearTimeout(timeoutHandle);
+          if (terminal) return settle(true);
+          settle(false);
+        };
+      });
     }
 
     async function pollGenerationJob(jobId, bookNumber) {
@@ -1920,6 +2080,7 @@
           else if (selectedCompareItems().length >= 2 && selectedCompareItems().length <= 4) openCompareModal();
         }
       });
+      window.addEventListener('beforeunload', closeJobEventStream);
     }
 
     init();

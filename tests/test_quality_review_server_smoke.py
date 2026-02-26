@@ -1,0 +1,544 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import signal
+import socket
+import subprocess
+import sys
+import time
+import json
+import uuid
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+from PIL import Image
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _fetch_status(base_url: str, path: str) -> int:
+    with urlopen(f"{base_url}{path}", timeout=10) as response:
+        return int(getattr(response, "status", 200))
+
+
+def _request_json(base_url: str, path: str, *, method: str = "GET", payload: dict | None = None) -> tuple[int, dict]:
+    data = json.dumps(payload or {}).encode("utf-8") if method in {"POST", "PUT", "PATCH"} else None
+    request = Request(
+        f"{base_url}{path}",
+        method=method,
+        data=data,
+        headers={"Content-Type": "application/json"} if data is not None else {},
+    )
+    with urlopen(request, timeout=15) as response:
+        body = response.read().decode("utf-8")
+        parsed = json.loads(body) if body else {}
+        return int(getattr(response, "status", 200)), parsed
+
+
+def _wait_for_health(base_url: str, timeout_seconds: float = 45.0) -> None:
+    deadline = time.time() + timeout_seconds
+    last_error = ""
+    while time.time() < deadline:
+        try:
+            status = _fetch_status(base_url, "/api/health")
+            if status == 200:
+                return
+        except URLError as exc:
+            last_error = str(exc)
+        except Exception as exc:  # pragma: no cover - defensive
+            last_error = str(exc)
+        time.sleep(0.25)
+    raise RuntimeError(f"quality_review server did not become ready: {last_error}")
+
+
+def _start_server(*, extra_args: list[str] | None = None) -> tuple[subprocess.Popen[bytes], str]:
+    port = _free_port()
+    base_url = f"http://127.0.0.1:{port}"
+    env = os.environ.copy()
+    args = [sys.executable, "scripts/quality_review.py", "--serve", "--port", str(port)]
+    if extra_args:
+        args.extend(extra_args)
+    process = subprocess.Popen(
+        args,
+        cwd=PROJECT_ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
+    try:
+        _wait_for_health(base_url)
+    except Exception:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        raise
+    return process, base_url
+
+
+def _stop_server(process: subprocess.Popen[bytes]) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=8)
+
+
+def test_quality_review_server_primary_routes_smoke():
+    process, base_url = _start_server()
+    try:
+        pages = [
+            "/",
+            "/iterate",
+            "/review",
+            "/review?mode=speed",
+            "/batch",
+            "/catalogs",
+            "/jobs",
+            "/compare",
+            "/history",
+            "/dashboard",
+            "/similarity",
+            "/mockups",
+        ]
+        apis = [
+            "/api/version",
+            "/api/health",
+            "/api/metrics",
+            "/api/providers/runtime",
+            "/api/workers",
+            "/api/jobs",
+            "/api/jobs/active",
+            "/api/batch-generate",
+            "/api/analytics/costs",
+            "/api/analytics/costs/by-book",
+            "/api/analytics/costs/by-model",
+            "/api/analytics/costs/by-operation",
+            "/api/analytics/costs/timeline",
+            "/api/analytics/budget",
+            "/api/analytics/quality/trends",
+            "/api/analytics/quality/by-model",
+            "/api/analytics/quality/by-prompt-pattern",
+            "/api/analytics/quality/distribution",
+            "/api/analytics/models/compare",
+            "/api/analytics/cost-projection?books=10&variants=2&models=openrouter/google/gemini-2.5-flash-image",
+            "/api/analytics/prompts/effectiveness",
+            "/api/analytics/quality/breakdown",
+            "/api/analytics/completion",
+            "/api/analytics/audit",
+            "/api/analytics/reports",
+            "/api/analytics/reports/schedule",
+            "/api/drive/status",
+            "/api/drive/sync-status",
+            "/api/drive/input-covers",
+            "/api/drive/schedule",
+            "/api/exports",
+            "/api/export/status",
+            "/api/delivery/status",
+            "/api/delivery/tracking",
+            "/api/archive/stats",
+            "/api/storage/usage",
+            "/api/review-data",
+            "/api/iterate-data",
+            "/api/dashboard-data",
+            "/api/books",
+            "/api/compare",
+            "/api/similarity-matrix",
+            "/api/similarity/recompute/status",
+            "/api/review-queue",
+            "/api/mockup-status",
+            "/api/cache/stats",
+            "/api/catalogs",
+            "/api/docs",
+        ]
+
+        for path in pages + apis:
+            assert _fetch_status(base_url, path) == 200, path
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_drive_and_provider_connectivity_payloads():
+    process, base_url = _start_server()
+    try:
+        status_drive, drive = _request_json(base_url, "/api/drive/status")
+        assert status_drive == 200
+        assert drive.get("ok") is True
+        for key in ("connected", "mode", "source_folder_id", "output_folder_id", "error"):
+            assert key in drive
+
+        status_conn_1, connectivity_1 = _request_json(base_url, "/api/providers/connectivity")
+        status_conn_2, connectivity_2 = _request_json(base_url, "/api/providers/connectivity")
+        status_conn_force, connectivity_force = _request_json(base_url, "/api/providers/connectivity?force=1")
+
+        assert status_conn_1 == 200
+        assert status_conn_2 == 200
+        assert status_conn_force == 200
+        assert connectivity_1.get("ok") is True
+        assert isinstance(connectivity_1.get("providers"), dict)
+        assert connectivity_2.get("cached") is True
+        assert connectivity_force.get("cached") is False
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_serves_favicon():
+    process, base_url = _start_server()
+    try:
+        assert _fetch_status(base_url, "/favicon.ico") == 200
+        assert _fetch_status(base_url, "/static/shared.css") == 200
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_sigint_shutdown_is_clean():
+    port = _free_port()
+    base_url = f"http://127.0.0.1:{port}"
+    process = subprocess.Popen(
+        [sys.executable, "scripts/quality_review.py", "--serve", "--port", str(port)],
+        cwd=PROJECT_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=os.environ.copy(),
+    )
+    try:
+        _wait_for_health(base_url)
+        process.send_signal(signal.SIGINT)
+        stdout, stderr = process.communicate(timeout=12)
+    except Exception:
+        process.kill()
+        process.wait(timeout=8)
+        raise
+
+    combined = (stdout + stderr).decode("utf-8", errors="replace")
+    assert process.returncode == 0
+    assert "Traceback (most recent call last)" not in combined
+
+
+def test_quality_review_server_external_worker_mode_starts():
+    process, base_url = _start_server(extra_args=["--worker-mode", "external"])
+    try:
+        assert _fetch_status(base_url, "/api/workers") == 200
+        assert _fetch_status(base_url, "/api/health") == 200
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_sets_security_headers():
+    process, base_url = _start_server()
+    try:
+        with urlopen(f"{base_url}/api/health", timeout=10) as response:
+            headers = response.headers
+            assert headers.get("X-Content-Type-Options") == "nosniff"
+            assert headers.get("X-Frame-Options") == "DENY"
+            assert headers.get("X-XSS-Protection") == "1; mode=block"
+            assert headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
+            csp = headers.get("Content-Security-Policy", "")
+            assert "default-src 'self'" in csp
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_rejects_idempotency_payload_conflict():
+    process, base_url = _start_server()
+    try:
+        idem = f"idem-{uuid.uuid4().hex}"
+        status, body = _request_json(
+            base_url,
+            "/api/jobs",
+            method="POST",
+            payload={
+                "book": 1,
+                "models": ["openai/gpt-image-1"],
+                "variants": 1,
+                "prompt": "Prompt one",
+                "provider": "all",
+                "dry_run": True,
+                "max_attempts": 1,
+                "idempotency_key": idem,
+            },
+        )
+        assert status == 200
+        assert body.get("ok") is True
+
+        conflict_request = Request(
+            f"{base_url}/api/jobs",
+            method="POST",
+            data=json.dumps(
+                {
+                    "book": 1,
+                    "models": ["openrouter/flux-2-pro"],
+                    "variants": 1,
+                    "prompt": "Prompt two",
+                    "provider": "all",
+                    "dry_run": True,
+                    "max_attempts": 1,
+                    "idempotency_key": idem,
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urlopen(conflict_request, timeout=15)
+            assert False, "Expected HTTP 409 conflict"
+        except HTTPError as exc:
+            assert int(exc.code) == 409
+            payload = json.loads(exc.read().decode("utf-8"))
+            assert payload.get("code") == "IDEMPOTENCY_CONFLICT"
+            assert payload.get("details", {}).get("idempotency_key") == idem
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_provider_runtime_reset_endpoint():
+    process, base_url = _start_server()
+    try:
+        status, payload = _request_json(base_url, "/api/providers/reset", method="POST", payload={"provider": "all"})
+        assert status == 200
+        assert payload.get("ok") is True
+        assert payload.get("provider") == "all"
+        providers = payload.get("providers")
+        assert isinstance(providers, dict)
+        assert "openai" in providers
+
+        bad_request = Request(
+            f"{base_url}/api/providers/reset",
+            method="POST",
+            data=json.dumps({"provider": "not-a-provider"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urlopen(bad_request, timeout=15)
+            raise AssertionError("Expected invalid provider reset to fail")
+        except HTTPError as exc:
+            assert exc.code == 400
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_request_id_headers_are_consistent():
+    process, base_url = _start_server()
+    try:
+        supplied = f"req-{uuid.uuid4().hex}"
+        request = Request(f"{base_url}/api/health", headers={"X-Request-Id": supplied})
+        with urlopen(request, timeout=10) as response:
+            assert response.headers.get("X-Request-Id") == supplied
+
+        with urlopen(f"{base_url}/api/health", timeout=10) as response:
+            generated = str(response.headers.get("X-Request-Id", "")).strip()
+            assert generated
+
+        with urlopen(f"{base_url}/static/shared.css", timeout=10) as response:
+            generated_file = str(response.headers.get("X-Request-Id", "")).strip()
+            assert generated_file
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_error_payload_contains_request_id():
+    process, base_url = _start_server()
+    try:
+        supplied = f"req-{uuid.uuid4().hex}"
+        request = Request(f"{base_url}/api/does-not-exist", headers={"X-Request-Id": supplied})
+        try:
+            urlopen(request, timeout=10)
+            assert False, "Expected 404 response"
+        except HTTPError as exc:
+            assert int(exc.code) == 404
+            body = json.loads(exc.read().decode("utf-8"))
+            assert body.get("request_id") == supplied
+            assert str(exc.headers.get("X-Request-Id", "")).strip() == supplied
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_budget_and_reports_endpoints_work():
+    process, base_url = _start_server()
+    try:
+        status, budget = _request_json(
+            base_url,
+            "/api/analytics/budget?catalog=classics",
+            method="POST",
+            payload={"catalog": "classics", "limit_usd": 25, "warning_threshold": 0.8, "hard_stop": True},
+        )
+        assert status == 200
+        assert budget.get("ok") is True
+        assert "budget" in budget
+
+        status, report = _request_json(
+            base_url,
+            "/api/analytics/export-report?catalog=classics",
+            method="POST",
+            payload={"catalog": "classics", "period": "30d"},
+        )
+        assert status == 200
+        assert report.get("ok") is True
+        assert report.get("report_id")
+
+        status, listing = _request_json(base_url, "/api/analytics/reports?catalog=classics")
+        assert status == 200
+        assert listing.get("ok") is True
+        assert isinstance(listing.get("reports"), list)
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_drive_schedule_crud():
+    process, base_url = _start_server()
+    try:
+        status, created = _request_json(
+            base_url,
+            "/api/drive/schedule?catalog=classics",
+            method="POST",
+            payload={"enabled": True, "interval_hours": 4, "mode": "push", "catalogs": ["classics"]},
+        )
+        assert status == 200
+        assert created.get("ok") is True
+        assert created.get("schedule", {}).get("enabled") is True
+
+        status, fetched = _request_json(base_url, "/api/drive/schedule?catalog=classics")
+        assert status == 200
+        assert fetched.get("ok") is True
+        assert fetched.get("schedule", {}).get("mode") == "push"
+
+        status, deleted = _request_json(base_url, "/api/drive/schedule?catalog=classics", method="DELETE")
+        assert status == 200
+        assert deleted.get("ok") is True
+        assert deleted.get("schedule", {}).get("enabled") is False
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_blocks_report_path_traversal():
+    process, base_url = _start_server()
+    try:
+        bad_url = f"{base_url}/api/analytics/reports/../../etc/passwd"
+        try:
+            urlopen(bad_url, timeout=10)
+            assert False, "expected HTTPError"
+        except HTTPError as exc:
+            assert exc.code == 400
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_blocks_direct_repo_file_access():
+    process, base_url = _start_server()
+    try:
+        blocked_paths = ["/.env", "/config/book_catalog.json", "/scripts/quality_review.py"]
+        for path in blocked_paths:
+            try:
+                urlopen(f"{base_url}{path}", timeout=10)
+                assert False, f"expected HTTPError for {path}"
+            except HTTPError as exc:
+                assert exc.code in {403, 404}, path
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_blocks_static_path_traversal_attempts():
+    process, base_url = _start_server()
+    try:
+        blocked_paths = [
+            "/src/static/../../.env",
+            "/src/static/%2e%2e/%2e%2e/.env",
+            "/src/static/..%2F..%2F.env",
+        ]
+        for path in blocked_paths:
+            try:
+                urlopen(f"{base_url}{path}", timeout=10)
+                assert False, f"expected HTTPError for {path}"
+            except HTTPError as exc:
+                assert exc.code in {400, 403, 404}, path
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_batch_generation_endpoints_work():
+    process, base_url = _start_server()
+    try:
+        status, iterate_payload = _request_json(base_url, "/api/iterate-data?catalog=classics&limit=25&offset=0")
+        assert status == 200
+        books = [int(row.get("number", 0)) for row in iterate_payload.get("books", []) if int(row.get("number", 0)) > 0][:2]
+        assert books
+        models = [str(item) for item in iterate_payload.get("models", []) if str(item).strip()][:1]
+        assert models
+
+        status, create_payload = _request_json(
+            base_url,
+            "/api/batch-generate?catalog=classics",
+            method="POST",
+            payload={
+                "catalog": "classics",
+                "books": books,
+                "models": models,
+                "variants": 1,
+                "promptSource": "template",
+                "budgetUsd": 1.0,
+                "dry_run": True,
+            },
+        )
+        assert status == 200
+        assert create_payload.get("ok") is True
+        batch_id = str(create_payload.get("batchId", "")).strip()
+        assert batch_id
+
+        status, snapshot = _request_json(base_url, f"/api/batch-generate/{batch_id}/status?catalog=classics&limit=10&offset=0")
+        assert status == 200
+        assert snapshot.get("ok") is True
+        assert snapshot.get("batchId") == batch_id
+        assert isinstance(snapshot.get("books"), list)
+        assert isinstance(snapshot.get("pagination"), dict)
+
+        for action in ("pause", "resume", "cancel"):
+            status, action_payload = _request_json(
+                base_url,
+                f"/api/batch-generate/{batch_id}/{action}?catalog=classics",
+                method="POST",
+                payload={"reason": f"test-{action}"},
+            )
+            assert status == 200
+            assert action_payload.get("ok") is True
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_thumbnail_endpoint_rejects_non_image_and_disallowed_paths():
+    token = uuid.uuid4().hex
+    disallowed = PROJECT_ROOT / "config" / f"thumb-{token}.txt"
+    disallowed.write_text("not-an-image", encoding="utf-8")
+
+    tmp_allowed = PROJECT_ROOT / "tmp" / f"thumb-{token}.jpg"
+    tmp_allowed.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", (40, 40), color=(120, 80, 40))
+    image.save(tmp_allowed, format="JPEG")
+
+    process, base_url = _start_server()
+    try:
+        # Existing but disallowed source root -> 400 (invalid source policy)
+        try:
+            urlopen(f"{base_url}/api/thumbnail?path={disallowed.relative_to(PROJECT_ROOT)}&size=small", timeout=10)
+            assert False, "expected HTTPError for disallowed thumbnail source"
+        except HTTPError as exc:
+            assert exc.code == 400
+
+        # Allowed source root and valid image -> 200
+        assert _fetch_status(base_url, f"/api/thumbnail?path={tmp_allowed.relative_to(PROJECT_ROOT)}&size=small") == 200
+    finally:
+        _stop_server(process)
+        for target in (disallowed, tmp_allowed):
+            try:
+                if target.exists():
+                    target.unlink()
+            except OSError:
+                pass

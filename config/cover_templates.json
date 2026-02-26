@@ -1,0 +1,28 @@
+{
+  "templates": [
+    {
+      "id": "navy_gold_medallion",
+      "description": "Navy background, gold ornaments, circular medallion center-right",
+      "region_type": "circle",
+      "compositing": "raster_first",
+      "defaults": {
+        "center_x": 2864,
+        "center_y": 1620,
+        "radius": 500,
+        "frame_padding": 95
+      }
+    },
+    {
+      "id": "full_bleed",
+      "description": "Full-bleed illustration behind text",
+      "region_type": "rectangle",
+      "compositing": "layer_under_text",
+      "defaults": {
+        "x": 2080,
+        "y": 500,
+        "width": 1550,
+        "height": 1850
+      }
+    }
+  ]
+}

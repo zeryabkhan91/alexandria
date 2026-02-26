@@ -1,0 +1,1651 @@
+from __future__ import annotations
+
+from dataclasses import replace
+import json
+import queue
+import sqlite3
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from scripts import quality_review as qr
+from src import config
+
+
+def test_cache_key_stable_and_sorted():
+    key = qr._cache_key("/api/x", {"b": ["2", "1"], "a": ["z"]}, "classics")
+    assert key == "classics:/api/x?a=z&b=1,2"
+
+
+def test_generation_idempotency_key_stable_model_order():
+    key_a = qr._generation_idempotency_key(
+        catalog_id="classics",
+        book=7,
+        models=["openai/a", "openrouter/b"],
+        variants=5,
+        prompt="Prompt",
+        provider="all",
+    )
+    key_b = qr._generation_idempotency_key(
+        catalog_id="classics",
+        book=7,
+        models=["openrouter/b", "openai/a"],
+        variants=5,
+        prompt="Prompt",
+        provider="all",
+    )
+    key_c = qr._generation_idempotency_key(
+        catalog_id="classics",
+        book=7,
+        models=["openrouter/b", "openai/a", "openai/a", " "],
+        variants=5,
+        prompt="  Prompt   ",
+        provider="ALL",
+    )
+    assert key_a == key_b
+    assert key_b == key_c
+
+
+def test_generation_idempotency_key_changes_with_cover_source_and_selected_cover():
+    base = qr._generation_idempotency_key(
+        catalog_id="classics",
+        book=7,
+        models=["openai/a"],
+        variants=5,
+        prompt="Prompt",
+        provider="all",
+    )
+    drive = qr._generation_idempotency_key(
+        catalog_id="classics",
+        book=7,
+        models=["openai/a"],
+        variants=5,
+        prompt="Prompt",
+        provider="all",
+        cover_source="drive",
+    )
+    drive_selected = qr._generation_idempotency_key(
+        catalog_id="classics",
+        book=7,
+        models=["openai/a"],
+        variants=5,
+        prompt="Prompt",
+        provider="all",
+        cover_source="drive",
+        selected_cover_id="file-123",
+    )
+    assert base != drive
+    assert drive != drive_selected
+
+
+def test_validate_drive_cover_request_uses_hint_and_rejects_mismatch(monkeypatch: pytest.MonkeyPatch):
+    runtime = SimpleNamespace(
+        gdrive_source_folder_id="source-folder",
+        gdrive_input_folder_id="",
+        gdrive_output_folder_id="output-folder",
+        google_credentials_path="",
+        config_dir=Path("/tmp"),
+        book_catalog_path=Path("/tmp/book_catalog.json"),
+    )
+    called = {"list": 0}
+
+    def _fake_list_input_covers(**_kwargs):  # type: ignore[no-untyped-def]
+        called["list"] += 1
+        return {"covers": []}
+
+    monkeypatch.setattr(qr.drive_manager, "list_input_covers", _fake_list_input_covers)
+    ok, error = qr._validate_drive_cover_request(
+        runtime=runtime,
+        book=1,
+        cover_source="drive",
+        selected_cover_id="cover-x",
+        selected_cover={"id": "cover-x", "book_number": 2},
+        selected_cover_book_number=2,
+        drive_folder_id="",
+        input_folder_id="",
+        credentials_path_token="",
+    )
+    assert ok is False
+    assert "maps to book 2" in error
+    assert called["list"] == 0
+
+
+def test_validate_drive_cover_request_lookup_success_and_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    runtime = SimpleNamespace(
+        gdrive_source_folder_id="source-folder",
+        gdrive_input_folder_id="",
+        gdrive_output_folder_id="output-folder",
+        google_credentials_path="",
+        config_dir=tmp_path,
+        book_catalog_path=tmp_path / "book_catalog.json",
+    )
+    runtime.book_catalog_path.write_text("[]", encoding="utf-8")
+
+    monkeypatch.setattr(
+        qr.drive_manager,
+        "list_input_covers",
+        lambda **_kwargs: {
+            "covers": [
+                {"id": "cover-1", "book_number": 1},
+                {"id": "cover-2", "book_number": 2},
+            ]
+        },
+    )
+
+    ok_good, error_good = qr._validate_drive_cover_request(
+        runtime=runtime,
+        book=1,
+        cover_source="drive",
+        selected_cover_id="cover-1",
+        selected_cover=None,
+        selected_cover_book_number=0,
+        drive_folder_id="",
+        input_folder_id="",
+        credentials_path_token="",
+    )
+    assert ok_good is True
+    assert error_good == ""
+
+    ok_missing, error_missing = qr._validate_drive_cover_request(
+        runtime=runtime,
+        book=1,
+        cover_source="drive",
+        selected_cover_id="does-not-exist",
+        selected_cover=None,
+        selected_cover_book_number=0,
+        drive_folder_id="",
+        input_folder_id="",
+        credentials_path_token="",
+    )
+    assert ok_missing is False
+    assert "not found" in error_missing.lower()
+
+
+def test_validate_drive_cover_request_does_not_trust_spoofed_book_hint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    runtime = SimpleNamespace(
+        gdrive_source_folder_id="source-folder",
+        gdrive_input_folder_id="",
+        gdrive_output_folder_id="output-folder",
+        google_credentials_path="",
+        config_dir=tmp_path,
+        book_catalog_path=tmp_path / "book_catalog.json",
+    )
+    runtime.book_catalog_path.write_text("[]", encoding="utf-8")
+
+    monkeypatch.setattr(
+        qr.drive_manager,
+        "list_input_covers",
+        lambda **_kwargs: {
+            "covers": [
+                {"id": "cover-1", "book_number": 2},
+            ]
+        },
+    )
+
+    ok, error = qr._validate_drive_cover_request(
+        runtime=runtime,
+        book=1,
+        cover_source="drive",
+        selected_cover_id="cover-1",
+        selected_cover=None,
+        selected_cover_book_number=1,  # spoofed hint
+        drive_folder_id="",
+        input_folder_id="",
+        credentials_path_token="",
+    )
+    assert ok is False
+    assert "maps to book 2" in error
+
+
+def test_job_worker_enqueue_normalizes_payload():
+    captured: dict[str, object] = {}
+
+    class _Store:
+        def create_or_get_job(self, **kwargs):  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            job = SimpleNamespace(id="job-1", status="queued", job_type="generate_cover")
+            return job, True
+
+    pool = qr.JobWorkerPool(_Store(), worker_count=1, heartbeat_path=None)
+    _job, created = pool.enqueue_generate_job(
+        catalog_id="classics",
+        book=7,
+        models=["openrouter/b", "openai/a", "openai/a", " "],
+        variants=5,
+        prompt="  Prompt   with   spacing ",
+        provider="ALL",
+        idempotency_key="idem-x",
+        dry_run=False,
+    )
+    assert created is True
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["models"] == ["openai/a", "openrouter/b"]
+    assert payload["prompt"] == "Prompt with spacing"
+    assert payload["provider"] == "all"
+    assert payload["cover_source"] == "catalog"
+    assert payload["selected_cover_id"] == ""
+
+
+def test_job_worker_enqueue_propagates_idempotency_conflict():
+    class _Store:
+        def create_or_get_job(self, **kwargs):  # type: ignore[no-untyped-def]
+            raise qr.job_store.IdempotencyConflictError(
+                idempotency_key="idem-x",
+                existing_job_id="job-1",
+                existing_status="queued",
+                conflict_fields=["payload"],
+            )
+
+    pool = qr.JobWorkerPool(_Store(), worker_count=1, heartbeat_path=None)
+    with pytest.raises(qr.job_store.IdempotencyConflictError):
+        pool.enqueue_generate_job(
+            catalog_id="classics",
+            book=7,
+            models=["openai/a"],
+            variants=5,
+            prompt="Prompt",
+            provider="all",
+            idempotency_key="idem-x",
+        )
+
+
+def test_max_generation_variants_uses_runtime_value(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg = replace(cfg, max_generation_variants=37)
+    assert qr._max_generation_variants(cfg) == 37
+
+
+def test_parse_variant():
+    assert qr._parse_variant("variant_5_model") == 5
+    assert qr._parse_variant("foo") == 0
+
+
+def test_parse_variant_number():
+    assert qr._parse_variant_number("Variant-4") == 4
+    assert qr._parse_variant_number("bad") is None
+
+
+def test_winner_map_to_plain():
+    payload = {
+        "1": {"winner": 3, "score": 0.8},
+        "2": 4,
+        "x": {"winner": 2},
+        "3": {"winner": 0},
+    }
+    assert qr._winner_map_to_plain(payload) == {"1": 3, "2": 4}
+
+
+def test_catalog_id_from_winner_path():
+    assert qr._catalog_id_from_winner_path(Path("/tmp/winner_selections.json")) == "classics"
+    assert qr._catalog_id_from_winner_path(Path("/tmp/winner_selections_testcat.json")) == "testcat"
+
+
+def test_normalize_worker_mode():
+    assert qr._normalize_worker_mode("inline") == "inline"
+    assert qr._normalize_worker_mode("external") == "external"
+    assert qr._normalize_worker_mode("disabled") == "disabled"
+    assert qr._normalize_worker_mode("weird") == "inline"
+
+
+def test_sync_generation_allowed_by_mode_and_flag(monkeypatch):
+    monkeypatch.setattr(qr, "ALLOW_SYNC_GENERATION", False)
+    monkeypatch.setattr(qr, "ACTIVE_WORKER_MODE", "external")
+    assert qr._sync_generation_allowed() is False
+    monkeypatch.setattr(qr, "ACTIVE_WORKER_MODE", "inline")
+    assert qr._sync_generation_allowed() is True
+    monkeypatch.setattr(qr, "ACTIVE_WORKER_MODE", "disabled")
+    monkeypatch.setattr(qr, "ALLOW_SYNC_GENERATION", True)
+    assert qr._sync_generation_allowed() is True
+
+
+def test_job_stale_recovery_config_uses_runtime_values():
+    runtime = SimpleNamespace(
+        job_stale_recovery_seconds=321,
+        job_stale_recovery_retry_delay_seconds=4.5,
+    )
+    stale, retry = qr._job_stale_recovery_config(runtime)
+    assert stale == 321
+    assert retry == 4.5
+
+    fallback = SimpleNamespace(
+        job_stale_recovery_seconds="bad",
+        job_stale_recovery_retry_delay_seconds="bad",
+    )
+    stale_fallback, retry_fallback = qr._job_stale_recovery_config(fallback)
+    assert stale_fallback >= 30
+    assert retry_fallback >= 1.0
+
+
+def test_slo_monitor_interval_seconds_uses_runtime_values():
+    runtime = SimpleNamespace(slo_monitor_interval_seconds=123)
+    assert qr._slo_monitor_interval_seconds(runtime) == 123
+
+    fallback = SimpleNamespace(slo_monitor_interval_seconds="bad")
+    assert qr._slo_monitor_interval_seconds(fallback) == qr.SLO_MONITOR_INTERVAL_SECONDS
+
+
+def test_slo_background_monitor_run_once_scans_catalogs(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        qr,
+        "_build_slo_evaluation",
+        lambda *, runtime: (
+            {},
+            {},
+            {
+                "api_success_rate_7d": {"status": "met"},
+                "job_completion_without_manual_intervention": {"status": "at_risk"},
+                "same_stage_retry_rate": {"status": "breached"},
+            },
+        ),
+    )
+
+    class _AlertManager:
+        def __init__(self, catalog_id: str) -> None:
+            self.catalog_id = catalog_id
+
+        def maybe_alert(self, *, runtime, slo_evaluation):  # type: ignore[no-untyped-def]
+            return {
+                "checked": True,
+                "sent": runtime.catalog_id == "demo",
+                "reason": "ok",
+                "severity": "breached" if runtime.catalog_id == "demo" else "at_risk",
+            }
+
+    monkeypatch.setattr(qr, "_slo_alert_manager_for_runtime", lambda runtime: _AlertManager(runtime.catalog_id))
+    monitor = qr.SLOBackgroundMonitor(
+        interval_seconds=30,
+        runtime_loader=lambda catalog_id: SimpleNamespace(catalog_id=str(catalog_id or "classics")),
+        catalog_ids_loader=lambda: ["classics", "demo", "classics"],
+    )
+    snapshot = monitor.run_once()
+    assert snapshot["catalogs_checked"] == 2
+    assert snapshot["alerts_sent"] == 1
+    assert [row["catalog_id"] for row in snapshot["catalog_summaries"]] == ["classics", "demo"]
+
+
+def test_slo_background_monitor_start_and_stop(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        qr,
+        "_build_slo_evaluation",
+        lambda *, runtime: (
+            {},
+            {},
+            {
+                "api_success_rate_7d": {"status": "met"},
+                "job_completion_without_manual_intervention": {"status": "met"},
+                "same_stage_retry_rate": {"status": "met"},
+            },
+        ),
+    )
+
+    class _AlertManager:
+        def maybe_alert(self, *, runtime, slo_evaluation):  # type: ignore[no-untyped-def]
+            return {"checked": True, "sent": False, "reason": "no_alert_conditions"}
+
+    monkeypatch.setattr(qr, "_slo_alert_manager_for_runtime", lambda _runtime: _AlertManager())
+    monitor = qr.SLOBackgroundMonitor(
+        interval_seconds=1,
+        runtime_loader=lambda catalog_id: SimpleNamespace(catalog_id=str(catalog_id or "classics")),
+        catalog_ids_loader=lambda: ["classics"],
+    )
+    assert monitor.start() is True
+    deadline = time.time() + 1.5
+    while time.time() < deadline:
+        if monitor.snapshot().get("last_run_at"):
+            break
+        time.sleep(0.05)
+    monitor.stop()
+    snapshot = monitor.snapshot()
+    assert snapshot["last_run_at"]
+    assert snapshot["running"] is False
+
+
+def test_slo_background_monitor_snapshot_defaults_and_global_setter():
+    qr._set_slo_background_monitor(None)
+    disabled = qr._slo_background_monitor_snapshot()
+    assert disabled["enabled"] is False
+    assert disabled["running"] is False
+
+    class _StubMonitor:
+        def snapshot(self) -> dict[str, Any]:
+            return {
+                "enabled": True,
+                "running": True,
+                "interval_seconds": 5,
+                "last_run_at": "2026-02-23T00:00:00+00:00",
+                "last_duration_ms": 1.0,
+                "catalogs_checked": 1,
+                "alerts_sent": 0,
+                "errors": [],
+                "catalog_summaries": [],
+            }
+
+    qr._set_slo_background_monitor(_StubMonitor())  # type: ignore[arg-type]
+    active = qr._slo_background_monitor_snapshot()
+    assert active["enabled"] is True
+    assert active["running"] is True
+    qr._set_slo_background_monitor(None)
+
+
+def test_worker_runtime_status_from_heartbeat(tmp_path: Path, monkeypatch):
+    heartbeat_path = tmp_path / "worker_heartbeat.json"
+    heartbeat_path.write_text(
+        json.dumps(
+            {
+                "service": "external",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "worker_count": 2,
+                "workers": {
+                    "worker-1": {"state": "running", "updated_at": datetime.now(timezone.utc).isoformat()},
+                    "worker-2": {"state": "idle", "updated_at": datetime.now(timezone.utc).isoformat()},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(qr, "JOB_WORKER_HEARTBEAT_PATH", heartbeat_path)
+    monkeypatch.setattr(qr, "JOB_WORKER_HEARTBEAT_STALE_SECONDS", 300)
+    monkeypatch.setattr(qr, "ACTIVE_WORKER_MODE", "external")
+    status = qr._worker_runtime_status()
+    assert status["mode"] == "external"
+    assert status["alive"] is True
+    assert status["running_workers"] == 1
+    assert status["idle_workers"] == 1
+
+
+def test_run_worker_service_recovers_stale_jobs_and_stops_pool(monkeypatch, tmp_path: Path):
+    events: dict[str, Any] = {}
+    heartbeat_path = tmp_path / "hb.json"
+    runtime = SimpleNamespace(
+        catalog_id="demo",
+        job_stale_recovery_seconds=222,
+        job_stale_recovery_retry_delay_seconds=3.5,
+        slo_monitor_interval_seconds=0,
+        job_worker_heartbeat_path=heartbeat_path,
+        job_workers=4,
+    )
+    monkeypatch.setattr(qr.config, "get_config", lambda _catalog_id=None: runtime)
+    monkeypatch.setattr(qr, "_bootstrap_state_store_for_runtime", lambda cfg: events.setdefault("boot_catalog", cfg.catalog_id))
+
+    def _fake_recover(**kwargs):  # type: ignore[no-untyped-def]
+        events["recover_kwargs"] = dict(kwargs)
+        return 2
+
+    monkeypatch.setattr(qr.job_db_store, "recover_stale_running_jobs", _fake_recover)
+
+    class _FakePool:
+        def __init__(self, _store, *, worker_count, heartbeat_path, service_name):
+            events["pool_init"] = {
+                "worker_count": int(worker_count),
+                "heartbeat_path": heartbeat_path,
+                "service_name": service_name,
+            }
+            self.worker_count = int(worker_count)
+
+        def start(self):  # type: ignore[no-untyped-def]
+            events["started"] = True
+
+        def stop(self):  # type: ignore[no-untyped-def]
+            events["stopped"] = True
+
+    monkeypatch.setattr(qr, "JobWorkerPool", _FakePool)
+    monkeypatch.setattr(qr.time, "sleep", lambda _seconds: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    qr.run_worker_service(catalog_id="demo", worker_count=None)
+
+    assert events["boot_catalog"] == "demo"
+    assert events["recover_kwargs"]["stale_after_seconds"] == 222
+    assert events["recover_kwargs"]["retry_delay_seconds"] == 3.5
+    assert events["pool_init"]["worker_count"] == 4
+    assert events["pool_init"]["heartbeat_path"] == heartbeat_path
+    assert events["pool_init"]["service_name"] == "external"
+    assert events["started"] is True
+    assert events["stopped"] is True
+
+
+def test_run_worker_service_starts_and_stops_slo_monitor(monkeypatch, tmp_path: Path):
+    events: dict[str, Any] = {}
+    runtime = SimpleNamespace(
+        catalog_id="demo",
+        job_stale_recovery_seconds=120,
+        job_stale_recovery_retry_delay_seconds=2.0,
+        slo_monitor_interval_seconds=5,
+        job_worker_heartbeat_path=tmp_path / "hb.json",
+        job_workers=1,
+    )
+    monkeypatch.setattr(qr.config, "get_config", lambda _catalog_id=None: runtime)
+    monkeypatch.setattr(qr, "_bootstrap_state_store_for_runtime", lambda _cfg: None)
+    monkeypatch.setattr(qr.job_db_store, "recover_stale_running_jobs", lambda **_kwargs: 0)
+
+    class _FakePool:
+        def __init__(self, _store, *, worker_count, heartbeat_path, service_name):
+            self.worker_count = int(worker_count)
+            events["pool_init"] = {
+                "worker_count": int(worker_count),
+                "heartbeat_path": heartbeat_path,
+                "service_name": service_name,
+            }
+
+        def start(self):  # type: ignore[no-untyped-def]
+            events["pool_started"] = True
+
+        def stop(self):  # type: ignore[no-untyped-def]
+            events["pool_stopped"] = True
+
+    class _FakeMonitor:
+        def __init__(self, *, interval_seconds, runtime_loader, catalog_ids_loader):
+            events["monitor_init"] = {
+                "interval_seconds": int(interval_seconds),
+                "catalog_ids": catalog_ids_loader(),
+                "runtime_catalog": runtime_loader(None).catalog_id,
+            }
+
+        def start(self):  # type: ignore[no-untyped-def]
+            events["monitor_started"] = True
+            return True
+
+        def stop(self):  # type: ignore[no-untyped-def]
+            events["monitor_stopped"] = True
+
+        def snapshot(self):  # type: ignore[no-untyped-def]
+            return {"enabled": True, "running": True}
+
+    monkeypatch.setattr(qr, "JobWorkerPool", _FakePool)
+    monkeypatch.setattr(qr, "SLOBackgroundMonitor", _FakeMonitor)
+    monkeypatch.setattr(qr.time, "sleep", lambda _seconds: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    qr.run_worker_service(catalog_id="demo", worker_count=None)
+
+    assert events["pool_started"] is True
+    assert events["pool_stopped"] is True
+    assert events["monitor_init"]["interval_seconds"] == 5
+    assert events["monitor_init"]["catalog_ids"] == ["demo"]
+    assert events["monitor_init"]["runtime_catalog"] == "demo"
+    assert events["monitor_started"] is True
+    assert events["monitor_stopped"] is True
+
+
+def test_parse_books_ranges_and_values():
+    assert qr._parse_books("1,3-5") == [1, 3, 4, 5]
+    assert qr._parse_books(None) is None
+
+
+def test_safe_int_and_float():
+    assert qr._safe_int("7", 0) == 7
+    assert qr._safe_int("bad", 9) == 9
+    assert qr._safe_float("0.75", 0.0) == 0.75
+    assert qr._safe_float("bad", 1.5) == 1.5
+    assert qr._safe_float("nan", 1.5) == 1.5
+    assert qr._safe_float("inf", 2.5) == 2.5
+
+
+def test_safe_iso_datetime():
+    dt = qr._safe_iso_datetime("2026-02-21T00:00:00+00:00")
+    assert dt is not None
+    assert dt.tzinfo is not None
+    assert qr._safe_iso_datetime("not-date") is None
+
+
+def test_normalize_model_name():
+    assert qr._normalize_model_name("openai__gpt-image-1") == "openai/gpt-image-1"
+    assert qr._normalize_model_name("openai/gpt-image-1") == "openai/gpt-image-1"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("1,2,3", [1, 2, 3]),
+        ("2-4", [2, 3, 4]),
+        ("5-3", [3, 4, 5]),
+        ("1,3-4,6", [1, 3, 4, 6]),
+        ("", None),
+    ],
+)
+def test_parse_books_variants(raw, expected):
+    assert qr._parse_books(raw if raw else None) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "default", "expected"),
+    [
+        ("10", 0, 10),
+        (None, 5, 5),
+        ("bad", -1, -1),
+        (3.6, 0, 3),
+        ("7", 9, 7),
+    ],
+)
+def test_safe_int_matrix(value, default, expected):
+    assert qr._safe_int(value, default) == expected
+
+
+def test_load_json_type_guard(tmp_path: Path):
+    path = tmp_path / "x.json"
+    path.write_text('{"a":1}', encoding="utf-8")
+    assert qr._load_json(path, {"x": 1}) == {"a": 1}
+    assert qr._load_json(path, []) == []
+
+
+def test_load_quality_lookup_uses_best_score(tmp_path: Path):
+    path = tmp_path / "quality.json"
+    payload = {
+        "scores": [
+            {"book_number": 1, "variant_id": 2, "overall_score": 0.6},
+            {"book_number": 1, "variant_id": 2, "overall_score": 0.9},
+            {"book_number": 2, "variant_id": 1, "overall_score": 0.7},
+        ]
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    lookup = qr._load_quality_lookup(path)
+    assert lookup[(1, 2)] == 0.9
+    assert lookup[(2, 1)] == 0.7
+
+
+def test_append_generation_history(tmp_path: Path):
+    path = tmp_path / "history.json"
+    items = [{"book_number": 1, "timestamp": datetime.now(timezone.utc).isoformat()}]
+    qr._append_generation_history(path, items)
+    payload = qr._load_json(path, {"items": []})
+    assert isinstance(payload, dict)
+    assert len(payload["items"]) == 1
+    built = qr._build_generation_history_payload(path, [{"book_number": 2}])
+    assert "items" in built
+
+
+def test_build_generation_history_payload_dedupes_job_rows(tmp_path: Path):
+    path = tmp_path / "history.json"
+    existing = {
+        "items": [
+            {
+                "job_id": "job-1",
+                "book_number": 1,
+                "variant": 1,
+                "model": "openrouter/flux-2-pro",
+                "provider": "openrouter",
+                "dry_run": False,
+                "timestamp": "2026-02-23T00:00:00+00:00",
+            }
+        ]
+    }
+    path.write_text(json.dumps(existing), encoding="utf-8")
+    output = qr._build_generation_history_payload(
+        path,
+        [
+            {
+                "job_id": "job-1",
+                "book_number": 1,
+                "variant": 1,
+                "model": "openrouter/flux-2-pro",
+                "provider": "openrouter",
+                "dry_run": False,
+                "timestamp": "2026-02-23T00:00:01+00:00",
+            },
+            {
+                "job_id": "job-2",
+                "book_number": 1,
+                "variant": 1,
+                "model": "openrouter/flux-2-pro",
+                "provider": "openrouter",
+                "dry_run": False,
+                "timestamp": "2026-02-23T00:00:02+00:00",
+            },
+        ],
+    )
+    assert len(output["items"]) == 2
+    assert sorted(item.get("job_id") for item in output["items"]) == ["job-1", "job-2"]
+
+
+def test_filter_generation_records_all_filters():
+    rows = [
+        {
+            "book_number": 1,
+            "model": "openai/gpt-image-1",
+            "provider": "openai",
+            "status": "success",
+            "timestamp": "2026-02-20T00:00:00+00:00",
+            "quality_score": 0.8,
+        },
+        {
+            "book_number": 2,
+            "model": "openrouter/flux",
+            "provider": "openrouter",
+            "status": "error",
+            "timestamp": "2026-02-19T00:00:00+00:00",
+            "quality_score": 0.2,
+        },
+    ]
+    filtered = qr._filter_generation_records(
+        rows,
+        filters={
+            "book": ["1"],
+            "model": ["gpt-image"],
+            "provider": ["openai"],
+            "status": ["success"],
+            "date_from": ["2026-02-19"],
+            "date_to": ["2026-02-21"],
+            "quality_min": ["0.7"],
+            "quality_max": ["1.0"],
+        },
+    )
+    assert len(filtered) == 1
+    assert filtered[0]["book_number"] == 1
+
+
+def test_collect_selected_variant_files(tmp_path: Path):
+    output_dir = tmp_path / "Output Covers"
+    folder = output_dir / "Book One" / "Variant-2"
+    folder.mkdir(parents=True, exist_ok=True)
+    for ext in ("jpg", "pdf", "ai"):
+        (folder / f"cover.{ext}").write_bytes(b"x")
+
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps([{"number": 1, "folder_name": "Book One"}]), encoding="utf-8")
+
+    files = qr._collect_selected_variant_files(
+        output_dir=output_dir,
+        selections={"1": {"winner": 2}},
+        catalog_path=catalog,
+    )
+    assert sorted(files) == sorted(["Book One/Variant-2/cover.ai", "Book One/Variant-2/cover.jpg", "Book One/Variant-2/cover.pdf"])
+
+
+def _build_runtime_for_startup_checks(tmp_path: Path) -> config.Config:
+    base = tmp_path / "runtime"
+    input_dir = base / "Input Covers"
+    output_dir = base / "Output Covers"
+    tmp_dir = base / "tmp"
+    data_dir = base / "data"
+    config_dir = base / "config"
+
+    for path in (input_dir, output_dir, tmp_dir, data_dir, config_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    catalog_path = config_dir / "book_catalog.json"
+    prompts_path = config_dir / "book_prompts.json"
+    library_path = config_dir / "prompt_library.json"
+
+    catalog_path.write_text(json.dumps([{"number": 1, "title": "Book", "author": "Author"}]), encoding="utf-8")
+    prompts_path.write_text(json.dumps({"1": {"variants": []}}), encoding="utf-8")
+    library_path.write_text(json.dumps({"prompts": [], "style_anchors": []}), encoding="utf-8")
+
+    cfg = config.get_config()
+    cfg = replace(
+        cfg,
+        input_dir=input_dir,
+        output_dir=output_dir,
+        tmp_dir=tmp_dir,
+        data_dir=data_dir,
+        config_dir=config_dir,
+        book_catalog_path=catalog_path,
+        prompts_path=prompts_path,
+        prompt_library_path=library_path,
+        openrouter_api_key="",
+        openai_api_key="",
+        google_api_key="",
+        fal_api_key="",
+        replicate_api_token="",
+    )
+    return cfg
+
+
+def test_run_startup_checks_healthy_with_valid_runtime_layout(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    report = qr._run_startup_checks(cfg)
+    assert report["healthy"] is True
+    assert isinstance(report["checks"], list)
+    assert any(row["name"] == "book_catalog_json" and row["ok"] for row in report["checks"])
+    assert any(row["name"] == "prompts_json" and row["ok"] for row in report["checks"])
+
+
+def test_run_startup_checks_reports_missing_prompts_as_issue(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg = replace(cfg, prompts_path=tmp_path / "missing" / "book_prompts.json")
+    report = qr._run_startup_checks(cfg)
+    assert report["healthy"] is False
+    assert any("prompts" in issue for issue in report["issues"])
+
+
+def test_health_payload_includes_startup_checks(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    original_startup = dict(qr.STARTUP_HEALTH)
+    try:
+        qr.STARTUP_HEALTH = {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "healthy": False,
+            "issues": ["prompts missing"],
+            "warnings": [],
+            "checks": [],
+        }
+        payload = qr._health_payload(runtime=cfg)
+        assert payload["healthy"] is False
+        assert "startup_checks" in payload
+        assert payload["startup_checks"]["issues"] == ["prompts missing"]
+    finally:
+        qr.STARTUP_HEALTH = original_startup
+
+
+def test_health_payload_degrades_when_external_worker_offline_with_pending_jobs(tmp_path: Path, monkeypatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    original_startup = dict(qr.STARTUP_HEALTH)
+    try:
+        qr.STARTUP_HEALTH = {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "healthy": True,
+            "issues": [],
+            "warnings": [],
+            "checks": [],
+        }
+        monkeypatch.setattr(
+            qr,
+            "_worker_runtime_status",
+            lambda **_kwargs: {
+                "mode": "external",
+                "alive": False,
+                "updated_at": "",
+                "worker_count": 0,
+            },
+        )
+        monkeypatch.setattr(qr.job_db_store, "status_counts", lambda: {"queued": 2, "retrying": 1, "running": 0, "completed": 0, "failed": 0, "cancelled": 0})
+        monkeypatch.setattr(
+            qr.job_db_store,
+            "slo_summary",
+            lambda **_kwargs: {
+                "window_days": 7,
+                "completion_without_manual_intervention": 1.0,
+                "same_stage_retry_rate": 0.0,
+                "terminal_total": 0,
+                "retry_jobs": 0,
+            },
+        )
+        payload = qr._health_payload(runtime=cfg)
+        assert payload["healthy"] is False
+        assert payload["status"] == "degraded"
+        assert payload["runtime_issues"]
+    finally:
+        qr.STARTUP_HEALTH = original_startup
+
+
+def test_provider_runtime_payload_includes_defaults_and_rate_windows(monkeypatch: pytest.MonkeyPatch):
+    runtime = SimpleNamespace(
+        provider_keys={
+            "openrouter": "",
+            "fal": "",
+            "replicate": "",
+            "openai": "key-openai",
+            "google": "",
+        }
+    )
+    monkeypatch.setattr(
+        qr.image_generator,
+        "get_provider_runtime_stats",
+        lambda: {
+            "openai": {
+                "requests_today": 4,
+                "errors_today": 1,
+                "state": "open",
+                "consecutive_failures": 2,
+                "cooldown_remaining_seconds": 12.5,
+                "open_events": 3,
+                "probe_in_flight": False,
+                "rate_limit_window_second": 1,
+                "rate_limit_window_minute": 7,
+                "last_error": "temporary outage",
+                "opened_until_utc": "2026-02-23T00:00:00+00:00",
+            },
+            "custom-provider": {
+                "requests_today": 2,
+                "errors_today": 0,
+                "state": "closed",
+                "rate_limit_window_second": 0,
+                "rate_limit_window_minute": 1,
+            },
+        },
+    )
+
+    payload = qr._provider_runtime_payload(runtime=runtime)
+    assert payload["openai"]["status"] == "active"
+    assert payload["openai"]["requests_today"] == 4
+    assert payload["openai"]["circuit_state"] == "open"
+    assert payload["openai"]["rate_limit_window_minute"] == 7
+    assert payload["openrouter"]["status"] == "inactive"
+    assert payload["openrouter"]["requests_today"] == 0
+    assert "replicate" not in payload
+    assert payload["custom-provider"]["status"] == "inactive"
+    assert payload["custom-provider"]["reason"] == "no API key"
+
+
+def test_provider_connectivity_payload_caches_for_five_minutes(monkeypatch: pytest.MonkeyPatch):
+    runtime = SimpleNamespace(
+        catalog_id="classics",
+        provider_keys={"openrouter": "k1", "fal": "k2", "openai": "k3", "google": "k4"},
+        all_models=[
+            "openrouter/google/gemini-2.5-flash-image",
+            "fal/fal-ai/flux-2/klein/4b",
+            "openai/gpt-image-1-mini",
+            "google/gemini-2.5-flash-image",
+        ],
+        resolve_model_provider=lambda model: str(model).split("/", 1)[0],  # type: ignore[return-value]
+    )
+    monkeypatch.setattr(qr, "_provider_connectivity_cache", {})
+    monkeypatch.setattr(qr, "PROVIDER_CONNECTIVITY_CACHE_SECONDS", 300)
+
+    calls = {"count": 0}
+
+    def _fake_test_api_keys(*, runtime, providers):  # type: ignore[no-untyped-def]
+        calls["count"] += 1
+        return {
+            "providers": [
+                {"provider": "openrouter", "status": "KEY_VALID", "detail": "ok"},
+                {"provider": "fal", "status": "KEY_INVALID", "detail": "Balance exhausted"},
+                {"provider": "openai", "status": "KEY_VALID", "detail": "ok"},
+                {"provider": "google", "status": "KEY_VALID", "detail": "ok"},
+            ]
+        }
+
+    monkeypatch.setattr(qr.pipeline_runner, "test_api_keys", _fake_test_api_keys)
+
+    first = qr._provider_connectivity_payload(runtime=runtime, force=False)
+    second = qr._provider_connectivity_payload(runtime=runtime, force=False)
+    forced = qr._provider_connectivity_payload(runtime=runtime, force=True)
+
+    assert first["ok"] is True
+    assert first["cached"] is False
+    assert second["cached"] is True
+    assert forced["cached"] is False
+    assert first["providers"]["fal"]["status"] == "error"
+    assert "Balance exhausted" in str(first["providers"]["fal"]["error"])
+    assert calls["count"] == 2
+
+
+def test_job_event_broker_publish_subscribe_roundtrip():
+    broker = qr.JobEventBroker(max_queue_size=2)
+    token, client_queue = broker.subscribe()
+    delivered = broker.publish("job_started", {"job_id": "job-1", "catalog_id": "classics", "progress": 0.0})
+    assert delivered == 1
+    event = client_queue.get(timeout=1.0)
+    assert event["event"] == "job_started"
+    assert event["job_id"] == "job-1"
+    broker.unsubscribe(token)
+    assert broker.publish("job_completed", {"job_id": "job-1"}) == 0
+
+
+def test_job_event_broker_drops_oldest_when_queue_full():
+    broker = qr.JobEventBroker(max_queue_size=10)
+    token, client_queue = broker.subscribe()
+    for idx in range(11):
+        broker.publish("job_progress", {"job_id": "job-1", "progress": idx / 10.0})
+    first = client_queue.get(timeout=1.0)
+    assert first["event"] == "job_progress"
+    assert first["progress"] == 0.1
+    latest = first
+    while True:
+        try:
+            latest = client_queue.get_nowait()
+        except queue.Empty:
+            break
+    assert latest["progress"] == 1.0
+    broker.unsubscribe(token)
+
+
+def test_write_iterate_data_includes_variant_limits_and_catalog_scoped_files(tmp_path: Path, monkeypatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg = replace(cfg, catalog_id="demo", variants_per_cover=7, max_generation_variants=33)
+
+    demo_prompts = {
+        "books": [
+            {
+                "number": 1,
+                "title": "Demo Book",
+                "author": "Author",
+                "variants": [{"prompt": "Base prompt"}],
+            }
+        ]
+    }
+    cfg.prompts_path.write_text(json.dumps(demo_prompts), encoding="utf-8")
+
+    enriched_path = config.enriched_catalog_path(catalog_id=cfg.catalog_id, config_dir=cfg.config_dir)
+    enriched_path.write_text(json.dumps([{"number": 1, "enrichment": {"genre": ["Novel"]}}]), encoding="utf-8")
+
+    intelligent_path = config.intelligent_prompts_path(catalog_id=cfg.catalog_id, config_dir=cfg.config_dir)
+    intelligent_path.write_text(
+        json.dumps({"books": [{"number": 1, "variants": [{"variant_id": 1, "prompt": "Smart prompt"}]}]}),
+        encoding="utf-8",
+    )
+
+    iterate_path = config.iterate_data_path(catalog_id=cfg.catalog_id, data_dir=cfg.data_dir)
+    output = qr.write_iterate_data(runtime=cfg, prompts_path=cfg.prompts_path)
+    assert output == iterate_path
+
+    payload = json.loads(iterate_path.read_text(encoding="utf-8"))
+    assert payload["default_variants_per_model"] == 7
+    assert payload["max_generation_variants"] == 33
+    assert payload["catalog"] == "demo"
+    assert payload["books"][0]["enrichment"]["genre"] == ["Novel"]
+    assert payload["books"][0]["smart_prompts"][0]["prompt"] == "Smart prompt"
+
+
+def test_quality_review_runtime_path_helpers_are_catalog_scoped(tmp_path: Path):
+    runtime = SimpleNamespace(catalog_id="demo", data_dir=tmp_path)
+    assert qr._review_data_path_for_runtime(runtime) == (tmp_path / "review_data_demo.json")
+    assert qr._iterate_data_path_for_runtime(runtime) == (tmp_path / "iterate_data_demo.json")
+    assert qr._compare_data_path_for_runtime(runtime) == (tmp_path / "compare_data_demo.json")
+    assert qr._selection_path_for_runtime(runtime) == (tmp_path / "variant_selections_demo.json")
+    assert qr._review_stats_path_for_runtime(runtime) == (tmp_path / "review_stats_demo.json")
+    assert qr._similarity_hashes_path_for_runtime(runtime) == (tmp_path / "cover_hashes_demo.json")
+    assert qr._similarity_matrix_path_for_runtime(runtime) == (tmp_path / "similarity_matrix_demo.json")
+    assert qr._similarity_clusters_path_for_runtime(runtime) == (tmp_path / "similarity_clusters_demo.json")
+    assert qr._similarity_dismissed_path_for_runtime(runtime) == (tmp_path / "similarity_dismissed_demo.json")
+    assert qr._llm_usage_path_for_runtime(runtime) == (tmp_path / "llm_usage_demo.json")
+    assert qr._cost_ledger_path_for_runtime(runtime) == (tmp_path / "cost_ledger_demo.json")
+    assert qr._budget_config_path_for_runtime(runtime) == (tmp_path / "budget_config_demo.json")
+    assert qr._delivery_config_path_for_runtime(runtime) == (tmp_path / "delivery_pipeline_demo.json")
+    assert qr._delivery_tracking_path_for_runtime(runtime) == (tmp_path / "delivery_tracking_demo.json")
+    assert qr._report_schedules_path_for_runtime(runtime) == (tmp_path / "report_schedules_demo.json")
+    assert qr._slo_metrics_path_for_runtime(runtime) == (tmp_path / "slo_metrics_demo.json")
+    assert qr._slo_alert_state_path_for_runtime(runtime) == (tmp_path / "slo_alert_state_demo.json")
+    assert qr._review_sessions_dir_for_runtime(runtime) == (qr.REVIEW_SESSIONS_DIR / "demo")
+
+    classics = SimpleNamespace(catalog_id="classics", data_dir=tmp_path)
+    assert qr._review_sessions_dir_for_runtime(classics) == qr.REVIEW_SESSIONS_DIR
+
+
+def test_ensure_winner_payload_writes_catalog_scoped_plain_selection_map(tmp_path: Path):
+    winner_path = tmp_path / "winner_selections_demo.json"
+    books = [
+        {
+            "number": 1,
+            "variants": [
+                {"variant": 1, "quality_score": 0.9},
+                {"variant": 2, "quality_score": 0.2},
+            ],
+        }
+    ]
+    payload = qr._ensure_winner_payload(books, path=winner_path)
+    assert payload["selections"]["1"]["winner"] == 1
+    plain_path = tmp_path / "variant_selections_demo.json"
+    plain = json.loads(plain_path.read_text(encoding="utf-8"))
+    assert plain == {"1": 1}
+
+
+def test_save_winner_payload_writes_payload_and_plain_map_in_single_staged_write(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    winner_path = tmp_path / "winner_selections_demo.json"
+    selections = {"1": {"winner": 2, "score": 0.88}, "2": {"winner": 1, "score": 0.73}}
+    calls: list[list[Path]] = []
+
+    def _fake_upsert(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return None
+
+    def _fake_atomic_many(items):  # type: ignore[no-untyped-def]
+        calls.append([path for path, _ in items])
+        for path, payload in items:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(qr.state_db_store, "upsert_winner_selections", _fake_upsert)
+    monkeypatch.setattr(qr.safe_json, "atomic_write_many_json", _fake_atomic_many)
+
+    payload = qr._save_winner_payload(winner_path, selections, total_books=2)
+
+    assert payload["total_books"] == 2
+    assert len(calls) == 1
+    assert calls[0] == [winner_path, (tmp_path / "variant_selections_demo.json")]
+    plain = json.loads((tmp_path / "variant_selections_demo.json").read_text(encoding="utf-8"))
+    assert plain == {"1": 2, "2": 1}
+
+
+def test_record_audit_event_uses_runtime_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+
+    def _fake_append_event(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+
+    monkeypatch.setattr(qr.audit_log, "append_event", _fake_append_event)
+    qr._record_audit_event(
+        action="test_action",
+        impact="cost",
+        actor="tester",
+        source_ip="127.0.0.1",
+        endpoint="/api/test",
+        catalog_id="demo",
+        status="ok",
+        details={"note": "demo"},
+        data_dir=tmp_path,
+    )
+
+    assert captured.get("catalog_id") == "demo"
+    assert captured.get("path") == (tmp_path / "audit_log_demo.json")
+
+
+def test_api_docs_include_catalog_routes():
+    html = qr._build_api_docs_html()
+    assert "/catalogs" in html
+    assert "/api/generate-catalog" in html
+    assert "/api/jobs/{id}" in html
+    assert "/api/metrics" in html
+    assert "/api/providers/runtime" in html
+    assert "/api/workers" in html
+    assert "/api/audit-log" in html
+    assert "/api/export/amazon" in html
+    assert "/api/delivery/status" in html
+    assert "/api/storage/usage" in html
+    assert "/api/providers/reset" in html
+
+
+def test_execute_generation_payload_validates_book():
+    with pytest.raises(ValueError):
+        qr._execute_generation_payload({"catalog": "classics", "book": 0})
+
+
+def test_execute_generation_payload_validates_variants_cap(tmp_path: Path, monkeypatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg = replace(cfg, max_generation_variants=12)
+    monkeypatch.setattr(qr.config, "get_config", lambda *_args, **_kwargs: cfg)
+    with pytest.raises(ValueError, match="between 1 and 12"):
+        qr._execute_generation_payload(
+            {
+                "catalog": "classics",
+                "book": 1,
+                "models": ["openrouter/flux-2-pro"],
+                "variants": 13,
+                "prompt": "test",
+                "provider": "all",
+                "dry_run": True,
+            }
+        )
+
+
+def test_execute_generation_payload_drive_source_downloads_cover_before_composite(tmp_path: Path, monkeypatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg = replace(cfg, openai_api_key="test-key", gdrive_source_folder_id="source-folder-id")
+    monkeypatch.setattr(qr.config, "get_config", lambda *_args, **_kwargs: cfg)
+    monkeypatch.setattr(qr.image_generator, "generate_single_book", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        qr,
+        "_serialize_generation_results",
+        lambda **_kwargs: [
+            {
+                "book_number": 1,
+                "variant": 1,
+                "model": "openai/gpt-image-1-mini",
+                "prompt": "test",
+                "image_path": "tmp/generated/1/variant_1.png",
+                "composited_path": None,
+                "success": True,
+                "error": "",
+                "generation_time": 0.1,
+                "cost": 0.01,
+                "dry_run": False,
+                "similarity_warning": False,
+                "similar_to_book": None,
+                "distinctiveness_score": 0.9,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "fit_overlay_path": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(qr.cover_compositor, "composite_all_variants", lambda **_kwargs: None)
+    monkeypatch.setattr(qr, "_record_generation_costs", lambda **_kwargs: None)
+    monkeypatch.setattr(qr.state_db_store, "append_generation_records", lambda **_kwargs: 1)
+    monkeypatch.setattr(qr.state_db_store, "export_history_payload", lambda **_kwargs: {"items": []})
+    monkeypatch.setattr(qr, "_build_review_data_payload", lambda *_args, **_kwargs: {"books": []})
+    monkeypatch.setattr(qr, "_invalidate_cache", lambda *_args, **_kwargs: 1)
+
+    captured: dict[str, Any] = {}
+
+    def _fake_ensure_local_input_cover(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return {"ok": True, "downloaded": True, "source": "google_drive"}
+
+    monkeypatch.setattr(qr.drive_manager, "ensure_local_input_cover", _fake_ensure_local_input_cover)
+
+    result = qr._execute_generation_payload(
+        {
+            "catalog": "classics",
+            "book": 1,
+            "models": ["openai/gpt-image-1-mini"],
+            "variants": 1,
+            "prompt": "test prompt",
+            "provider": "all",
+            "cover_source": "drive",
+            "selected_cover_id": "drive-file-123",
+            "dry_run": False,
+        }
+    )
+
+    assert result["dry_run"] is False
+    assert captured["book_number"] == 1
+    assert captured["drive_folder_id"] == "source-folder-id"
+    assert captured["selected_cover_id"] == "drive-file-123"
+
+
+def test_execute_generation_payload_calls_global_cache_invalidator(tmp_path: Path, monkeypatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    monkeypatch.setattr(qr.config, "get_config", lambda *_args, **_kwargs: cfg)
+    monkeypatch.setattr(qr.image_generator, "generate_single_book", lambda **_kwargs: [])
+    monkeypatch.setattr(qr, "_serialize_generation_results", lambda **_kwargs: [])
+
+    invalidated: list[tuple[str, ...]] = []
+
+    def _fake_invalidate(*prefixes, **kwargs):  # type: ignore[no-untyped-def]
+        invalidated.append(tuple(prefixes))
+        return 1
+
+    monkeypatch.setattr(qr, "_invalidate_cache", _fake_invalidate)
+    result = qr._execute_generation_payload(
+        {
+            "catalog": "classics",
+            "book": 1,
+            "models": ["openrouter/flux-2-pro"],
+            "variants": 1,
+            "prompt": "test prompt",
+            "provider": "all",
+            "dry_run": True,
+        }
+    )
+    assert result["book"] == 1
+    assert invalidated
+
+
+def test_execute_generation_payload_json_fallback_dedupes_by_job_id(tmp_path: Path, monkeypatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    monkeypatch.setattr(qr.config, "get_config", lambda *_args, **_kwargs: cfg)
+    monkeypatch.setattr(qr.image_generator, "generate_single_book", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        qr,
+        "_serialize_generation_results",
+        lambda **_kwargs: [
+            {
+                "book_number": 1,
+                "variant": 1,
+                "model": "openrouter/flux-2-pro",
+                "prompt": "test",
+                "provider": "openrouter",
+                "image_path": "tmp/generated/1/variant_1.png",
+                "composited_path": None,
+                "success": True,
+                "error": "",
+                "generation_time": 0.0,
+                "cost": 0.0,
+                "dry_run": True,
+                "similarity_warning": "",
+                "similar_to_book": 0,
+                "distinctiveness_score": 1.0,
+                "timestamp": "2026-02-23T00:00:00+00:00",
+                "fit_overlay_path": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(qr.state_db_store, "append_generation_records", lambda **_kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("db down")))
+    monkeypatch.setattr(qr, "_record_generation_costs", lambda **_kwargs: None)
+    monkeypatch.setattr(qr, "_build_review_data_payload", lambda *_args, **_kwargs: {"books": []})
+    monkeypatch.setattr(qr, "_invalidate_cache", lambda *_args, **_kwargs: 1)
+
+    payload = {
+        "catalog": "classics",
+        "book": 1,
+        "models": ["openrouter/flux-2-pro"],
+        "variants": 1,
+        "prompt": "test prompt",
+        "provider": "all",
+        "dry_run": True,
+        "job_id": "job-json-dedupe-1",
+    }
+
+    qr._execute_generation_payload(payload)
+    qr._execute_generation_payload(payload)
+    history_payload = json.loads(cfg.data_dir.joinpath("generation_history.json").read_text(encoding="utf-8"))
+    assert len(history_payload["items"]) == 1
+    assert history_payload["items"][0]["job_id"] == "job-json-dedupe-1"
+
+
+def test_execute_generation_payload_resumes_after_composite_failure(tmp_path: Path, monkeypatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg = replace(cfg, openrouter_api_key="test-key")
+    monkeypatch.setattr(qr.config, "get_config", lambda *_args, **_kwargs: cfg)
+
+    generate_calls = {"count": 0}
+
+    def _fake_generate_single_book(**_kwargs):  # type: ignore[no-untyped-def]
+        generate_calls["count"] += 1
+        return []
+
+    monkeypatch.setattr(qr.image_generator, "generate_single_book", _fake_generate_single_book)
+    monkeypatch.setattr(
+        qr,
+        "_serialize_generation_results",
+        lambda **_kwargs: [
+            {
+                "book_number": 1,
+                "variant": 1,
+                "model": "openrouter/flux-2-pro",
+                "prompt": "test",
+                "image_path": "tmp/generated/1/variant_1.png",
+                "composited_path": None,
+                "success": True,
+                "error": "",
+                "generation_time": 0.1,
+                "cost": 0.0,
+                "dry_run": False,
+                "similarity_warning": False,
+                "similar_to_book": None,
+                "distinctiveness_score": 0.9,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "fit_overlay_path": None,
+            }
+        ],
+    )
+
+    composite_calls = {"count": 0}
+
+    def _fake_composite_all_variants(**_kwargs):  # type: ignore[no-untyped-def]
+        composite_calls["count"] += 1
+        if composite_calls["count"] == 1:
+            raise OSError("temporary compose failure")
+        out_dir = cfg.tmp_dir / "composited" / "1"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "variant_1.jpg").write_bytes(b"jpg")
+
+    monkeypatch.setattr(qr.cover_compositor, "composite_all_variants", _fake_composite_all_variants)
+    monkeypatch.setattr(qr, "_record_generation_costs", lambda **_kwargs: None)
+    append_calls: list[dict[str, Any]] = []
+
+    def _fake_append_generation_records(**kwargs):  # type: ignore[no-untyped-def]
+        append_calls.append(dict(kwargs))
+        return 1
+
+    monkeypatch.setattr(qr.state_db_store, "append_generation_records", _fake_append_generation_records)
+    monkeypatch.setattr(qr.state_db_store, "export_history_payload", lambda **_kwargs: {"items": []})
+    monkeypatch.setattr(qr, "_build_review_data_payload", lambda *_args, **_kwargs: {"books": []})
+    monkeypatch.setattr(qr, "_invalidate_cache", lambda *_args, **_kwargs: 1)
+
+    payload = {
+        "catalog": "classics",
+        "book": 1,
+        "models": ["openrouter/flux-2-pro"],
+        "variants": 1,
+        "prompt": "test prompt",
+        "provider": "all",
+        "dry_run": False,
+        "job_id": "job-ckpt-1",
+    }
+
+    with pytest.raises(qr.JobStageError) as exc:
+        qr._execute_generation_payload(payload)
+    assert exc.value.stage == "composite"
+    assert exc.value.retryable is True
+
+    checkpoint_path = cfg.data_dir / "job_checkpoints" / "classics" / "job-ckpt-1.json"
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["stages"]["generate"]["status"] == "completed"
+    assert checkpoint["stages"]["composite"]["status"] == "failed"
+    assert checkpoint["stages"]["persist"]["status"] == "pending"
+
+    result = qr._execute_generation_payload(payload)
+    assert result["resume_used"] is True
+    assert result["stages"]["generate"]["status"] == "completed"
+    assert result["stages"]["composite"]["status"] == "completed"
+    assert result["stages"]["persist"]["status"] == "completed"
+    assert str(result["results"][0]["composited_path"]).endswith("/tmp/composited/1/variant_1.jpg")
+    assert generate_calls["count"] == 1
+    assert composite_calls["count"] == 2
+    assert append_calls
+    assert all(call.get("job_id") == "job-ckpt-1" for call in append_calls)
+    assert result["results"][0]["job_id"] == "job-ckpt-1"
+    assert not checkpoint_path.exists()
+
+
+def test_assert_composite_validation_within_limits(tmp_path: Path):
+    runtime = SimpleNamespace(
+        tmp_dir=tmp_path,
+        composite_max_invalid_variants=0,
+    )
+    report_path = tmp_path / "composited" / "7" / "composite_validation.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps({"book_number": 7, "total": 3, "invalid": 1}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid variants 1/3 exceeds allowed 0"):
+        qr._assert_composite_validation_within_limits(runtime=runtime, book_number=7)
+
+    runtime_ok = SimpleNamespace(
+        tmp_dir=tmp_path,
+        composite_max_invalid_variants=1,
+    )
+    qr._assert_composite_validation_within_limits(runtime=runtime_ok, book_number=7)
+
+    runtime_missing = SimpleNamespace(
+        tmp_dir=tmp_path,
+        composite_max_invalid_variants=0,
+    )
+    qr._assert_composite_validation_within_limits(runtime=runtime_missing, book_number=999)
+
+
+def test_composite_validation_summary_aggregates_reports(tmp_path: Path):
+    runtime = SimpleNamespace(tmp_dir=tmp_path)
+    root = tmp_path / "composited"
+    (root / "1").mkdir(parents=True, exist_ok=True)
+    (root / "2").mkdir(parents=True, exist_ok=True)
+    (root / "3").mkdir(parents=True, exist_ok=True)
+    (root / "1" / "composite_validation.json").write_text(json.dumps({"total": 2, "invalid": 1}), encoding="utf-8")
+    (root / "2" / "composite_validation.json").write_text(json.dumps({"total": 3, "invalid": 0}), encoding="utf-8")
+    (root / "3" / "composite_validation.json").write_text("bad-json", encoding="utf-8")
+    summary = qr._composite_validation_summary(runtime=runtime)
+    assert summary["reports"] == 2
+    assert summary["books_with_invalid"] == 1
+    assert summary["invalid_variants"] == 1
+    assert summary["total_variants_checked"] == 5
+
+
+def test_execute_generation_payload_fails_on_invalid_composite_validation(tmp_path: Path, monkeypatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg = replace(cfg, openrouter_api_key="test-key", composite_max_invalid_variants=0)
+    monkeypatch.setattr(qr.config, "get_config", lambda *_args, **_kwargs: cfg)
+    monkeypatch.setattr(qr.image_generator, "generate_single_book", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        qr,
+        "_serialize_generation_results",
+        lambda **_kwargs: [
+            {
+                "book_number": 1,
+                "variant": 1,
+                "model": "openrouter/flux-2-pro",
+                "prompt": "test",
+                "image_path": "tmp/generated/1/variant_1.png",
+                "composited_path": None,
+                "success": True,
+                "error": "",
+                "generation_time": 0.1,
+                "cost": 0.0,
+                "dry_run": False,
+                "similarity_warning": False,
+                "similar_to_book": None,
+                "distinctiveness_score": 0.9,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "fit_overlay_path": None,
+            }
+        ],
+    )
+
+    def _fake_composite_all_variants(**_kwargs):  # type: ignore[no-untyped-def]
+        out_dir = cfg.tmp_dir / "composited" / "1"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "variant_1.jpg").write_bytes(b"jpg")
+        (out_dir / "composite_validation.json").write_text(json.dumps({"book_number": 1, "total": 1, "invalid": 1}), encoding="utf-8")
+
+    monkeypatch.setattr(qr.cover_compositor, "composite_all_variants", _fake_composite_all_variants)
+    monkeypatch.setattr(qr, "_record_generation_costs", lambda **_kwargs: None)
+    monkeypatch.setattr(qr.state_db_store, "append_generation_records", lambda **_kwargs: 1)
+    monkeypatch.setattr(qr.state_db_store, "export_history_payload", lambda **_kwargs: {"items": []})
+    monkeypatch.setattr(qr, "_build_review_data_payload", lambda *_args, **_kwargs: {"books": []})
+    monkeypatch.setattr(qr, "_invalidate_cache", lambda *_args, **_kwargs: 1)
+
+    payload = {
+        "catalog": "classics",
+        "book": 1,
+        "models": ["openrouter/flux-2-pro"],
+        "variants": 1,
+        "prompt": "test prompt",
+        "provider": "all",
+        "dry_run": False,
+        "job_id": "job-invalid-composite-1",
+    }
+
+    with pytest.raises(qr.JobStageError) as exc:
+        qr._execute_generation_payload(payload)
+    assert exc.value.stage == "composite"
+    assert exc.value.retryable is False
+    assert "invalid variants 1/1 exceeds allowed 0" in str(exc.value)
+
+    checkpoint_path = cfg.data_dir / "job_checkpoints" / "classics" / "job-invalid-composite-1.json"
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["stages"]["generate"]["status"] == "completed"
+    assert checkpoint["stages"]["composite"]["status"] == "failed"
+    assert "invalid variants 1/1 exceeds allowed 0" in checkpoint["stages"]["composite"]["error"]["message"]
+
+
+def test_job_worker_injects_job_id_into_execution_payload(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class _Store:
+        def __init__(self) -> None:
+            self._leased = False
+
+        def lease_next_job(self, **_kwargs):  # type: ignore[no-untyped-def]
+            if self._leased:
+                pool._stop_event.set()
+                return None
+            self._leased = True
+            return SimpleNamespace(
+                id="job-worker-1",
+                catalog_id="classics",
+                book_number=1,
+                job_type="generate_cover",
+                attempts=0,
+                payload={
+                    "catalog": "classics",
+                    "book": 1,
+                    "models": ["openrouter/flux-2-pro"],
+                    "variants": 1,
+                    "prompt": "test",
+                    "provider": "all",
+                    "dry_run": True,
+                },
+            )
+
+        def record_attempt_start(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return 1
+
+        def mark_completed(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return SimpleNamespace(id="job-worker-1", catalog_id="classics", book_number=1, job_type="generate_cover", status="completed", attempts=1, result={})
+
+        def record_attempt_end(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+    def _fake_execute(payload):  # type: ignore[no-untyped-def]
+        captured.update(payload)
+        return {"results": []}
+
+    pool = qr.JobWorkerPool(_Store(), worker_count=1, heartbeat_path=None)
+    monkeypatch.setattr(qr, "_execute_generation_payload", _fake_execute)
+    pool._run_worker("worker-1")
+    assert captured["job_id"] == "job-worker-1"
+
+
+def test_job_worker_retryable_stage_error_sets_retrying(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class _Store:
+        def __init__(self) -> None:
+            self._leased = False
+
+        def lease_next_job(self, **_kwargs):  # type: ignore[no-untyped-def]
+            if self._leased:
+                pool._stop_event.set()
+                return None
+            self._leased = True
+            return SimpleNamespace(
+                id="job-worker-retry",
+                catalog_id="classics",
+                book_number=1,
+                job_type="generate_cover",
+                attempts=0,
+                payload={"catalog": "classics", "book": 1, "models": ["openai/gpt-image-1"], "variants": 1, "prompt": "p", "provider": "all", "dry_run": False},
+            )
+
+        def record_attempt_start(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return 7
+
+        def mark_failed(self, _job_id, *, error, retryable, retry_delay_seconds):  # type: ignore[no-untyped-def]
+            captured["error"] = dict(error)
+            captured["retryable"] = bool(retryable)
+            captured["retry_delay_seconds"] = float(retry_delay_seconds)
+            return SimpleNamespace(status="retrying")
+
+        def record_attempt_end(self, _attempt_id, *, status, error_text="", meta=None):  # type: ignore[no-untyped-def]
+            captured["attempt_status"] = status
+            captured["attempt_error_text"] = error_text
+            captured["attempt_meta"] = dict(meta or {})
+
+    def _fail_stage(_payload):  # type: ignore[no-untyped-def]
+        raise qr.JobStageError(stage="persist", message="transient disk io", retryable=True)
+
+    pool = qr.JobWorkerPool(_Store(), worker_count=1, heartbeat_path=None)
+    monkeypatch.setattr(qr, "_execute_generation_payload", _fail_stage)
+    pool._run_worker("worker-1")
+
+    assert captured["retryable"] is True
+    assert captured["attempt_status"] == "retrying"
+    assert captured["error"]["stage"] == "persist"
+    assert captured["attempt_meta"]["stage"] == "persist"
+
+
+def test_job_worker_terminal_stage_error_sets_failed(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class _Store:
+        def __init__(self) -> None:
+            self._leased = False
+
+        def lease_next_job(self, **_kwargs):  # type: ignore[no-untyped-def]
+            if self._leased:
+                pool._stop_event.set()
+                return None
+            self._leased = True
+            return SimpleNamespace(
+                id="job-worker-fail",
+                catalog_id="classics",
+                book_number=1,
+                job_type="generate_cover",
+                attempts=0,
+                payload={"catalog": "classics", "book": 1, "models": ["openai/gpt-image-1"], "variants": 1, "prompt": "p", "provider": "all", "dry_run": False},
+            )
+
+        def record_attempt_start(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return 8
+
+        def mark_failed(self, _job_id, *, error, retryable, retry_delay_seconds):  # type: ignore[no-untyped-def]
+            captured["error"] = dict(error)
+            captured["retryable"] = bool(retryable)
+            captured["retry_delay_seconds"] = float(retry_delay_seconds)
+            return SimpleNamespace(status="failed")
+
+        def record_attempt_end(self, _attempt_id, *, status, error_text="", meta=None):  # type: ignore[no-untyped-def]
+            captured["attempt_status"] = status
+            captured["attempt_error_text"] = error_text
+            captured["attempt_meta"] = dict(meta or {})
+
+    def _fail_stage(_payload):  # type: ignore[no-untyped-def]
+        raise qr.JobStageError(stage="persist", message="fatal persist corruption", retryable=False)
+
+    pool = qr.JobWorkerPool(_Store(), worker_count=1, heartbeat_path=None)
+    monkeypatch.setattr(qr, "_execute_generation_payload", _fail_stage)
+    pool._run_worker("worker-1")
+
+    assert captured["retryable"] is False
+    assert captured["attempt_status"] == "failed"
+    assert captured["error"]["stage"] == "persist"
+    assert captured["attempt_meta"]["stage"] == "persist"

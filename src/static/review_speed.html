@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/review-speed.css" />
+<title>Alexandria Speed Review</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a class="active" href="/review?mode=speed">Speed Review</a>
+    <a href="/review">Review Grid</a>
+    <a href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+    <div class="catalog"><span>Catalog</span><select id="catalogSelect"></select></div>
+  </nav>
+
+  <main>
+    <section id="summaryPanel" class="card">
+      <h1>Speed Review</h1>
+      <div class="summary-grid">
+        <div class="summary-box"><div>Auto-approve (score ≥ threshold)</div><strong id="sumAuto">0</strong><div class="status">Clear winners likely correct.</div></div>
+        <div class="summary-box"><div>Needs Review (0.70-threshold)</div><strong id="sumReview">0</strong><div class="status">Close alternatives require judgment.</div></div>
+        <div class="summary-box"><div>Needs Attention (&lt; 0.70)</div><strong id="sumAttention">0</strong><div class="status">Weak options, may require re-generation.</div></div>
+        <div class="summary-box"><div>Similarity Alerts</div><strong id="sumSimilarity">0</strong><div class="status">Potential duplicate visual direction.</div></div>
+        <div class="summary-box"><div>Reviewer Conflicts</div><strong id="sumConflict">0</strong><div class="status">Different reviewer choices need resolution.</div></div>
+      </div>
+      <div class="controls">
+        <label>Auto-approve threshold <input id="threshold" type="number" min="0.80" max="0.95" step="0.01" value="0.90" /></label>
+        <label>Reviewer <input id="reviewerInput" class="reviewer-input" type="text" value="tim" /></label>
+        <button id="reloadQueueBtn">Reload Queue</button>
+        <button id="acceptAllBtn">Accept All Above Threshold</button>
+        <button id="reviewAnywayBtn" class="secondary">Review All</button>
+        <button id="startBtn">Start Speed Review</button>
+        <label class="review-toggle-label"><input id="showOriginalToggle" type="checkbox" checked /> Show Original</label>
+      </div>
+      <div id="summaryStatus" class="status">Loading queue...</div>
+    </section>
+
+    <section id="resumePanel" class="card hide"></section>
+
+    <section id="reviewPanel" class="card hide">
+      <div class="speed-header">
+        <div>
+          <h2 id="bookHeader">Book</h2>
+          <div id="confidenceLabel" class="confidence warn">Confidence</div>
+          <div id="bookFlags" class="stats-row u-mt-6"></div>
+        </div>
+        <div class="controls">
+          <button id="prevBtn" class="ghost">← Prev</button>
+          <button id="nextBtn" class="ghost">Next →</button>
+          <button id="confirmBtn">Enter Confirm</button>
+          <button id="skipBtn" class="secondary">S Skip</button>
+          <button id="undoBtn" class="ghost">Z Undo</button>
+          <button id="acceptAutoBtn" class="secondary">A Accept Auto</button>
+        </div>
+      </div>
+
+      <div id="variants" class="variants u-mt-10"></div>
+
+      <div class="progress-wrap">
+        <div class="bar"><div id="progressFill" class="fill"></div></div>
+        <div id="progressMeta" class="progress-meta">0/0 reviewed</div>
+      </div>
+      <div id="timerMeta" class="status">Elapsed 0:00 · Avg 0s/book · Remaining ~0 min</div>
+      <div class="status">Keyboard: 1-5 select, Enter confirm+next, Space zoom, A accept auto, S skip, Z undo, Tab cycle variant, ←/→ navigate.</div>
+    </section>
+  </main>
+
+  <div id="zoomModal"><img id="zoomImg" alt="zoom" /></div>
+
+  <div id="doneModal">
+    <div class="modal-card">
+      <div class="u-row-between-center">
+        <strong class="u-title-gold-18">Review Complete</strong>
+        <button id="closeDoneBtn" class="ghost">Close</button>
+      </div>
+      <div id="doneBody" class="status u-mt-10"></div>
+    </div>
+  </div>
+
+  <script>
+    const state = {
+      catalog: 'classics',
+      catalogs: [],
+      queue: [],
+      reviewQueue: [],
+      index: 0,
+      selections: {},
+      currentSelections: {},
+      selectionDetails: {},
+      skipped: new Set(),
+      undoStack: [],
+      startedAt: null,
+      autoApproved: 0,
+      timerHandle: null,
+      showOriginal: true,
+      sessionId: null,
+      reviewer: 'tim',
+      initialAutoByBook: {},
+      touchStartX: 0,
+      touchStartY: 0,
+      reviewAllMode: false,
+    };
+
+    function q(id) { return document.getElementById(id); }
+    function catalogQuery() { return `catalog=${encodeURIComponent(state.catalog)}`; }
+    function nowIso() { return new Date().toISOString(); }
+
+    async function init() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('catalog')) state.catalog = params.get('catalog');
+      await loadCatalogs();
+      bindEvents();
+      await loadQueue();
+      await checkResumeSession();
+    }
+
+    async function loadCatalogs() {
+      const res = await fetch('/api/catalogs');
+      const payload = await res.json();
+      state.catalogs = payload.catalogs || [];
+      if (!state.catalog && payload.active_catalog) state.catalog = payload.active_catalog;
+      q('catalogSelect').innerHTML = state.catalogs.map(c => `<option value="${escapeHtml(c.id)}" ${c.id===state.catalog?'selected':''}>${escapeHtml(c.name || c.id)}</option>`).join('');
+    }
+
+    function bindEvents() {
+      state.reviewer = String(q('reviewerInput').value || 'tim').trim() || 'tim';
+      q('catalogSelect').addEventListener('change', (event) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('catalog', event.target.value);
+        window.location.href = url.toString();
+      });
+      q('reloadQueueBtn').addEventListener('click', loadQueue);
+      q('acceptAllBtn').addEventListener('click', batchApprove);
+      q('reviewAnywayBtn').addEventListener('click', () => {
+        state.reviewAllMode = true;
+        state.reviewQueue = state.queue.slice();
+        setSummaryStatus(`Reviewing all ${state.reviewQueue.length} books.`);
+      });
+      q('reviewerInput').addEventListener('change', (event) => {
+        const value = String(event.target.value || '').trim();
+        state.reviewer = value || 'tim';
+      });
+      q('startBtn').addEventListener('click', startReview);
+      q('showOriginalToggle').addEventListener('change', (event) => {
+        state.showOriginal = Boolean(event.target.checked);
+        renderCurrentBook();
+      });
+
+      q('prevBtn').addEventListener('click', () => moveBy(-1));
+      q('nextBtn').addEventListener('click', () => moveBy(1));
+      q('confirmBtn').addEventListener('click', confirmAndNext);
+      q('skipBtn').addEventListener('click', skipCurrent);
+      q('undoBtn').addEventListener('click', undoLast);
+      q('acceptAutoBtn').addEventListener('click', acceptAutoAndNext);
+
+      q('zoomModal').addEventListener('click', () => q('zoomModal').style.display = 'none');
+      q('closeDoneBtn').addEventListener('click', () => q('doneModal').style.display = 'none');
+      document.addEventListener('keydown', handleKeydown);
+
+      const panel = q('reviewPanel');
+      panel.addEventListener('touchstart', (event) => {
+        const touch = event.changedTouches[0];
+        state.touchStartX = touch.clientX;
+        state.touchStartY = touch.clientY;
+      }, { passive: true });
+      panel.addEventListener('touchend', (event) => {
+        const touch = event.changedTouches[0];
+        const dx = touch.clientX - state.touchStartX;
+        const dy = touch.clientY - state.touchStartY;
+        if (Math.abs(dx) > 60 && Math.abs(dy) < 40) {
+          if (dx < 0) moveBy(1);
+          else moveBy(-1);
+        }
+      }, { passive: true });
+
+      window.addEventListener('beforeunload', saveSessionSilently);
+    }
+
+    function setSummaryStatus(text) { q('summaryStatus').textContent = text; }
+
+    async function loadQueue() {
+      const threshold = Number(q('threshold').value || 0.90);
+      const res = await fetch(`/api/review-queue?threshold=${encodeURIComponent(threshold)}&${catalogQuery()}`);
+      const payload = await res.json();
+      state.queue = payload.queue || [];
+      state.reviewQueue = state.reviewAllMode ? state.queue.slice() : state.queue.filter(row => Number(row.winner_score || 0) < threshold);
+      const defaultReviewer = String(payload.default_reviewer || '').trim();
+      const currentReviewer = String(q('reviewerInput').value || '').trim();
+      if (defaultReviewer && (!currentReviewer || currentReviewer.toLowerCase() === 'tim')) {
+        state.reviewer = defaultReviewer;
+        q('reviewerInput').value = defaultReviewer;
+      }
+
+      state.initialAutoByBook = {};
+      state.currentSelections = {};
+      state.selectionDetails = {};
+      state.selections = {};
+      state.queue.forEach(row => {
+        state.initialAutoByBook[String(row.book)] = Number(row.winner || 0);
+        state.currentSelections[String(row.book)] = Number(row.winner || 0);
+      });
+
+      q('sumAuto').textContent = String(payload.auto_approve || 0);
+      q('sumReview').textContent = String(payload.needs_review || 0);
+      q('sumAttention').textContent = String(payload.needs_attention || 0);
+      q('sumSimilarity').textContent = String(payload.similarity_alert_books || 0);
+      q('sumConflict').textContent = String(payload.conflict_alert_books || 0);
+      setSummaryStatus(`Queue loaded: ${state.queue.length} books. Estimated review time ~${payload.estimated_review_minutes || 0} min. Conflicts: ${payload.conflict_alert_books || 0}.`);
+    }
+
+    async function batchApprove() {
+      const threshold = Number(q('threshold').value || 0.90);
+      const res = await fetch(`/api/batch-approve?${catalogQuery()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ catalog: state.catalog, threshold, reviewer: state.reviewer }),
+      });
+      const payload = await res.json();
+      if (payload.ok) {
+        state.autoApproved = Number((payload.summary || {}).approved_books || 0);
+        await loadQueue();
+        setSummaryStatus(`Auto-approved ${state.autoApproved} books at threshold ${threshold.toFixed(2)}.`);
+      }
+    }
+
+    async function checkResumeSession() {
+      const previous = localStorage.getItem(`speedReviewSession:${state.catalog}`);
+      if (!previous) return;
+      const res = await fetch(`/api/review-session/${encodeURIComponent(previous)}?${catalogQuery()}`);
+      if (!res.ok) return;
+      const payload = await res.json();
+      const session = payload.session || {};
+      if (!session || !session.session_id) return;
+      if (session.completed) {
+        localStorage.removeItem(`speedReviewSession:${state.catalog}`);
+        return;
+      }
+      q('resumePanel').classList.remove('hide');
+      q('resumePanel').innerHTML = `
+        <h2>Resume Previous Session?</h2>
+        <div class="status">${escapeHtml(session.session_id)} · ${Number(session.books_reviewed || 0)} reviewed, ${Number(session.books_remaining || 0)} remaining.</div>
+        <div class="controls">
+          <button id="resumeBtn">Resume</button>
+          <button id="discardBtn" class="secondary">Start New</button>
+        </div>
+      `;
+      q('resumeBtn').addEventListener('click', () => resumeSession(session));
+      q('discardBtn').addEventListener('click', () => {
+        localStorage.removeItem(`speedReviewSession:${state.catalog}`);
+        q('resumePanel').classList.add('hide');
+      });
+    }
+
+    function resumeSession(session) {
+      state.sessionId = session.session_id;
+      state.startedAt = session.started_at ? new Date(session.started_at).getTime() : Date.now();
+      state.reviewer = String(session.reviewer || state.reviewer || 'tim').trim() || 'tim';
+      q('reviewerInput').value = state.reviewer;
+
+      const savedSelections = session.selections || {};
+      const savedDetails = session.selection_details || {};
+      state.selections = Object.fromEntries(Object.entries(savedSelections).map(([k, v]) => [k, Number(v)]));
+      state.selectionDetails = {};
+      Object.entries(savedDetails).forEach(([key, value]) => {
+        if (value && typeof value === 'object') state.selectionDetails[key] = value;
+      });
+
+      state.currentSelections = {};
+      state.queue.forEach(row => {
+        const key = String(row.book);
+        state.currentSelections[key] = Number(savedSelections[key] || row.winner || 1);
+      });
+
+      const skippedBooks = Array.isArray(session.skipped_books) ? session.skipped_books.map(Number) : [];
+      state.skipped = new Set(skippedBooks.filter(Number.isFinite));
+      state.reviewQueue = state.queue.filter(row => !(savedSelections || {}).hasOwnProperty(String(row.book)) || state.skipped.has(Number(row.book)));
+      state.index = 0;
+      showReviewPanel();
+      renderCurrentBook();
+      startTimer();
+      q('resumePanel').classList.add('hide');
+    }
+
+    function startReview() {
+      if (!state.reviewQueue.length) {
+        setSummaryStatus('No books left in review queue at current threshold.');
+        return;
+      }
+      state.sessionId = `review_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
+      state.startedAt = Date.now();
+      state.index = 0;
+      state.undoStack = [];
+      state.selections = {};
+      state.selectionDetails = {};
+      state.skipped = new Set();
+      state.currentSelections = {};
+      state.reviewQueue.forEach(row => {
+        state.currentSelections[String(row.book)] = Number(row.winner || 1);
+      });
+      showReviewPanel();
+      renderCurrentBook();
+      startTimer();
+      saveSession();
+    }
+
+    function showReviewPanel() {
+      q('summaryPanel').classList.remove('hide');
+      q('reviewPanel').classList.remove('hide');
+    }
+
+    function currentRow() {
+      return state.reviewQueue[state.index] || null;
+    }
+
+    function confidenceClass(value) {
+      if (value >= 0.8) return 'good';
+      if (value >= 0.5) return 'warn';
+      return 'bad';
+    }
+
+    function renderCurrentBook() {
+      const row = currentRow();
+      if (!row) {
+        finishReview();
+        return;
+      }
+      const total = state.reviewQueue.length;
+      const bookIdx = state.index + 1;
+      const confidencePct = Math.round(Number(row.confidence || 0) * 100);
+      q('bookHeader').textContent = `Book ${bookIdx} of ${total}: ${row.book}. ${row.title} — ${row.author}`;
+      q('confidenceLabel').textContent = `Confidence: ${confidencePct}%`;
+      q('confidenceLabel').className = `confidence ${confidenceClass(confidencePct / 100)}`;
+
+      const flags = [];
+      if (row.conflict_requires_resolution) flags.push('<span class="pill conflict-pill">Reviewer Conflict</span>');
+      if (row.similarity_flag) flags.push('<span class="pill">Similarity Alert</span>');
+      if (Number(row.winner_score || 0) < 0.75) flags.push('<span class="pill">Low Winner Score</span>');
+      if (Number(row.confidence || 0) < 0.05) flags.push('<span class="pill">Low Confidence</span>');
+      q('bookFlags').innerHTML = flags.join('') || '<span class="pill">No warnings</span>';
+
+      const variants = row.variants || [];
+      const selectedVariant = Number(state.currentSelections[String(row.book)] || row.winner || 1);
+      const originalImage = row.original ? `/${row.original}` : '';
+      q('variants').innerHTML = variants.map(variant => {
+        const vid = Number(variant.variant || 0);
+        const vimg = variant.image ? `/${variant.image}` : '';
+        const selected = vid === selectedVariant;
+        const confidence = Number(variant.quality_score || 0).toFixed(3);
+        return `
+          <article class="variant ${selected ? 'selected' : ''}" data-variant="${vid}">
+            <div class="ba-wrap">
+              <img src="${escapeHtml(vimg)}" data-zoom="${escapeHtml(vimg)}" alt="Variant ${vid}" />
+              ${state.showOriginal && originalImage ? `<div class="ba-top ba-half"><img src="${escapeHtml(originalImage)}" alt="Original" /></div>` : ''}
+            </div>
+            ${state.showOriginal && originalImage ? `<input class="ba-slider" type="range" min="0" max="100" value="50" />` : ''}
+            <div class="meta">
+              <span>Variant ${vid}</span>
+              <span>${confidence}</span>
+            </div>
+          </article>
+        `;
+      }).join('');
+
+      q('variants').querySelectorAll('.variant').forEach(card => {
+        const variant = Number(card.dataset.variant || 0);
+        card.addEventListener('click', () => selectVariant(variant));
+        const image = card.querySelector('img[data-zoom]');
+        if (image) {
+          image.addEventListener('dblclick', (event) => {
+            event.stopPropagation();
+            q('zoomImg').src = image.dataset.zoom;
+            q('zoomModal').style.display = 'flex';
+          });
+        }
+        const slider = card.querySelector('.ba-slider');
+        if (slider) {
+          slider.addEventListener('input', () => {
+            const top = card.querySelector('.ba-top');
+            if (top) top.style.clipPath = `inset(0 ${100 - Number(slider.value)}% 0 0)`;
+          });
+        }
+      });
+
+      updateProgress();
+    }
+
+    function selectVariant(variant) {
+      const row = currentRow();
+      if (!row || variant <= 0) return;
+      state.currentSelections[String(row.book)] = variant;
+      renderCurrentBook();
+    }
+
+    function selectedVariantForCurrent() {
+      const row = currentRow();
+      if (!row) return 0;
+      return Number(state.currentSelections[String(row.book)] || row.winner || 0);
+    }
+
+    async function saveCurrentSelection(reviewMode = 'speed') {
+      const row = currentRow();
+      if (!row) return;
+      const variant = selectedVariantForCurrent();
+      if (!variant) return;
+      const score = variantScore(row, variant);
+      await fetch(`/api/review-selection?${catalogQuery()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          catalog: state.catalog,
+          book: row.book,
+          variant,
+          reviewer: state.reviewer,
+          review_mode: reviewMode,
+        }),
+      });
+      const key = String(row.book);
+      state.selections[key] = variant;
+      state.selectionDetails[key] = {
+        winner: variant,
+        score,
+        overrode_auto: Number(state.initialAutoByBook[key] || 0) !== Number(variant || 0),
+        confirmed_at: new Date().toISOString(),
+        review_mode: reviewMode,
+      };
+    }
+
+    async function confirmAndNext() {
+      const row = currentRow();
+      if (!row) return;
+      const chosen = selectedVariantForCurrent();
+      const key = String(row.book);
+      const hadPrevious = Object.prototype.hasOwnProperty.call(state.selections, key);
+      state.undoStack.push({
+        index: state.index,
+        book: row.book,
+        previous: hadPrevious ? Number(state.selections[key]) : null,
+        previous_detail: hadPrevious ? state.selectionDetails[key] : null,
+        next: chosen,
+      });
+      await saveCurrentSelection('speed');
+      state.skipped.delete(Number(row.book));
+      moveBy(1, true);
+    }
+
+    async function acceptAutoAndNext() {
+      const row = currentRow();
+      if (!row) return;
+      state.selections[String(row.book)] = Number(row.winner || 1);
+      await confirmAndNext();
+    }
+
+    function skipCurrent() {
+      const row = currentRow();
+      if (!row) return;
+      state.skipped.add(Number(row.book));
+      moveBy(1, false);
+      saveSession();
+    }
+
+    async function undoLast() {
+      const item = state.undoStack.pop();
+      if (!item) return;
+      const bookKey = String(item.book);
+      state.index = Math.max(0, item.index);
+      let reverted = Number(item.previous || 0);
+      if (reverted > 0) {
+        state.selections[bookKey] = reverted;
+        state.selectionDetails[bookKey] = item.previous_detail || state.selectionDetails[bookKey] || {};
+      } else {
+        delete state.selections[bookKey];
+        delete state.selectionDetails[bookKey];
+        reverted = Number(state.initialAutoByBook[bookKey] || item.next || 1);
+      }
+      state.currentSelections[bookKey] = reverted;
+      state.skipped.delete(Number(item.book));
+
+      await fetch(`/api/review-selection?${catalogQuery()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          catalog: state.catalog,
+          book: Number(item.book),
+          variant: reverted,
+          reviewer: state.reviewer,
+          review_mode: 'speed_undo',
+        }),
+      });
+      renderCurrentBook();
+      saveSession();
+    }
+
+    function variantScore(row, variant) {
+      const hit = (row.variants || []).find(v => Number(v.variant || 0) === Number(variant || 0));
+      return Number(hit && hit.quality_score || 0);
+    }
+
+    function moveBy(delta, persist = false) {
+      const next = state.index + delta;
+      state.index = Math.max(0, Math.min(state.reviewQueue.length, next));
+      if (state.index >= state.reviewQueue.length) {
+        const deferred = Array.from(state.skipped.values()).filter((book) => !Object.prototype.hasOwnProperty.call(state.selections, String(book)));
+        if (deferred.length > 0) {
+          state.reviewQueue = state.queue.filter((row) => deferred.includes(Number(row.book)));
+          state.index = 0;
+          state.skipped = new Set();
+          renderCurrentBook();
+          if (persist) saveSession();
+          return;
+        }
+        finishReview();
+        return;
+      }
+      renderCurrentBook();
+      if (persist) saveSession();
+    }
+
+    function startTimer() {
+      if (state.timerHandle) clearInterval(state.timerHandle);
+      state.timerHandle = setInterval(updateTimer, 1000);
+      updateTimer();
+    }
+
+    function updateTimer() {
+      if (!state.startedAt) return;
+      const elapsedSec = Math.max(0, Math.floor((Date.now() - state.startedAt) / 1000));
+      const reviewedCount = countReviewed();
+      const avg = reviewedCount > 0 ? (elapsedSec / reviewedCount) : 0;
+      const remaining = Math.max(0, state.reviewQueue.length - reviewedCount);
+      const remainingMin = Math.round((avg * remaining) / 60);
+      q('timerMeta').textContent = `Elapsed ${formatDuration(elapsedSec)} · Avg ${avg.toFixed(1)}s/book · Remaining ~${remainingMin} min`;
+    }
+
+    function updateProgress() {
+      const total = state.reviewQueue.length;
+      const reviewed = countReviewed();
+      const pct = total > 0 ? (reviewed / total) * 100 : 0;
+      q('progressFill').style.width = `${pct.toFixed(1)}%`;
+      q('progressMeta').textContent = `Progress: ${reviewed}/${total} (${pct.toFixed(1)}%) · Current ${Math.min(state.index + 1, Math.max(total, 1))}/${Math.max(total, 1)} · Skipped ${state.skipped.size}`;
+    }
+
+    function countReviewed() {
+      let reviewed = 0;
+      state.reviewQueue.forEach((row) => {
+        const key = String(row.book);
+        if (Object.prototype.hasOwnProperty.call(state.selections, key)) reviewed += 1;
+      });
+      return reviewed;
+    }
+
+    function formatDuration(sec) {
+      const minutes = Math.floor(sec / 60);
+      const seconds = sec % 60;
+      return `${minutes}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    async function saveSession() {
+      const payload = buildSessionPayload(false);
+      const res = await fetch(`/api/save-review-session?${catalogQuery()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.ok && data.session_id) {
+        state.sessionId = data.session_id;
+        localStorage.setItem(`speedReviewSession:${state.catalog}`, data.session_id);
+      }
+    }
+
+    function saveSessionSilently() {
+      if (!state.sessionId) return;
+      navigator.sendBeacon(`/api/save-review-session?${catalogQuery()}`, JSON.stringify(buildSessionPayload(false)));
+    }
+
+    function buildSessionPayload(completed) {
+      const reviewedBooks = countReviewed();
+      const selectionSnapshot = {};
+      Object.entries(state.selections).forEach(([book, variant]) => {
+        selectionSnapshot[book] = Number(variant || 0);
+      });
+      return {
+        catalog: state.catalog,
+        session_id: state.sessionId,
+        started_at: new Date(state.startedAt || Date.now()).toISOString(),
+        books_reviewed: reviewedBooks,
+        books_remaining: Math.max(0, state.reviewQueue.length - reviewedBooks),
+        auto_approved: state.autoApproved,
+        manually_selected: reviewedBooks,
+        skipped: state.skipped.size,
+        skipped_books: Array.from(state.skipped.values()).sort((a, b) => a - b),
+        avg_time_per_book_seconds: reviewedBooks > 0 ? ((Date.now() - state.startedAt) / 1000 / reviewedBooks) : 0,
+        selections: selectionSnapshot,
+        selection_details: state.selectionDetails,
+        reviewer: state.reviewer,
+        mode: 'speed',
+        completed,
+      };
+    }
+
+    async function finishReview() {
+      if (state.timerHandle) {
+        clearInterval(state.timerHandle);
+        state.timerHandle = null;
+      }
+      await fetch(`/api/save-review-session?${catalogQuery()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildSessionPayload(true)),
+      });
+
+      const elapsedSec = Math.max(0, Math.floor((Date.now() - (state.startedAt || Date.now())) / 1000));
+      const reviewed = Math.max(0, countReviewed());
+      let overrides = 0;
+      Object.entries(state.selections).forEach(([book, variant]) => {
+        if (Number(state.initialAutoByBook[String(book)] || 0) !== Number(variant || 0)) overrides += 1;
+      });
+
+      q('doneBody').innerHTML = `
+        <div>Total time: <strong>${formatDuration(elapsedSec)}</strong></div>
+        <div>Average time per book: <strong>${(reviewed ? elapsedSec / reviewed : 0).toFixed(1)}s</strong></div>
+        <div>Auto-selection overrides: <strong>${overrides}</strong></div>
+        <div>Books skipped: <strong>${state.skipped.size}</strong></div>
+      `;
+      q('doneModal').style.display = 'flex';
+      localStorage.removeItem(`speedReviewSession:${state.catalog}`);
+      q('reviewPanel').classList.add('hide');
+      q('summaryPanel').classList.remove('hide');
+      await loadQueue();
+    }
+
+    function handleKeydown(event) {
+      const key = event.key;
+      const tag = (event.target && event.target.tagName || '').toLowerCase();
+      const typing = ['input', 'textarea', 'select'].includes(tag);
+      if (typing) return;
+
+      if (key >= '1' && key <= '5') {
+        event.preventDefault();
+        selectVariant(Number(key));
+        return;
+      }
+      if (key === 'Enter') {
+        event.preventDefault();
+        confirmAndNext();
+        return;
+      }
+      if (key === ' ') {
+        event.preventDefault();
+        const row = currentRow();
+        if (!row) return;
+        const variant = selectedVariantForCurrent();
+        const item = (row.variants || []).find(v => Number(v.variant || 0) === variant);
+        if (!item || !item.image) return;
+        q('zoomImg').src = `/${item.image}`;
+        q('zoomModal').style.display = 'flex';
+        return;
+      }
+      if (key.toLowerCase() === 'a') {
+        event.preventDefault();
+        acceptAutoAndNext();
+        return;
+      }
+      if (key.toLowerCase() === 's') {
+        event.preventDefault();
+        skipCurrent();
+        return;
+      }
+      if (key.toLowerCase() === 'z') {
+        event.preventDefault();
+        undoLast();
+        return;
+      }
+      if (key === 'ArrowRight') {
+        event.preventDefault();
+        moveBy(1, false);
+        return;
+      }
+      if (key === 'ArrowLeft') {
+        event.preventDefault();
+        moveBy(-1, false);
+        return;
+      }
+      if (key === 'Tab') {
+        event.preventDefault();
+        cycleVariant();
+      }
+    }
+
+    function cycleVariant() {
+      const row = currentRow();
+      if (!row) return;
+      const variants = (row.variants || []).map(v => Number(v.variant || 0)).filter(v => v > 0);
+      if (!variants.length) return;
+      const current = selectedVariantForCurrent();
+      const idx = variants.indexOf(current);
+      const next = variants[(idx + 1) % variants.length];
+      selectVariant(next);
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    init();
+  </script>
+  <script src="/src/static/navbar.js"></script>
+</body>
+</html>

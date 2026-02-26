@@ -20,12 +20,14 @@ except ImportError:  # pragma: no cover - optional dependency fallback
 
 try:
     from src import config
+    from src import safe_json
+    from src.logger import get_logger
 except ModuleNotFoundError:  # pragma: no cover
     import config  # type: ignore
+    import safe_json  # type: ignore
+    from logger import get_logger  # type: ignore
 
-
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def inspect_ai_internal_format(ai_path: Path) -> dict[str, Any]:
@@ -112,7 +114,9 @@ def export_book_variants(
     max_variants: int | None = None,
 ) -> list[Path]:
     """Export all composited variants for one book to final folder structure."""
-    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    catalog = safe_json.load_json(catalog_path, [])
+    if not isinstance(catalog, list):
+        raise ValueError(f"Invalid catalog payload at {catalog_path}")
     book_entry = next((row for row in catalog if int(row.get("number", 0)) == int(book_number)), None)
     if not book_entry:
         raise KeyError(f"Book {book_number} missing from catalog")
@@ -252,7 +256,7 @@ def main() -> int:
 
     if args.inspect_ai:
         info = inspect_ai_internal_format(args.inspect_ai)
-        print(json.dumps(info, indent=2))
+        logger.info("AI inspection: %s", json.dumps(info, ensure_ascii=False))
         return 0
 
     if args.book is not None:

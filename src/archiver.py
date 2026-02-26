@@ -13,15 +13,17 @@ from typing import Any
 
 try:
     from src import config
+    from src import safe_json
+    from src.logger import get_logger
 except ModuleNotFoundError:  # pragma: no cover
     import config  # type: ignore
+    import safe_json  # type: ignore
+    from logger import get_logger  # type: ignore
 
+logger = get_logger(__name__)
 
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
-
-DEFAULT_SELECTIONS_PATH = config.DATA_DIR / "variant_selections.json"
-DEFAULT_ARCHIVE_LOG_PATH = config.DATA_DIR / "archive_log.json"
+DEFAULT_SELECTIONS_PATH = config.variant_selections_path(catalog_id=config.DEFAULT_CATALOG_ID, data_dir=config.DATA_DIR)
+DEFAULT_ARCHIVE_LOG_PATH = config.archive_log_path(catalog_id=config.DEFAULT_CATALOG_ID, data_dir=config.DATA_DIR)
 
 
 def archive_non_winners(
@@ -132,14 +134,9 @@ def undo_archive(
 
 
 def _load_selections(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            return payload
-    except json.JSONDecodeError:
-        return {}
+    payload = safe_json.load_json(path, {})
+    if isinstance(payload, dict):
+        return payload
     return {}
 
 
@@ -152,19 +149,13 @@ def _append_archive_log(operation: dict[str, Any], path: Path) -> None:
         "updated_at": _utc_now(),
         "operations": operations,
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
+    safe_json.atomic_write_json(path, output)
 
 
 def _load_archive_log(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {"operations": []}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            return payload
-    except json.JSONDecodeError:
-        return {"operations": []}
+    payload = safe_json.load_json(path, {"operations": []})
+    if isinstance(payload, dict):
+        return payload
     return {"operations": []}
 
 
@@ -191,6 +182,7 @@ def _utc_now() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Archive or restore non-winning variants")
+    parser.add_argument("--catalog", type=str, default=config.DEFAULT_CATALOG_ID, help="Catalog id from config/catalogs.json")
     parser.add_argument("--output-root", type=Path, default=config.OUTPUT_DIR)
     parser.add_argument("--selections", type=Path, default=DEFAULT_SELECTIONS_PATH)
     parser.add_argument("--archive-log", type=Path, default=DEFAULT_ARCHIVE_LOG_PATH)
@@ -198,21 +190,26 @@ def main() -> int:
     parser.add_argument("--operation-id", type=str, default=None)
 
     args = parser.parse_args()
+    catalog_id = str(getattr(args, "catalog", config.DEFAULT_CATALOG_ID) or config.DEFAULT_CATALOG_ID)
+    runtime = config.get_config(catalog_id)
+    output_root = args.output_root or runtime.output_dir
+    selections_path = args.selections or config.variant_selections_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    archive_log_path = args.archive_log or config.archive_log_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
 
     if args.undo:
         result = undo_archive(
-            output_root=args.output_root,
-            archive_log_path=args.archive_log,
+            output_root=output_root,
+            archive_log_path=archive_log_path,
             operation_id=args.operation_id,
         )
     else:
         result = archive_non_winners(
-            output_root=args.output_root,
-            selections_path=args.selections,
-            archive_log_path=args.archive_log,
+            output_root=output_root,
+            selections_path=selections_path,
+            archive_log_path=archive_log_path,
         )
 
-    print(json.dumps(result, indent=2))
+    logger.info("Archive command result: %s", json.dumps(result, ensure_ascii=False))
     return 0
 
 

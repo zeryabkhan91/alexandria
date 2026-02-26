@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/batch.css" />
+  <title>Alexandria Batch Generation</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a href="/review">Review</a>
+    <a class="active" href="/batch">Batch</a>
+    <a href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+    <div class="catalog"><span>Catalog</span><select id="catalogSelect"></select></div>
+  </nav>
+
+  <main>
+    <section class="card batch-card">
+      <h1>Batch Generation Control</h1>
+      <div id="pageStatus" class="status">Loading batch controls…</div>
+      <div class="recent-batches">
+        <label for="recentBatchSelect">Recent Batches</label>
+        <select id="recentBatchSelect"><option value="">No batch selected</option></select>
+        <button id="watchBatchBtn" class="secondary" type="button">Watch</button>
+      </div>
+    </section>
+
+    <section class="batch-main u-mt-12">
+      <div class="batch-column">
+        <article class="card batch-card">
+          <h2>1) Books</h2>
+          <div class="batch-toolbar u-mb-6">
+            <button id="selectAllBooksBtn" type="button">Select All</button>
+            <button id="selectUngeneratedBtn" class="secondary" type="button">Select Ungenerated</button>
+            <button id="selectBelowThresholdBtn" class="secondary" type="button">Select Below Threshold</button>
+            <button id="clearBooksBtn" class="ghost" type="button">Clear</button>
+          </div>
+          <div class="batch-field">
+            <label for="qualityThresholdInput">Quality threshold</label>
+            <input id="qualityThresholdInput" type="number" min="0" max="1" step="0.01" value="0.75" />
+          </div>
+          <div id="booksSummary" class="status u-mb-6">0 selected</div>
+          <div id="booksGrid" class="batch-grid"></div>
+        </article>
+
+        <article class="card batch-card">
+          <h2>2) Generation Settings</h2>
+          <div class="batch-field">
+            <label>Models</label>
+            <div class="batch-toolbar">
+              <button id="selectAllModelsBtn" type="button">Select All</button>
+              <button id="clearModelsBtn" class="ghost" type="button">Clear</button>
+            </div>
+            <div id="modelsBox" class="model-list"></div>
+          </div>
+          <div class="batch-field">
+            <label for="variantsInput">Variants Per Book</label>
+            <input id="variantsInput" type="number" min="1" max="20" step="1" value="5" />
+          </div>
+          <div class="batch-field">
+            <label for="promptSourceSelect">Prompt Source</label>
+            <select id="promptSourceSelect">
+              <option value="template">Template</option>
+              <option value="ai_generated">AI-Generated</option>
+              <option value="library">Library</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div class="batch-field">
+            <label for="budgetInput">Budget Limit (USD)</label>
+            <input id="budgetInput" type="number" min="0" step="0.01" value="25.00" />
+          </div>
+        </article>
+      </div>
+
+      <div class="batch-column">
+        <article class="card batch-card">
+          <h2>3) Run + Progress</h2>
+          <div class="batch-toolbar u-mb-6">
+            <button id="startBatchBtn" type="button">Start Batch</button>
+            <button id="pauseBatchBtn" class="secondary" type="button">Pause Batch</button>
+            <button id="resumeBatchBtn" class="secondary" type="button">Resume Batch</button>
+            <button id="cancelBatchBtn" class="ghost" type="button">Cancel Batch</button>
+            <button id="refreshStatusBtn" class="ghost" type="button">Refresh</button>
+          </div>
+          <div id="activeBatchLabel" class="status u-mb-6">No active batch selected.</div>
+          <div class="bar u-mb-6"><div id="progressBar" class="fill"></div></div>
+          <div class="progress-grid">
+            <div class="metric"><strong>Completed</strong><div id="metricCompleted">0 / 0</div></div>
+            <div class="metric"><strong>Status</strong><div id="metricStatus">idle</div></div>
+            <div class="metric"><strong>Cost</strong><div id="metricCost">$0.00</div></div>
+            <div class="metric"><strong>ETA</strong><div id="metricEta">n/a</div></div>
+            <div class="metric"><strong>Failures</strong><div id="metricFailed">0</div></div>
+            <div class="metric"><strong>Workers</strong><div id="metricWorkers">0 / 0</div></div>
+            <div class="metric"><strong>Avg Quality</strong><div id="metricQuality">0.000</div></div>
+            <div class="metric"><strong>Budget</strong><div id="metricBudget">$0.00</div></div>
+          </div>
+          <div id="batchSummaryText" class="status u-mt-10">Start a batch to see live results.</div>
+        </article>
+
+        <article class="card batch-card">
+          <h2>Per-Book Progress</h2>
+          <div id="booksStatusSummary" class="status u-mb-6">No data loaded.</div>
+          <div id="batchBooks" class="batch-books"></div>
+          <div class="batch-pagination">
+            <button id="prevPageBtn" class="secondary" type="button">Prev</button>
+            <span id="pageLabel" class="status">Page 1</span>
+            <button id="nextPageBtn" class="secondary" type="button">Next</button>
+          </div>
+        </article>
+
+        <article class="card batch-card">
+          <h2>Heartbeat</h2>
+          <div id="heartbeatStatus" class="status">No stream connected.</div>
+          <div class="heartbeat u-mt-8">
+            <div id="heartbeatLastEvent" class="status">Waiting for batch events…</div>
+            <ul id="heartbeatLog" class="heartbeat-log"></ul>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      catalog: "classics",
+      catalogs: [],
+      books: [],
+      reviewByBook: {},
+      models: [],
+      modelSelection: new Set(),
+      selectedBooks: new Set(),
+      activeBatchId: "",
+      activeSnapshot: null,
+      recentBatches: [],
+      pageLimit: 25,
+      pageOffset: 0,
+      eventSource: null,
+      pollTimer: null,
+      refreshTimer: null,
+      heartbeatLog: [],
+      maxGenerationVariants: 20,
+      defaultVariantsPerModel: 5,
+      bookGridPage: 0,
+      bookGridPageSize: 120,
+    };
+
+    function q(id) {
+      return document.getElementById(id);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function catalogQuery() {
+      return `catalog=${encodeURIComponent(state.catalog)}`;
+    }
+
+    async function fetchJson(url, options = {}) {
+      const response = await fetch(url, options);
+      const payload = await response.json().catch(() => ({}));
+      return { response, payload };
+    }
+
+    function setPageStatus(message) {
+      q("pageStatus").textContent = String(message || "");
+    }
+
+    function formatUsd(value) {
+      return `$${Number(value || 0).toFixed(2)}`;
+    }
+
+    function formatEta(seconds) {
+      const total = Number(seconds);
+      if (!Number.isFinite(total) || total < 0) return "n/a";
+      if (total <= 0) return "0m";
+      const hours = Math.floor(total / 3600);
+      const minutes = Math.ceil((total % 3600) / 60);
+      if (hours > 0) return `${hours}h ${minutes}m`;
+      return `${minutes}m`;
+    }
+
+    function statusPill(status) {
+      const token = String(status || "queued").toLowerCase();
+      return `<span class="status-pill ${escapeHtml(token)}">${escapeHtml(token)}</span>`;
+    }
+
+    function qualityPill(score) {
+      const value = Number(score || 0);
+      if (value >= 0.8) return `<span class="quality-pill good">${value.toFixed(3)}</span>`;
+      if (value > 0) return `<span class="quality-pill low">${value.toFixed(3)}</span>`;
+      return `<span class="quality-pill">n/a</span>`;
+    }
+
+    function selectedModels() {
+      return state.models.filter((model) => state.modelSelection.has(model));
+    }
+
+    function selectedBooks() {
+      return state.books
+        .map((row) => Number(row.number || 0))
+        .filter((number) => number > 0 && state.selectedBooks.has(number));
+    }
+
+    function bindEvents() {
+      q("catalogSelect").addEventListener("change", (event) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set("catalog", event.target.value);
+        window.location.href = url.toString();
+      });
+
+      q("selectAllBooksBtn").addEventListener("click", () => {
+        state.selectedBooks = new Set(state.books.map((row) => Number(row.number || 0)).filter((n) => n > 0));
+        state.bookGridPage = 0;
+        renderBooksGrid();
+      });
+      q("clearBooksBtn").addEventListener("click", () => {
+        state.selectedBooks.clear();
+        state.bookGridPage = 0;
+        renderBooksGrid();
+      });
+      q("selectUngeneratedBtn").addEventListener("click", () => {
+        state.selectedBooks.clear();
+        state.books.forEach((row) => {
+          const bookNumber = Number(row.number || 0);
+          const review = state.reviewByBook[bookNumber] || {};
+          const isProcessed = String(review.status || "").toLowerCase() === "processed";
+          if (!isProcessed) state.selectedBooks.add(bookNumber);
+        });
+        state.bookGridPage = 0;
+        renderBooksGrid();
+      });
+      q("selectBelowThresholdBtn").addEventListener("click", () => {
+        const threshold = Number(q("qualityThresholdInput").value || 0.75);
+        state.selectedBooks.clear();
+        state.books.forEach((row) => {
+          const bookNumber = Number(row.number || 0);
+          const review = state.reviewByBook[bookNumber] || {};
+          const score = Number(review.quality_score || 0);
+          if (score > 0 && score < threshold) state.selectedBooks.add(bookNumber);
+        });
+        state.bookGridPage = 0;
+        renderBooksGrid();
+      });
+
+      q("selectAllModelsBtn").addEventListener("click", () => {
+        state.modelSelection = new Set(state.models);
+        renderModels();
+      });
+      q("clearModelsBtn").addEventListener("click", () => {
+        state.modelSelection.clear();
+        renderModels();
+      });
+
+      q("startBatchBtn").addEventListener("click", startBatch);
+      q("pauseBatchBtn").addEventListener("click", () => triggerBatchAction("pause"));
+      q("resumeBatchBtn").addEventListener("click", () => triggerBatchAction("resume"));
+      q("cancelBatchBtn").addEventListener("click", () => triggerBatchAction("cancel"));
+      q("refreshStatusBtn").addEventListener("click", () => refreshBatchStatus({ force: true }));
+
+      q("prevPageBtn").addEventListener("click", () => {
+        if (state.pageOffset <= 0) return;
+        state.pageOffset = Math.max(0, state.pageOffset - state.pageLimit);
+        refreshBatchStatus({ force: true });
+      });
+      q("nextPageBtn").addEventListener("click", () => {
+        const pagination = (state.activeSnapshot && state.activeSnapshot.pagination) || {};
+        if (!pagination.has_more) return;
+        state.pageOffset += state.pageLimit;
+        refreshBatchStatus({ force: true });
+      });
+
+      q("watchBatchBtn").addEventListener("click", () => {
+        const batchId = String(q("recentBatchSelect").value || "").trim();
+        if (!batchId) return;
+        watchBatch(batchId);
+      });
+    }
+
+    async function loadCatalogs() {
+      const { response, payload } = await fetchJson("/api/catalogs");
+      if (!response.ok || !payload.catalogs) throw new Error(payload.error || payload.message || "Failed to load catalogs");
+      state.catalogs = payload.catalogs || [];
+      if (!state.catalog && payload.active_catalog) state.catalog = payload.active_catalog;
+      q("catalogSelect").innerHTML = state.catalogs
+        .map((row) => `<option value="${escapeHtml(row.id)}" ${row.id === state.catalog ? "selected" : ""}>${escapeHtml(row.name || row.id)}</option>`)
+        .join("");
+    }
+
+    async function loadBatchInputs() {
+      const iterateUrl = `/api/iterate-data?${catalogQuery()}&limit=5000&offset=0`;
+      const reviewUrl = `/api/review-data?${catalogQuery()}&limit=5000&offset=0`;
+      const [{ response: iterateRes, payload: iterate }, { response: reviewRes, payload: review }] = await Promise.all([
+        fetchJson(iterateUrl),
+        fetchJson(reviewUrl),
+      ]);
+      if (!iterateRes.ok) throw new Error(iterate.error || iterate.message || "Failed to load iterate data");
+      if (!reviewRes.ok) throw new Error(review.error || review.message || "Failed to load review data");
+
+      state.books = Array.isArray(iterate.books) ? iterate.books : [];
+      state.models = Array.isArray(iterate.models) ? iterate.models : [];
+      state.maxGenerationVariants = Math.max(1, Number(iterate.max_generation_variants || 20));
+      state.defaultVariantsPerModel = Math.max(1, Number(iterate.default_variants_per_model || 5));
+      if (!state.modelSelection.size) state.modelSelection = new Set(state.models);
+
+      const reviewByBook = {};
+      (Array.isArray(review.books) ? review.books : []).forEach((row) => {
+        const number = Number(row.number || 0);
+        if (number > 0) reviewByBook[number] = row;
+      });
+      state.reviewByBook = reviewByBook;
+
+      if (!state.selectedBooks.size) {
+        state.books.forEach((row) => {
+          const number = Number(row.number || 0);
+          if (number > 0) state.selectedBooks.add(number);
+        });
+      }
+      const variantsInput = q("variantsInput");
+      variantsInput.max = String(state.maxGenerationVariants);
+      variantsInput.value = String(Math.min(state.maxGenerationVariants, state.defaultVariantsPerModel));
+      renderModels();
+      renderBooksGrid();
+    }
+
+    function renderModels() {
+      const node = q("modelsBox");
+      if (!state.models.length) {
+        node.innerHTML = "<em>No models available.</em>";
+        return;
+      }
+      node.innerHTML = state.models
+        .map((model) => {
+          const checked = state.modelSelection.has(model) ? "checked" : "";
+          return `<label><input type="checkbox" value="${escapeHtml(model)}" ${checked} /> ${escapeHtml(model)}</label>`;
+        })
+        .join("");
+      node.querySelectorAll("input[type='checkbox']").forEach((input) => {
+        input.addEventListener("change", () => {
+          if (input.checked) state.modelSelection.add(input.value);
+          else state.modelSelection.delete(input.value);
+        });
+      });
+    }
+
+    function renderBooksGrid() {
+      const node = q("booksGrid");
+      if (!state.books.length) {
+        node.innerHTML = "<div class='empty-state'>No books found in selected catalog.</div>";
+        q("booksSummary").textContent = "0 selected";
+        return;
+      }
+      const total = state.books.length;
+      const pageSize = Math.max(25, Number(state.bookGridPageSize || 120));
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      state.bookGridPage = Math.max(0, Math.min(state.bookGridPage, totalPages - 1));
+      const start = state.bookGridPage * pageSize;
+      const pageRows = state.books.slice(start, start + pageSize);
+
+      node.innerHTML = `
+        <div class="batch-toolbar u-mb-6">
+          <button id="booksPagePrevBtn" class="secondary" type="button" ${state.bookGridPage <= 0 ? "disabled" : ""}>Prev</button>
+          <span class="status">Books page ${state.bookGridPage + 1}/${totalPages} • showing ${pageRows.length} of ${total}</span>
+          <button id="booksPageNextBtn" class="secondary" type="button" ${state.bookGridPage >= totalPages - 1 ? "disabled" : ""}>Next</button>
+        </div>
+        <ul>${pageRows
+        .map((row) => {
+          const number = Number(row.number || 0);
+          const title = String(row.title || `Book ${number}`);
+          const review = state.reviewByBook[number] || {};
+          const score = Number(review.quality_score || 0);
+          const checked = state.selectedBooks.has(number) ? "checked" : "";
+          return `
+            <li>
+              <label>
+                <input type="checkbox" data-book="${number}" ${checked} />
+                <span>${escapeHtml(`${number}. ${title}`)}</span>
+              </label>
+              ${qualityPill(score)}
+            </li>
+          `;
+        })
+        .join("")}</ul>`;
+      const prevBtn = q("booksPagePrevBtn");
+      const nextBtn = q("booksPageNextBtn");
+      if (prevBtn) {
+        prevBtn.addEventListener("click", () => {
+          if (state.bookGridPage <= 0) return;
+          state.bookGridPage -= 1;
+          renderBooksGrid();
+        });
+      }
+      if (nextBtn) {
+        nextBtn.addEventListener("click", () => {
+          if (state.bookGridPage >= totalPages - 1) return;
+          state.bookGridPage += 1;
+          renderBooksGrid();
+        });
+      }
+      node.querySelectorAll("input[data-book]").forEach((input) => {
+        input.addEventListener("change", () => {
+          const number = Number(input.dataset.book || 0);
+          if (number <= 0) return;
+          if (input.checked) state.selectedBooks.add(number);
+          else state.selectedBooks.delete(number);
+          q("booksSummary").textContent = `${selectedBooks().length} selected`;
+        });
+      });
+      q("booksSummary").textContent = `${selectedBooks().length} selected`;
+    }
+
+    async function loadRecentBatches() {
+      const { response, payload } = await fetchJson(`/api/batch-generate?${catalogQuery()}&limit=40&offset=0`);
+      if (!response.ok || !payload.ok) return;
+      state.recentBatches = Array.isArray(payload.batches) ? payload.batches : [];
+      const select = q("recentBatchSelect");
+      select.innerHTML = ["<option value=''>Select a batch…</option>"]
+        .concat(
+          state.recentBatches.map((row) => {
+            const label = `${row.batchId} • ${row.status} • ${row.books_completed || 0}/${row.books_total || 0}`;
+            return `<option value="${escapeHtml(row.batchId)}">${escapeHtml(label)}</option>`;
+          }),
+        )
+        .join("");
+      if (state.activeBatchId) select.value = state.activeBatchId;
+    }
+
+    async function startBatch() {
+      const books = selectedBooks();
+      const models = selectedModels();
+      if (!books.length) {
+        setPageStatus("Select at least one book.");
+        return;
+      }
+      if (!models.length) {
+        setPageStatus("Select at least one model.");
+        return;
+      }
+      const variants = Number(q("variantsInput").value || state.defaultVariantsPerModel);
+      if (variants <= 0 || variants > state.maxGenerationVariants) {
+        setPageStatus(`Variants must be between 1 and ${state.maxGenerationVariants}.`);
+        return;
+      }
+      setPageStatus(`Queuing ${books.length} books...`);
+      const payload = {
+        catalog: state.catalog,
+        books,
+        models,
+        variants,
+        promptSource: q("promptSourceSelect").value || "template",
+        budgetUsd: Number(q("budgetInput").value || 0),
+      };
+      const { response, payload: body } = await fetchJson(`/api/batch-generate?${catalogQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok || !body.ok) {
+        setPageStatus(body.message || body.error_message || body.error || "Batch start failed.");
+        return;
+      }
+      state.activeBatchId = String(body.batchId || "");
+      state.pageOffset = 0;
+      setPageStatus(`Batch ${state.activeBatchId} queued (${body.booksQueued || books.length} books).`);
+      await loadRecentBatches();
+      watchBatch(state.activeBatchId);
+    }
+
+    async function triggerBatchAction(action) {
+      if (!state.activeBatchId) {
+        setPageStatus("Choose or start a batch first.");
+        return;
+      }
+      const endpoint = `/api/batch-generate/${encodeURIComponent(state.activeBatchId)}/${action}?${catalogQuery()}`;
+      const { response, payload } = await fetchJson(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: `${action} from /batch page` }),
+      });
+      if (!response.ok || !payload.ok) {
+        setPageStatus(payload.message || payload.error_message || payload.error || `Batch ${action} failed.`);
+        return;
+      }
+      setPageStatus(`Batch ${action} applied (${payload.jobs_touched || 0} jobs touched).`);
+      await refreshBatchStatus({ force: true });
+    }
+
+    function addHeartbeat(eventName, payload) {
+      const stamp = new Date().toLocaleTimeString();
+      const text = summarizeEvent(eventName, payload);
+      state.heartbeatLog.unshift(`${stamp} • ${text}`);
+      state.heartbeatLog = state.heartbeatLog.slice(0, 80);
+      q("heartbeatLastEvent").textContent = `${eventName}: ${text}`;
+      q("heartbeatLog").innerHTML = state.heartbeatLog.map((line) => `<li>${escapeHtml(line)}</li>`).join("");
+    }
+
+    function summarizeEvent(eventName, payload) {
+      const data = payload || {};
+      if (eventName === "batch_progress") {
+        return `${Number(data.completed || 0)}/${Number(data.total || 0)} complete • ${formatUsd(data.costSoFar || 0)} spent`;
+      }
+      if (eventName === "book_complete") {
+        return `Book ${Number(data.book || 0)} complete • q ${Number(data.qualityScore || 0).toFixed(3)} • ${formatUsd(data.cost || 0)}`;
+      }
+      if (eventName === "book_failed") {
+        return `Book ${Number(data.book || 0)} failed • ${String(data.error || "unknown error")}`;
+      }
+      if (eventName === "batch_complete") {
+        return `Batch complete • ${Number(data.completed || 0)}/${Number(data.total || 0)} succeeded • ${formatUsd(data.totalCost || 0)}`;
+      }
+      if (eventName === "batch_paused") {
+        return `Batch paused • ${String(data.reason || "")}`;
+      }
+      if (eventName === "batch_started") {
+        return `Batch started • ${Number(data.books_total || 0)} books`;
+      }
+      return JSON.stringify(data);
+    }
+
+    function scheduleRefresh() {
+      if (state.refreshTimer) return;
+      state.refreshTimer = window.setTimeout(async () => {
+        state.refreshTimer = null;
+        await refreshBatchStatus({ force: true });
+      }, 500);
+    }
+
+    function connectBatchEvents(batchId) {
+      if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
+      }
+      const url = `/api/events/batch/${encodeURIComponent(batchId)}?${catalogQuery()}`;
+      const source = new EventSource(url);
+      state.eventSource = source;
+      q("heartbeatStatus").textContent = `Connected to ${url}`;
+      source.addEventListener("open", () => {
+        q("heartbeatStatus").textContent = "SSE stream connected.";
+      });
+      [
+        "ready",
+        "batch_started",
+        "batch_progress",
+        "book_complete",
+        "book_failed",
+        "batch_paused",
+        "batch_pause",
+        "batch_resume",
+        "batch_cancel",
+        "batch_complete",
+      ].forEach((eventName) => {
+        source.addEventListener(eventName, (event) => {
+          let payload = {};
+          try {
+            payload = JSON.parse(event.data || "{}");
+          } catch (_) {
+            payload = {};
+          }
+          addHeartbeat(eventName, payload);
+          scheduleRefresh();
+        });
+      });
+      source.addEventListener("error", () => {
+        q("heartbeatStatus").textContent = "SSE stream disconnected. Using polling fallback.";
+      });
+    }
+
+    function startPolling() {
+      if (state.pollTimer) window.clearInterval(state.pollTimer);
+      state.pollTimer = window.setInterval(() => {
+        refreshBatchStatus({ force: false });
+      }, 4000);
+    }
+
+    async function watchBatch(batchId) {
+      state.activeBatchId = String(batchId || "").trim();
+      state.pageOffset = 0;
+      if (!state.activeBatchId) return;
+      q("activeBatchLabel").textContent = `Watching batch ${state.activeBatchId}`;
+      const select = q("recentBatchSelect");
+      if (select) select.value = state.activeBatchId;
+      connectBatchEvents(state.activeBatchId);
+      startPolling();
+      await refreshBatchStatus({ force: true });
+      const url = new URL(window.location.href);
+      url.searchParams.set("batchId", state.activeBatchId);
+      history.replaceState({}, "", url.toString());
+    }
+
+    async function refreshBatchStatus({ force = false } = {}) {
+      if (!state.activeBatchId) return;
+      const statusUrl = `/api/batch-generate/${encodeURIComponent(state.activeBatchId)}/status?${catalogQuery()}&limit=${state.pageLimit}&offset=${state.pageOffset}`;
+      const { response, payload } = await fetchJson(statusUrl);
+      if (!response.ok || !payload.ok) {
+        if (force) setPageStatus(payload.message || payload.error_message || payload.error || "Failed to load batch status.");
+        return;
+      }
+      state.activeSnapshot = payload;
+      renderBatchSnapshot(payload);
+      const status = String(payload.status || "").toLowerCase();
+      if (status === "completed" || status === "cancelled") {
+        if (state.pollTimer) {
+          window.clearInterval(state.pollTimer);
+          state.pollTimer = null;
+        }
+      }
+    }
+
+    function renderBatchSnapshot(snapshot) {
+      const summary = snapshot.summary || {};
+      const progress = snapshot.progress || {};
+      const budget = snapshot.cost || {};
+      const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+      q("progressBar").style.width = `${percent}%`;
+      q("metricCompleted").textContent = `${Number(progress.completed || 0)} / ${Number(progress.total || 0)}`;
+      q("metricStatus").innerHTML = statusPill(snapshot.status || "queued");
+      q("metricCost").textContent = formatUsd(budget.so_far_usd || 0);
+      q("metricEta").textContent = formatEta(snapshot.eta_seconds);
+      q("metricFailed").textContent = `${Number(progress.failed || 0) + Number(progress.cancelled || 0)}`;
+      q("metricWorkers").textContent = `${Number((snapshot.workers || {}).active || 0)} / ${Number((snapshot.workers || {}).configured || 0)}`;
+      q("metricQuality").textContent = Number(summary.average_quality_score || 0).toFixed(3);
+      q("metricBudget").textContent = formatUsd(budget.budget_usd || 0);
+      q("batchSummaryText").textContent = `Progress: ${Number(progress.completed || 0)} complete, ${Number(progress.remaining || 0)} remaining. Review winners at ${snapshot.review_url || "/review"}.`;
+      q("activeBatchLabel").textContent = `Batch ${snapshot.batchId} (${snapshot.status})`;
+
+      const books = Array.isArray(snapshot.books) ? snapshot.books : [];
+      const pagination = snapshot.pagination || {};
+      q("booksStatusSummary").textContent = `${books.length} book cards shown • total ${Number(pagination.total || books.length)}`;
+      q("pageLabel").textContent = `Page ${Math.floor(Number(pagination.offset || 0) / Math.max(1, Number(pagination.limit || 25))) + 1}`;
+      q("prevPageBtn").disabled = Number(pagination.offset || 0) <= 0;
+      q("nextPageBtn").disabled = !Boolean(pagination.has_more);
+
+      if (!books.length) {
+        q("batchBooks").innerHTML = "<div class='empty-state'>No batch books on this page.</div>";
+      } else {
+        q("batchBooks").innerHTML = books
+          .map((row) => {
+            const thumb = row.thumbnail_url
+              ? `<img class="batch-book-thumb" src="${escapeHtml(row.thumbnail_url)}" alt="Book ${Number(row.book_number || 0)} thumbnail" />`
+              : `<div class="batch-book-thumb skeleton"></div>`;
+            return `
+              <article class="batch-book-card">
+                ${thumb}
+                <div class="batch-book-meta">
+                  <div class="batch-book-title">${escapeHtml(`${Number(row.book_number || 0)}. ${row.title || ""}`)}</div>
+                  <div class="batch-book-sub">Cost ${formatUsd(row.cost_usd || 0)} • Quality ${Number(row.quality_score || 0).toFixed(3)} • Variants ${Number(row.variants_generated || 0)}</div>
+                  <div class="batch-book-sub">${escapeHtml(String(row.error || ""))}</div>
+                </div>
+                <div>${statusPill(row.status || "queued")}</div>
+              </article>
+            `;
+          })
+          .join("");
+      }
+    }
+
+    async function init() {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("catalog")) state.catalog = params.get("catalog");
+        await loadCatalogs();
+        bindEvents();
+        await loadBatchInputs();
+        await loadRecentBatches();
+        const initialBatch = String(params.get("batchId") || "").trim();
+        if (initialBatch) {
+          await watchBatch(initialBatch);
+        } else {
+          setPageStatus("Ready. Select books/models and click Start Batch.");
+        }
+      } catch (error) {
+        setPageStatus(`Failed to initialize batch page: ${error && error.message ? error.message : String(error)}`);
+      }
+    }
+
+    window.addEventListener("beforeunload", () => {
+      if (state.eventSource) state.eventSource.close();
+      if (state.pollTimer) window.clearInterval(state.pollTimer);
+      if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
+    });
+
+    init();
+  </script>
+  <script src="/src/static/navbar.js"></script>
+</body>
+</html>

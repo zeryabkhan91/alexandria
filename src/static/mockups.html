@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/mockups.css" />
+<title>Alexandria Mockups</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a href="/review">Review</a>
+    <a href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/similarity">Similarity</a>
+    <a class="active" href="/mockups">Mockups</a>
+    <a href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+    <div class="catalog">
+      <span class="status">Catalog</span>
+      <select id="catalogSelect"></select>
+    </div>
+  </nav>
+
+  <main>
+    <section class="card">
+      <h1>3D Mockups + Marketing</h1>
+      <div class="toolbar">
+        <label>
+          Book
+          <select id="bookSelect"></select>
+        </label>
+        <label>
+          Social formats
+          <input id="socialFormats" type="text" value="instagram,facebook,twitter,story,pinterest" />
+        </label>
+        <button id="generateBookBtn">Generate All Mockups for This Book</button>
+        <button id="generateAmazonBtn" class="secondary">Generate Amazon Set</button>
+        <button id="generateSocialBtn" class="secondary">Generate Social Media Set</button>
+        <button id="downloadZipBtn" class="ghost">Download All as ZIP</button>
+        <span class="spacer"></span>
+        <button id="generateAllBtn">Generate All Mockups for All Books</button>
+      </div>
+      <div id="statusLine" class="status u-mt-8">Loading mockup status...</div>
+      <div class="progress-wrap">
+        <div class="bar"><div id="progressFill" class="fill"></div></div>
+        <div id="progressMeta" class="status u-mt-6">Progress: 0%</div>
+      </div>
+
+      <div class="metrics">
+        <div class="metric"><div class="status">Templates</div><strong id="metricTemplates">0</strong></div>
+        <div class="metric"><div class="status">Books complete</div><strong id="metricComplete">0</strong></div>
+        <div class="metric"><div class="status">Books total</div><strong id="metricTotal">0</strong></div>
+        <div class="metric"><div class="status">Selected book generated</div><strong id="metricSelected">0</strong></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Template Gallery</h2>
+      <div id="templateGrid" class="templates"></div>
+    </section>
+  </main>
+
+  <div id="previewModal"><img id="previewImage" alt="Mockup preview" /></div>
+
+  <script>
+    const state = {
+      catalog: 'classics',
+      catalogs: [],
+      status: null,
+      books: [],
+      selectedBook: null,
+      templates: [],
+      pollHandle: null,
+      busyMode: null,
+    };
+
+    function q(id) { return document.getElementById(id); }
+    function catalogQuery() { return `catalog=${encodeURIComponent(state.catalog)}`; }
+
+    async function init() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('catalog')) state.catalog = params.get('catalog');
+      await loadCatalogs();
+      bind();
+      await refreshStatus();
+    }
+
+    function bind() {
+      q('catalogSelect').addEventListener('change', (event) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('catalog', event.target.value);
+        window.location.href = url.toString();
+      });
+      q('bookSelect').addEventListener('change', () => {
+        state.selectedBook = Number(q('bookSelect').value || 0);
+        renderTemplates();
+      });
+
+      q('generateBookBtn').addEventListener('click', () => generateAllForBook(false));
+      q('generateAllBtn').addEventListener('click', () => generateAllForBook(true));
+      q('generateAmazonBtn').addEventListener('click', generateAmazonSet);
+      q('generateSocialBtn').addEventListener('click', generateSocialSet);
+      q('downloadZipBtn').addEventListener('click', downloadZip);
+
+      q('previewModal').addEventListener('click', () => {
+        q('previewModal').style.display = 'none';
+      });
+    }
+
+    async function loadCatalogs() {
+      const res = await fetch('/api/catalogs');
+      const payload = await res.json();
+      state.catalogs = payload.catalogs || [];
+      if (!state.catalog && payload.active_catalog) state.catalog = payload.active_catalog;
+      q('catalogSelect').innerHTML = state.catalogs
+        .map(c => `<option value="${escapeHtml(c.id)}" ${c.id===state.catalog?'selected':''}>${escapeHtml(c.name || c.id)}</option>`)
+        .join('');
+    }
+
+    async function refreshStatus(options = {}) {
+      const silent = Boolean(options.silent);
+      if (!silent) setStatus('Loading mockup status...');
+      const res = await fetch(`/api/mockup-status?${catalogQuery()}`);
+      const payload = await res.json();
+      state.status = payload;
+      state.templates = payload.templates || [];
+      state.books = payload.books || [];
+
+      if (!state.selectedBook || !state.books.some(b => Number(b.book) === Number(state.selectedBook))) {
+        state.selectedBook = state.books.length ? Number(state.books[0].book) : null;
+      }
+
+      q('bookSelect').innerHTML = state.books
+        .map(row => `<option value="${row.book}" ${Number(row.book)===Number(state.selectedBook)?'selected':''}>${row.book}. ${escapeHtml(row.title)}</option>`)
+        .join('');
+
+      q('metricTemplates').textContent = String(state.templates.length || 0);
+      q('metricComplete').textContent = String(payload.complete_books || 0);
+      q('metricTotal').textContent = String(payload.total_books || 0);
+
+      const selected = selectedBookRow();
+      q('metricSelected').textContent = selected ? `${selected.generated}/${state.templates.length}` : '0';
+      updateProgressFromStatus(state.busyMode);
+
+      if (!silent) {
+        setStatus(`Loaded ${payload.total_books || 0} books. ${payload.complete_books || 0} books already have all templates.`);
+      }
+      renderTemplates();
+    }
+
+    function selectedBookRow() {
+      return state.books.find(row => Number(row.book) === Number(state.selectedBook)) || null;
+    }
+
+    function renderTemplates() {
+      const row = selectedBookRow();
+      if (!row) {
+        q('templateGrid').innerHTML = '<div class="status">No books available.</div>';
+        return;
+      }
+
+      const missing = new Set(row.missing || []);
+      q('templateGrid').innerHTML = state.templates.map(templateId => {
+        const has = !missing.has(templateId);
+        const imageUrl = has ? `/api/mockup/${row.book}/${encodeURIComponent(templateId)}?${catalogQuery()}` : '';
+        const title = pretty(templateId);
+        const statePill = has ? '<span class="pill ok">Generated</span>' : '<span class="pill missing">Missing</span>';
+        return `
+          <article class="template" data-template="${escapeHtml(templateId)}">
+            <h3>${escapeHtml(title)}</h3>
+            <div class="meta">Template: ${escapeHtml(templateId)} · ${statePill}</div>
+            ${has ? `<img src="${escapeHtml(imageUrl)}" data-preview="${escapeHtml(imageUrl)}" alt="${escapeHtml(title)}" />` : '<img alt="Missing mockup" src="data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"800\"><rect width=\"100%\" height=\"100%\" fill=\"%2316233d\"/><text x=\"50%\" y=\"50%\" dominant-baseline=\"middle\" text-anchor=\"middle\" font-size=\"28\" fill=\"%23c4a352\">Not generated</text></svg>" />'}
+            <div class="controls">
+              <button class="gen-one">${has ? 'Regenerate' : 'Generate'}</button>
+              ${has ? '<button class="ghost preview-one">Preview</button>' : ''}
+              ${has ? `<a class="button-link" href="${escapeHtml(imageUrl)}" download target="_blank" rel="noopener">Download</a>` : ''}
+            </div>
+          </article>
+        `;
+      }).join('');
+
+      q('templateGrid').querySelectorAll('.gen-one').forEach((button) => {
+        button.addEventListener('click', async (event) => {
+          const card = event.target.closest('.template');
+          if (!card) return;
+          const template = card.dataset.template;
+          await generateOneTemplate(template);
+        });
+      });
+
+      q('templateGrid').querySelectorAll('.preview-one').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          const card = event.target.closest('.template');
+          if (!card) return;
+          const image = card.querySelector('img[data-preview]');
+          if (!image) return;
+          openPreview(image.dataset.preview);
+        });
+      });
+
+      q('templateGrid').querySelectorAll('img[data-preview]').forEach((img) => {
+        img.addEventListener('click', () => openPreview(img.dataset.preview));
+      });
+    }
+
+    function openPreview(src) {
+      if (!src) return;
+      q('previewImage').src = src;
+      q('previewModal').style.display = 'flex';
+    }
+
+    async function generateOneTemplate(template) {
+      if (!state.selectedBook) return;
+      setStatus(`Generating ${template} for book ${state.selectedBook}...`);
+      disableButtons(true);
+      startProgressPolling('single_template');
+      try {
+        const res = await fetch(`/api/generate-mockup?${catalogQuery()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ catalog: state.catalog, book: state.selectedBook, template }),
+        });
+        const payload = await res.json();
+        if (!payload.ok) throw new Error(payload.error || 'Mockup generation failed');
+        setStatus(`Generated ${template} for book ${state.selectedBook}.`);
+      } catch (err) {
+        setStatus(`Error: ${err.message}`);
+      } finally {
+        stopProgressPolling();
+        disableButtons(false);
+        await refreshStatus({ silent: true });
+      }
+    }
+
+    async function generateAllForBook(allBooks) {
+      if (!allBooks && !state.selectedBook) return;
+      if (allBooks) {
+        const ok = window.confirm('Generate all templates for all books? This can take a while.');
+        if (!ok) return;
+      }
+      setStatus(allBooks ? 'Generating all mockups for all books...' : `Generating all mockups for book ${state.selectedBook}...`);
+      disableButtons(true);
+      startProgressPolling(allBooks ? 'all_books' : 'single_book');
+      try {
+        const body = allBooks
+          ? { catalog: state.catalog, all_books: true }
+          : { catalog: state.catalog, book: state.selectedBook };
+        const res = await fetch(`/api/generate-all-mockups?${catalogQuery()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const payload = await res.json();
+        if (!payload.ok) throw new Error(payload.error || 'Batch generation failed');
+        setStatus(`Generated ${payload.generated || 0} mockups (${payload.failed || 0} failed).`);
+      } catch (err) {
+        setStatus(`Error: ${err.message}`);
+      } finally {
+        stopProgressPolling();
+        disableButtons(false);
+        await refreshStatus({ silent: true });
+      }
+    }
+
+    async function generateAmazonSet() {
+      if (!state.selectedBook) return;
+      setStatus(`Generating Amazon set for book ${state.selectedBook}...`);
+      disableButtons(true);
+      try {
+        const res = await fetch(`/api/generate-amazon-set?${catalogQuery()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ catalog: state.catalog, book: state.selectedBook }),
+        });
+        const payload = await res.json();
+        if (!payload.ok) throw new Error(payload.error || 'Amazon set generation failed');
+        setStatus(`Amazon set generated for ${payload.books || 1} book(s).`);
+      } catch (err) {
+        setStatus(`Error: ${err.message}`);
+      } finally {
+        disableButtons(false);
+      }
+    }
+
+    async function generateSocialSet() {
+      if (!state.selectedBook) return;
+      const formats = (q('socialFormats').value || '')
+        .split(',')
+        .map(token => token.trim().toLowerCase())
+        .filter(Boolean);
+      if (!formats.length) {
+        setStatus('Enter at least one social format.');
+        return;
+      }
+
+      setStatus(`Generating social cards for book ${state.selectedBook}...`);
+      disableButtons(true);
+      try {
+        const res = await fetch(`/api/generate-social-cards?${catalogQuery()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ catalog: state.catalog, book: state.selectedBook, formats }),
+        });
+        const payload = await res.json();
+        if (!payload.ok) throw new Error(payload.error || 'Social card generation failed');
+        setStatus(`Generated social cards in formats: ${(payload.formats || formats).join(', ')}.`);
+      } catch (err) {
+        setStatus(`Error: ${err.message}`);
+      } finally {
+        disableButtons(false);
+      }
+    }
+
+    async function downloadZip() {
+      if (!state.selectedBook) return;
+      setStatus(`Preparing ZIP for book ${state.selectedBook}...`);
+      try {
+        const res = await fetch(`/api/mockup-zip?book=${encodeURIComponent(state.selectedBook)}&${catalogQuery()}`);
+        const payload = await res.json();
+        if (!payload.ok || !payload.url) throw new Error(payload.error || 'ZIP unavailable');
+        window.open(payload.url, '_blank');
+        setStatus(`ZIP ready for book ${state.selectedBook}.`);
+      } catch (err) {
+        setStatus(`Error: ${err.message}`);
+      }
+    }
+
+    function startProgressPolling(mode) {
+      state.busyMode = mode;
+      stopProgressPolling(false);
+      state.pollHandle = window.setInterval(() => {
+        refreshStatus({ silent: true }).catch(() => {});
+      }, 2000);
+    }
+
+    function stopProgressPolling(clearMode = true) {
+      if (state.pollHandle) {
+        window.clearInterval(state.pollHandle);
+        state.pollHandle = null;
+      }
+      if (clearMode) state.busyMode = null;
+    }
+
+    function updateProgressFromStatus(mode) {
+      const payload = state.status || {};
+      const totalBooks = Number(payload.total_books || 0);
+      const completeBooks = Number(payload.complete_books || 0);
+      const selected = selectedBookRow();
+      const templateTotal = Number(state.templates.length || 0);
+      const selectedGenerated = Number(selected ? selected.generated : 0);
+
+      if (mode === 'all_books') {
+        setProgress(completeBooks, totalBooks, `All books: ${completeBooks}/${totalBooks} complete`);
+        return;
+      }
+      if (mode === 'single_book' || mode === 'single_template') {
+        setProgress(selectedGenerated, templateTotal, `Book ${state.selectedBook || '-'}: ${selectedGenerated}/${templateTotal} templates`);
+        return;
+      }
+      setProgress(selectedGenerated, templateTotal, `Selected book: ${selectedGenerated}/${templateTotal} templates`);
+    }
+
+    function setProgress(current, total, label) {
+      const safeTotal = Math.max(0, Number(total || 0));
+      const safeCurrent = Math.max(0, Number(current || 0));
+      const pct = safeTotal > 0 ? Math.min(100, (safeCurrent / safeTotal) * 100) : 0;
+      q('progressFill').style.width = `${pct.toFixed(1)}%`;
+      q('progressMeta').textContent = `${label} (${pct.toFixed(1)}%)`;
+    }
+
+    function disableButtons(disabled) {
+      ['generateBookBtn','generateAllBtn','generateAmazonBtn','generateSocialBtn','downloadZipBtn']
+        .forEach(id => { q(id).disabled = disabled; });
+    }
+
+    function setStatus(text) {
+      q('statusLine').textContent = text;
+    }
+
+    function pretty(token) {
+      return String(token || '')
+        .split('_')
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ');
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    init();
+  </script>
+  <script src="/src/static/navbar.js"></script>
+</body>
+</html>

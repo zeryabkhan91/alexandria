@@ -1,0 +1,27 @@
+{
+  "desk_scene": {
+    "prompt": "professional product photography, dark walnut wood desk surface, reading glasses, porcelain coffee cup with saucer, warm brass desk lamp illuminating from the left, slight depth of field, cozy study atmosphere, no books, empty desk center for product placement, 4K, clean composition",
+    "negative": "text, watermark, person, hand, book, magazine",
+    "size": "1600x1200"
+  },
+  "bookshelf": {
+    "prompt": "wooden bookshelf close-up, warm library lighting, slightly blurred colorful book spines in background, one empty slot in center pulled forward, oak shelf, natural light from window, cozy reading room, 4K",
+    "negative": "text, watermark, person, hand, clear book titles",
+    "size": "1600x1200"
+  },
+  "reading_chair": {
+    "prompt": "brown leather Chesterfield armchair arm close-up, warm ambient lighting, living room setting, soft natural window light, empty armrest surface for product placement, shallow depth of field, elegant home interior, 4K",
+    "negative": "text, watermark, person, hand, book",
+    "size": "1600x1200"
+  },
+  "window_light": {
+    "prompt": "window sill in a cozy study, warm afternoon golden light streaming through sheer white curtains, empty sill surface for product placement, slight dust particles in light beams, potted plant in background, 4K",
+    "negative": "text, watermark, person, hand, book",
+    "size": "1600x1200"
+  },
+  "library_table": {
+    "prompt": "grand library reading table, dark green leather writing surface with gold tooled border, brass banker's lamp, mahogany table, empty center for product placement, classical library interior, warm lighting, 4K",
+    "negative": "text, watermark, person, hand, book, paper",
+    "size": "1600x1200"
+  }
+}

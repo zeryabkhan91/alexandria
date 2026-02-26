@@ -1,5 +1,6 @@
 {
-  "template_name": "alexandria-cover-v1",
+  "template_name": "navy_gold_medallion",
+  "region_type": "circle",
   "cover_size": {
     "width": 3784,
     "height": 2777,
@@ -15,7 +16,11 @@
       3459,
       2215
     ],
-    "confidence": 0.0
+    "confidence": 0.9617042401842647,
+    "region_type": "circle",
+    "rect_bbox": null,
+    "template_id": "navy_gold_medallion",
+    "compositing": "raster_first"
   },
   "cover_count": 99,
   "outlier_count": 0,
@@ -34,6 +39,10 @@
         2215
       ],
       "confidence": 0.9617042401842647,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -50,6 +59,10 @@
         2215
       ],
       "confidence": 0.9572565450927208,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -66,6 +79,10 @@
         2215
       ],
       "confidence": 0.9709172756495145,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -82,6 +99,10 @@
         2215
       ],
       "confidence": 0.9613536375699101,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -98,6 +119,10 @@
         2215
       ],
       "confidence": 0.9681305158074838,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -114,6 +139,10 @@
         2215
       ],
       "confidence": 0.9703134936076634,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -130,6 +159,10 @@
         2215
       ],
       "confidence": 0.9751577132069531,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -146,6 +179,10 @@
         2215
       ],
       "confidence": 0.9725029445933816,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -162,6 +199,10 @@
         2215
       ],
       "confidence": 0.9663512558028996,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -178,6 +219,10 @@
         2215
       ],
       "confidence": 0.9634631611997594,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -194,6 +239,10 @@
         2215
       ],
       "confidence": 0.9658018886552527,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -210,6 +259,10 @@
         2215
       ],
       "confidence": 0.9552220786350117,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -226,6 +279,10 @@
         2215
       ],
       "confidence": 0.9755506444330329,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -242,6 +299,10 @@
         2215
       ],
       "confidence": 0.9707074147228621,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -258,6 +319,10 @@
         2215
       ],
       "confidence": 0.9647591387619227,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -274,6 +339,10 @@
         2215
       ],
       "confidence": 0.9523033848932391,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -290,6 +359,10 @@
         2215
       ],
       "confidence": 0.9662533754415028,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -306,6 +379,10 @@
         2215
       ],
       "confidence": 0.9695342468511193,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -322,6 +399,10 @@
         2215
       ],
       "confidence": 0.9351979938005529,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -338,6 +419,10 @@
         2215
       ],
       "confidence": 0.9714322125171494,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -354,6 +439,10 @@
         2215
       ],
       "confidence": 0.963349216943502,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -370,6 +459,10 @@
         2215
       ],
       "confidence": 0.9549293778729624,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -386,6 +479,10 @@
         2215
       ],
       "confidence": 0.9779102010985036,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -402,6 +499,10 @@
         2215
       ],
       "confidence": 0.9692422182977479,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -418,6 +519,10 @@
         2215
       ],
       "confidence": 0.96847191663004,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -434,6 +539,10 @@
         2215
       ],
       "confidence": 0.9718996441908196,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -450,6 +559,10 @@
         2215
       ],
       "confidence": 0.9668872778510178,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -466,6 +579,10 @@
         2215
       ],
       "confidence": 0.965661278693001,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -482,6 +599,10 @@
         2215
       ],
       "confidence": 0.9707385622474317,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -498,6 +619,10 @@
         2215
       ],
       "confidence": 0.965777329139846,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -514,6 +639,10 @@
         2215
       ],
       "confidence": 0.9706476454131943,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -530,6 +659,10 @@
         2215
       ],
       "confidence": 0.9537753422934673,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -546,6 +679,10 @@
         2215
       ],
       "confidence": 0.9495600223546155,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -562,6 +699,10 @@
         2215
       ],
       "confidence": 0.9664650863018257,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -578,6 +719,10 @@
         2215
       ],
       "confidence": 0.9574684932350852,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -594,6 +739,10 @@
         2215
       ],
       "confidence": 0.9642483217195017,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -610,6 +759,10 @@
         2215
       ],
       "confidence": 0.9490639717676819,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -626,6 +779,10 @@
         2215
       ],
       "confidence": 0.9641866333674999,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -642,6 +799,10 @@
         2215
       ],
       "confidence": 0.9702573358478147,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -658,6 +819,10 @@
         2215
       ],
       "confidence": 0.9714840802615855,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -674,6 +839,10 @@
         2215
       ],
       "confidence": 0.9639845800588251,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -690,6 +859,10 @@
         2215
       ],
       "confidence": 0.9702544175676123,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -706,6 +879,10 @@
         2215
       ],
       "confidence": 0.9679426114995822,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -722,6 +899,10 @@
         2215
       ],
       "confidence": 0.9587662446943782,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -738,6 +919,10 @@
         2215
       ],
       "confidence": 0.9738207798284305,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -754,6 +939,10 @@
         2215
       ],
       "confidence": 0.9258302969318016,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -770,6 +959,10 @@
         2215
       ],
       "confidence": 0.9375872680469594,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -786,6 +979,10 @@
         2215
       ],
       "confidence": 0.9544799480038773,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -802,6 +999,10 @@
         2215
       ],
       "confidence": 0.957487546348543,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -818,6 +1019,10 @@
         2215
       ],
       "confidence": 0.9375073954586238,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -834,6 +1039,10 @@
         2215
       ],
       "confidence": 0.9733221007139244,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -850,6 +1059,10 @@
         2215
       ],
       "confidence": 0.9647075516845431,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -866,6 +1079,10 @@
         2215
       ],
       "confidence": 0.9512558266960081,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -882,6 +1099,10 @@
         2215
       ],
       "confidence": 0.9590652406353055,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -898,6 +1119,10 @@
         2215
       ],
       "confidence": 0.9626593916417647,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -914,6 +1139,10 @@
         2215
       ],
       "confidence": 0.9681440263004337,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -930,6 +1159,10 @@
         2215
       ],
       "confidence": 0.9606794531263743,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -946,6 +1179,10 @@
         2215
       ],
       "confidence": 0.961952184535023,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -962,6 +1199,10 @@
         2215
       ],
       "confidence": 0.9647013166086823,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -978,6 +1219,10 @@
         2215
       ],
       "confidence": 0.9689692198168749,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -994,6 +1239,10 @@
         2215
       ],
       "confidence": 0.9833752041804732,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1010,6 +1259,10 @@
         2215
       ],
       "confidence": 0.9659207942697591,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1026,6 +1279,10 @@
         2215
       ],
       "confidence": 0.9423537069821065,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1042,6 +1299,10 @@
         2215
       ],
       "confidence": 0.9615177237426129,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1058,6 +1319,10 @@
         2215
       ],
       "confidence": 0.9611751565213171,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1074,6 +1339,10 @@
         2215
       ],
       "confidence": 0.9586300061444681,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1090,6 +1359,10 @@
         2215
       ],
       "confidence": 0.9520479210920471,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1106,6 +1379,10 @@
         2215
       ],
       "confidence": 0.9598275638028533,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1122,6 +1399,10 @@
         2215
       ],
       "confidence": 0.9675910116597504,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1138,6 +1419,10 @@
         2215
       ],
       "confidence": 0.9609973483405654,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1154,6 +1439,10 @@
         2215
       ],
       "confidence": 0.962721651857305,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1170,6 +1459,10 @@
         2215
       ],
       "confidence": 0.9569367737625802,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1186,6 +1479,10 @@
         2215
       ],
       "confidence": 0.9359649959326674,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1202,6 +1499,10 @@
         2215
       ],
       "confidence": 0.9672273427805017,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1218,6 +1519,10 @@
         2215
       ],
       "confidence": 0.9722883669901651,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1234,6 +1539,10 @@
         2215
       ],
       "confidence": 0.9633152393136968,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1250,6 +1559,10 @@
         2215
       ],
       "confidence": 0.9614782641020073,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1266,6 +1579,10 @@
         2215
       ],
       "confidence": 0.9713698403889024,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1282,6 +1599,10 @@
         2215
       ],
       "confidence": 0.934516878228523,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1298,6 +1619,10 @@
         2215
       ],
       "confidence": 0.965758912868571,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1314,6 +1639,10 @@
         2215
       ],
       "confidence": 0.9456391539668041,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1330,6 +1659,10 @@
         2215
       ],
       "confidence": 0.9610222889343376,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1346,6 +1679,10 @@
         2215
       ],
       "confidence": 0.9695457418667786,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1362,6 +1699,10 @@
         2215
       ],
       "confidence": 0.9714183956475563,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1378,6 +1719,10 @@
         2215
       ],
       "confidence": 0.9733185428478122,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1394,6 +1739,10 @@
         2215
       ],
       "confidence": 0.9308381246680997,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1410,6 +1759,10 @@
         2215
       ],
       "confidence": 0.9642660608629006,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1426,6 +1779,10 @@
         2215
       ],
       "confidence": 0.9458743335479787,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1442,6 +1799,10 @@
         2215
       ],
       "confidence": 0.956685729956787,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1458,6 +1819,10 @@
         2215
       ],
       "confidence": 0.9707934018304685,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1474,6 +1839,10 @@
         2215
       ],
       "confidence": 0.9559807863538399,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1490,6 +1859,10 @@
         2215
       ],
       "confidence": 0.9662874583328602,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1506,6 +1879,10 @@
         2215
       ],
       "confidence": 0.9652062934768846,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1522,6 +1899,10 @@
         2215
       ],
       "confidence": 0.9654657200781634,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1538,6 +1919,10 @@
         2215
       ],
       "confidence": 0.9661629221786905,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1554,6 +1939,10 @@
         2215
       ],
       "confidence": 0.9704861358948417,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1570,6 +1959,10 @@
         2215
       ],
       "confidence": 0.9559103284752422,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1586,6 +1979,10 @@
         2215
       ],
       "confidence": 0.9340123504904573,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     },
     {
@@ -1602,6 +1999,10 @@
         2215
       ],
       "confidence": 0.9727620983647075,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
       "is_outlier": false
     }
   ]

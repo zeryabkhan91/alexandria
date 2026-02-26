@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/catalogs.css" />
+  <title>Alexandria Catalogs</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a href="/review">Review</a>
+    <a class="active" href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+    <div class="catalog"><span>Catalog</span><select id="catalogSelect"></select></div>
+  </nav>
+
+  <main>
+    <section class="card">
+      <h1>Catalog PDF Generator</h1>
+      <p class="meta">
+        Generate print-ready PDFs from current winner selections. Each mode writes to
+        <code>Output Covers/</code> for the selected catalog.
+      </p>
+      <p id="status" class="meta">Ready.</p>
+    </section>
+
+    <section class="grid" id="modeGrid"></section>
+  </main>
+
+  <script>
+    const MODES = [
+      {
+        id: "catalog",
+        label: "Main Catalog",
+        description: "Winner-only catalog PDF.",
+        expected: "Alexandria_Cover_Catalog.pdf",
+      },
+      {
+        id: "contact_sheet",
+        label: "Contact Sheet",
+        description: "Single-sheet visual grid for quick review.",
+        expected: "Alexandria_Contact_Sheet.pdf",
+      },
+      {
+        id: "all_variants",
+        label: "All Variants",
+        description: "Large PDF containing all variants per title.",
+        expected: "Alexandria_All_Variants_Catalog.pdf",
+      },
+    ];
+
+    const state = {
+      catalog: "classics",
+      catalogs: [],
+      busy: null,
+      results: {},
+    };
+
+    function q(id) {
+      return document.getElementById(id);
+    }
+
+    function setStatus(message, isError = false) {
+      const node = q("status");
+      node.textContent = message;
+      node.className = isError ? "meta result-bad" : "meta";
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function renderModes() {
+      q("modeGrid").innerHTML = MODES.map((mode) => {
+        const result = state.results[mode.id] || {};
+        const ok = Boolean(result.ok);
+        const output = result.output_path || mode.expected;
+        const size = Number(result.size_mb || 0);
+        const resultClass = result.error ? "result-bad" : (ok ? "result-good" : "meta");
+        const resultText = result.error
+          ? result.error
+          : ok
+          ? `Generated (${size.toFixed(2)} MB)`
+          : "Not generated yet.";
+
+        return `
+          <article class="mode-card">
+            <h3>${escapeHtml(mode.label)}</h3>
+            <div class="meta">${escapeHtml(mode.description)}</div>
+            <div class="meta">Expected output: <code>${escapeHtml(mode.expected)}</code></div>
+            <button data-mode="${escapeHtml(mode.id)}" ${state.busy ? "disabled" : ""}>
+              ${state.busy === mode.id ? "Generating..." : "Generate"}
+            </button>
+            <div class="${resultClass}">${escapeHtml(resultText)}</div>
+            <div class="meta">Output path: <code>${escapeHtml(output)}</code></div>
+            ${
+              result.download_url
+                ? `<a class="download" href="${escapeHtml(result.download_url)}" target="_blank" rel="noopener">Download PDF</a>`
+                : `<span class="meta">Download link appears after generation.</span>`
+            }
+          </article>
+        `;
+      }).join("");
+
+      q("modeGrid").querySelectorAll("button[data-mode]").forEach((button) => {
+        button.addEventListener("click", () => generateCatalog(button.dataset.mode));
+      });
+    }
+
+    async function loadCatalogs() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("catalog")) state.catalog = params.get("catalog");
+
+      const res = await fetch("/api/catalogs");
+      const payload = await res.json();
+      state.catalogs = payload.catalogs || [];
+      if (!state.catalog && payload.active_catalog) state.catalog = payload.active_catalog;
+
+      q("catalogSelect").innerHTML = state.catalogs
+        .map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === state.catalog ? "selected" : ""}>${escapeHtml(item.name || item.id)}</option>`)
+        .join("");
+
+      q("catalogSelect").addEventListener("change", (event) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set("catalog", event.target.value);
+        window.location.href = url.toString();
+      });
+    }
+
+    async function generateCatalog(mode) {
+      if (!MODES.some((item) => item.id === mode) || state.busy) return;
+      state.busy = mode;
+      renderModes();
+      setStatus(`Generating ${mode} for catalog "${state.catalog}"...`);
+
+      try {
+        const url = `/api/generate-catalog?mode=${encodeURIComponent(mode)}&catalog=${encodeURIComponent(state.catalog)}`;
+        const res = await fetch(url);
+        const payload = await res.json();
+        if (!res.ok || payload.ok === false) {
+          const message = payload.error || `HTTP ${res.status}`;
+          state.results[mode] = { ok: false, error: message };
+          setStatus(`Catalog generation failed: ${message}`, true);
+        } else {
+          state.results[mode] = payload;
+          setStatus(`Catalog generation complete: ${mode}.`);
+        }
+      } catch (error) {
+        const message = String(error && error.message ? error.message : error);
+        state.results[mode] = { ok: false, error: message };
+        setStatus(`Catalog generation failed: ${message}`, true);
+      } finally {
+        state.busy = null;
+        renderModes();
+      }
+    }
+
+    async function init() {
+      renderModes();
+      await loadCatalogs();
+      renderModes();
+    }
+
+    init();
+  </script>
+  <script src="/src/static/navbar.js"></script>
+</body>
+</html>

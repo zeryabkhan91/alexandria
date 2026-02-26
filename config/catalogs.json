@@ -1,0 +1,27 @@
+{
+  "default_catalog": "test-catalog",
+  "catalogs": [
+    {
+      "id": "classics",
+      "name": "Alexandria Classics",
+      "book_count": 99,
+      "catalog_file": "config/book_catalog.json",
+      "prompts_file": "config/book_prompts.json",
+      "input_covers_dir": "Input Covers",
+      "output_covers_dir": "Output Covers",
+      "cover_style": "navy_gold_medallion",
+      "status": "complete"
+    },
+    {
+      "id": "test-catalog",
+      "name": "Alexandria Test Catalog",
+      "book_count": 2,
+      "catalog_file": "config/book_catalog_test-catalog.json",
+      "prompts_file": "config/book_prompts_test-catalog.json",
+      "input_covers_dir": "tmp/test_catalog_input",
+      "output_covers_dir": "Output Covers Test",
+      "cover_style": "navy_gold_medallion",
+      "status": "imported"
+    }
+  ]
+}

@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/compare.css" />
+  <title>Alexandria Compare</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a href="/review">Review</a>
+    <a href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a class="active" href="/compare">Compare</a>
+    <a href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+    <div class="catalog"><span>Catalog</span><select id="catalogSelect"></select></div>
+  </nav>
+
+  <main>
+    <section class="card panel">
+      <h1>Book Comparison</h1>
+      <p class="status">Select 2-4 books to compare variants, quality scores, tags, and notes side by side.</p>
+      <p id="status" class="status">Ready.</p>
+      <div class="toolbar">
+        <label>
+          <span>Filter by tags (comma)</span>
+          <input id="tagFilter" placeholder="fiction,priority-high" />
+        </label>
+        <button id="loadBooksBtn" class="secondary">Load Books</button>
+        <button id="compareBtn">Compare Selected</button>
+      </div>
+    </section>
+
+    <section id="bookPicker" class="book-picker"></section>
+    <section id="compareGrid" class="compare-grid"></section>
+  </main>
+
+  <script>
+    const state = {
+      catalog: "classics",
+      catalogs: [],
+      books: [],
+      selected: new Set(),
+    };
+
+    function q(id) {
+      return document.getElementById(id);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function setStatus(message, isError) {
+      const node = q("status");
+      node.textContent = message;
+      node.className = isError ? "error-text" : "status";
+    }
+
+    function catalogQuery() {
+      return `catalog=${encodeURIComponent(state.catalog)}`;
+    }
+
+    function selectedBooks() {
+      return Array.from(state.selected).sort((a, b) => a - b);
+    }
+
+    function bindPickerEvents() {
+      q("bookPicker").querySelectorAll("input[data-book]").forEach((box) => {
+        box.addEventListener("change", () => {
+          const book = Number(box.getAttribute("data-book") || 0);
+          if (book <= 0) return;
+          if (box.checked) {
+            if (state.selected.size >= 4) {
+              box.checked = false;
+              setStatus("You can compare up to 4 books.", true);
+              return;
+            }
+            state.selected.add(book);
+          } else {
+            state.selected.delete(book);
+          }
+        });
+      });
+    }
+
+    function renderBookPicker() {
+      const rows = state.books || [];
+      if (!rows.length) {
+        q("bookPicker").innerHTML = "<div class='empty-state'>No books matched the filter.</div>";
+        return;
+      }
+      q("bookPicker").innerHTML = rows.map((book) => {
+        const tags = Array.isArray(book.tags) ? book.tags : [];
+        return `
+          <article class="book-option">
+            <label>
+              <input type="checkbox" data-book="${escapeHtml(book.book)}" ${state.selected.has(Number(book.book)) ? "checked" : ""} />
+              <span>${escapeHtml(book.book)}. ${escapeHtml(book.title || "Untitled")}</span>
+            </label>
+            <div class="meta-line">${escapeHtml(book.author || "")}</div>
+            <div class="tags">
+              ${tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("") || "<span class='meta-line'>No tags</span>"}
+            </div>
+          </article>
+        `;
+      }).join("");
+      bindPickerEvents();
+    }
+
+    async function loadCatalogs() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("catalog")) state.catalog = params.get("catalog");
+      const response = await fetch("/api/catalogs");
+      const payload = await response.json();
+      state.catalogs = payload.catalogs || [];
+      if (!state.catalog && payload.active_catalog) state.catalog = payload.active_catalog;
+      q("catalogSelect").innerHTML = state.catalogs
+        .map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === state.catalog ? "selected" : ""}>${escapeHtml(item.name || item.id)}</option>`)
+        .join("");
+      q("catalogSelect").addEventListener("change", (event) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set("catalog", event.target.value);
+        window.location.href = url.toString();
+      });
+    }
+
+    async function loadBooks() {
+      const tags = q("tagFilter").value.trim();
+      const params = new URLSearchParams();
+      params.set("catalog", state.catalog);
+      if (tags) params.set("tags", tags);
+      const response = await fetch(`/api/books?${params.toString()}`);
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.error && payload.error.message ? payload.error.message : `HTTP ${response.status}`);
+      }
+      state.books = payload.books || [];
+      state.selected = new Set(Array.from(state.selected).filter((book) => state.books.some((row) => Number(row.book) === book)));
+      renderBookPicker();
+      setStatus(`Loaded ${state.books.length} books. Select 2-4 books and click Compare Selected.`, false);
+    }
+
+    async function saveNotes(book, notes) {
+      const response = await fetch(`/api/books/${encodeURIComponent(book)}/notes?${catalogQuery()}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ catalog: state.catalog, notes }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.error && payload.error.message ? payload.error.message : `HTTP ${response.status}`);
+      }
+      setStatus(`Saved notes for book ${book}.`, false);
+    }
+
+    async function addTag(book, tag) {
+      const response = await fetch(`/api/books/${encodeURIComponent(book)}/tags?${catalogQuery()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ catalog: state.catalog, tags: [tag] }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.error && payload.error.message ? payload.error.message : `HTTP ${response.status}`);
+      }
+      await loadBooks();
+    }
+
+    async function removeTag(book, tag) {
+      const response = await fetch(`/api/books/${encodeURIComponent(book)}/tags/${encodeURIComponent(tag)}?${catalogQuery()}`, {
+        method: "DELETE",
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.error && payload.error.message ? payload.error.message : `HTTP ${response.status}`);
+      }
+      await loadBooks();
+    }
+
+    function bindCompareActions() {
+      q("compareGrid").querySelectorAll("button[data-save-notes]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const book = Number(button.getAttribute("data-book") || 0);
+          const textarea = q(`notes-${book}`);
+          if (!textarea) return;
+          try {
+            await saveNotes(book, textarea.value);
+          } catch (error) {
+            setStatus(String(error && error.message ? error.message : error), true);
+          }
+        });
+      });
+      q("compareGrid").querySelectorAll("button[data-add-tag]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const book = Number(button.getAttribute("data-book") || 0);
+          const input = q(`tag-${book}`);
+          if (!input) return;
+          const tag = input.value.trim();
+          if (!tag) return;
+          try {
+            await addTag(book, tag);
+            input.value = "";
+          } catch (error) {
+            setStatus(String(error && error.message ? error.message : error), true);
+          }
+        });
+      });
+      q("compareGrid").querySelectorAll("button[data-remove-tag]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const book = Number(button.getAttribute("data-book") || 0);
+          const tag = button.getAttribute("data-tag") || "";
+          try {
+            await removeTag(book, tag);
+          } catch (error) {
+            setStatus(String(error && error.message ? error.message : error), true);
+          }
+        });
+      });
+    }
+
+    async function runCompare() {
+      const books = selectedBooks();
+      if (books.length < 2 || books.length > 4) {
+        setStatus("Select 2-4 books before running compare.", true);
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("catalog", state.catalog);
+      params.set("books", books.join(","));
+      const response = await fetch(`/api/compare?${params.toString()}`);
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error && payload.error.message ? payload.error.message : `HTTP ${response.status}`);
+      }
+      const rows = payload.books || [];
+      if (!rows.length) {
+        q("compareGrid").innerHTML = "<div class='empty-state'>No comparison data available.</div>";
+        return;
+      }
+      q("compareGrid").innerHTML = rows.map((book) => {
+        const variants = Array.isArray(book.variants) ? book.variants : [];
+        const tags = Array.isArray(book.tags) ? book.tags : [];
+        return `
+          <article class="card compare-card">
+            <h2>${escapeHtml(book.number)}. ${escapeHtml(book.title || "Untitled")}</h2>
+            <div class="meta-line">${escapeHtml(book.author || "")}</div>
+            <div class="tags">
+              ${tags.map((tag) => `<span class="tag">${escapeHtml(tag)} <button data-remove-tag data-book="${escapeHtml(book.number)}" data-tag="${escapeHtml(tag)}">x</button></span>`).join("") || "<span class='meta-line'>No tags</span>"}
+            </div>
+            <div class="toolbar">
+              <input id="tag-${escapeHtml(book.number)}" placeholder="Add tag" />
+              <button data-add-tag data-book="${escapeHtml(book.number)}">Add</button>
+            </div>
+            <label class="meta-line" for="notes-${escapeHtml(book.number)}">Notes</label>
+            <textarea id="notes-${escapeHtml(book.number)}" class="notes">${escapeHtml(book.notes || "")}</textarea>
+            <button class="secondary" data-save-notes data-book="${escapeHtml(book.number)}">Save Notes</button>
+            <div class="variant-grid">
+              ${variants.map((variant) => `
+                <div class="variant">
+                  <img src="/${escapeHtml(variant.image || "")}" alt="Book ${escapeHtml(book.number)} variant ${escapeHtml(variant.variant)}" />
+                  <div class="meta-line">Variant ${escapeHtml(variant.variant)}</div>
+                  <div class="meta-line">Quality: ${escapeHtml(Number(variant.quality_score || 0).toFixed(3))}</div>
+                </div>
+              `).join("")}
+            </div>
+          </article>
+        `;
+      }).join("");
+      bindCompareActions();
+      setStatus(`Compared ${rows.length} books.`, false);
+    }
+
+    function bindEvents() {
+      q("loadBooksBtn").addEventListener("click", () => {
+        loadBooks().catch((error) => setStatus(String(error && error.message ? error.message : error), true));
+      });
+      q("compareBtn").addEventListener("click", () => {
+        runCompare().catch((error) => setStatus(String(error && error.message ? error.message : error), true));
+      });
+    }
+
+    async function init() {
+      await loadCatalogs();
+      bindEvents();
+      await loadBooks();
+    }
+
+    init().catch((error) => {
+      setStatus(String(error && error.message ? error.message : error), true);
+    });
+  </script>
+  <script src="/src/static/navbar.js"></script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+{
+  "template_name": "navy_gold_medallion",
+  "region_type": "circle",
+  "cover_size": {
+    "width": 3784,
+    "height": 2777,
+    "dpi": 300
+  },
+  "consensus_region": {
+    "center_x": 2864,
+    "center_y": 1620,
+    "radius": 500,
+    "frame_bbox": [
+      2269,
+      1025,
+      3459,
+      2215
+    ],
+    "confidence": 0.9751577132069531,
+    "region_type": "circle",
+    "rect_bbox": null,
+    "template_id": "navy_gold_medallion",
+    "compositing": "raster_first"
+  },
+  "cover_count": 2,
+  "outlier_count": 0,
+  "covers": [
+    {
+      "cover_id": 1,
+      "folder": "1. Sample Book - Test Author",
+      "jpg": "tmp/test_catalog_input/1. Sample Book - Test Author/Sample Book - Test Author.jpg",
+      "center_x": 2864,
+      "center_y": 1620,
+      "radius": 500,
+      "frame_bbox": [
+        2269,
+        1025,
+        3459,
+        2215
+      ],
+      "confidence": 0.9751577132069531,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
+      "is_outlier": false
+    },
+    {
+      "cover_id": 2,
+      "folder": "2. Another Story - Demo Writer",
+      "jpg": "tmp/test_catalog_input/2. Another Story - Demo Writer/Another Story - Demo Writer.jpg",
+      "center_x": 2864,
+      "center_y": 1620,
+      "radius": 500,
+      "frame_bbox": [
+        2269,
+        1025,
+        3459,
+        2215
+      ],
+      "confidence": 0.9751577132069531,
+      "region_type": "circle",
+      "rect_bbox": null,
+      "template_id": "navy_gold_medallion",
+      "compositing": "raster_first",
+      "is_outlier": false
+    }
+  ]
+}

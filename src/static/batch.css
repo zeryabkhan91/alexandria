@@ -1,0 +1,245 @@
+.batch-main {
+  display: grid;
+  grid-template-columns: minmax(340px, 420px) minmax(440px, 1fr);
+  gap: 16px;
+}
+
+.batch-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.batch-card {
+  padding: 14px;
+}
+
+.batch-card h2 {
+  margin: 0 0 10px;
+  color: var(--gold-500);
+}
+
+.batch-card h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: var(--gold-400);
+}
+
+.batch-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.batch-toolbar button {
+  min-width: 112px;
+}
+
+.batch-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.batch-grid {
+  max-height: 380px;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(10, 15, 26, 0.55);
+}
+
+.batch-grid ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.batch-grid li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(26, 35, 50, 0.9);
+}
+
+.batch-grid label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  flex: 1;
+}
+
+.quality-pill {
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(148, 163, 184, 0.2);
+  color: var(--text-secondary);
+}
+
+.quality-pill.good {
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+}
+
+.quality-pill.low {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fecaca;
+}
+
+.model-list {
+  max-height: 160px;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+  background: rgba(10, 15, 26, 0.55);
+}
+
+.model-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.progress-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.progress-grid .metric {
+  min-height: 70px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(148, 163, 184, 0.2);
+}
+
+.status-pill.running {
+  background: rgba(59, 130, 246, 0.22);
+  color: #bfdbfe;
+}
+
+.status-pill.completed {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+}
+
+.status-pill.failed,
+.status-pill.cancelled {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fecaca;
+}
+
+.status-pill.paused,
+.status-pill.pausing {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fde68a;
+}
+
+.status-pill.queued,
+.status-pill.retrying {
+  background: rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+}
+
+.batch-books {
+  max-height: 520px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.batch-book-card {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(10, 15, 26, 0.55);
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.batch-book-thumb {
+  width: 54px;
+  height: 54px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: rgba(148, 163, 184, 0.2);
+}
+
+.batch-book-meta {
+  min-width: 0;
+}
+
+.batch-book-title {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.batch-book-sub {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.batch-pagination {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.heartbeat {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(10, 15, 26, 0.55);
+}
+
+.heartbeat-log {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  max-height: 150px;
+  overflow: auto;
+  color: var(--text-secondary);
+}
+
+.recent-batches {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+@media (max-width: 1180px) {
+  .batch-main {
+    grid-template-columns: 1fr;
+  }
+
+  .progress-grid {
+    grid-template-columns: repeat(2, minmax(120px, 1fr));
+  }
+}
+

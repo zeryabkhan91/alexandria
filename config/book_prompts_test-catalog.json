@@ -1,0 +1,125 @@
+{
+  "book_count": 2,
+  "variant_count_per_book": 5,
+  "total_prompts": 10,
+  "books": [
+    {
+      "number": 1,
+      "title": "Sample Book",
+      "author": "Test Author",
+      "folder_name": "1. Sample Book - Test Author",
+      "file_base": "Sample Book - Test Author",
+      "variants": [
+        {
+          "variant_id": 1,
+          "variant_key": "1_iconic_scene_sketch",
+          "variant_name": "Iconic Scene (Sketch Style)",
+          "description": "pivotal narrative tableau with period costume, emotional tension, and dramatic environmental storytelling",
+          "prompt": "Detailed pen-and-ink engraving of pivotal narrative tableau with period costume, emotional tension, and dramatic environmental storytelling, classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks",
+          "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+          "style_reference": "sketch_style",
+          "word_count": 52
+        },
+        {
+          "variant_id": 2,
+          "variant_key": "2_character_portrait_sketch",
+          "variant_name": "Character Portrait (Sketch Style)",
+          "description": "central protagonist in historically grounded attire, expressive face, and purposeful posture",
+          "prompt": "Classical engraving portrait of central protagonist in historically grounded attire, expressive face, and purposeful posture, classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks",
+          "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+          "style_reference": "sketch_style",
+          "word_count": 51
+        },
+        {
+          "variant_id": 3,
+          "variant_key": "3_setting_landscape_sketch",
+          "variant_name": "Setting / Landscape (Sketch Style)",
+          "description": "key story environment with layered architecture, atmospheric depth, and symbolic objects",
+          "prompt": "Detailed 19th-century book illustration of key story environment with layered architecture, atmospheric depth, and symbolic objects, classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks",
+          "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+          "style_reference": "sketch_style",
+          "word_count": 52
+        },
+        {
+          "variant_id": 4,
+          "variant_key": "4_dramatic_oil_painting",
+          "variant_name": "Dramatic Oil Painting",
+          "description": "climactic turning point under turbulent light, motion, and heightened emotional stakes",
+          "prompt": "Dramatic oil painting of climactic turning point under turbulent light, motion, and heightened emotional stakes, classical oil painting, masterpiece quality, warm golden lighting, renaissance art style, detailed brushwork, gallery-quality illustration, circular vignette composition, rich color palette, dramatic chiaroscuro, no text, no letters, no words, no watermarks",
+          "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+          "style_reference": "oil_painting_style",
+          "word_count": 46
+        },
+        {
+          "variant_id": 5,
+          "variant_key": "5_symbolic_alternative",
+          "variant_name": "Symbolic / Alternative Style",
+          "description": "core themes represented by allegorical objects, contrasting light, and recursive geometry",
+          "prompt": "period-inspired mixed-media engraving symbolizing core themes represented by allegorical objects, contrasting light, and recursive geometry, period-appropriate artistic style, hand-crafted aesthetic, classical composition, warm tones matching navy-and-gold cover design, unique artistic interpretation, circular vignette composition, no text, no letters, no words, no watermarks",
+          "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+          "style_reference": "alternative_style",
+          "word_count": 42
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "title": "Another Story",
+      "author": "Demo Writer",
+      "folder_name": "2. Another Story - Demo Writer",
+      "file_base": "Another Story - Demo Writer",
+      "variants": [
+        {
+          "variant_id": 1,
+          "variant_key": "1_iconic_scene_sketch",
+          "variant_name": "Iconic Scene (Sketch Style)",
+          "description": "pivotal narrative tableau with period costume, emotional tension, and dramatic environmental storytelling",
+          "prompt": "Detailed pen-and-ink engraving of pivotal narrative tableau with period costume, emotional tension, and dramatic environmental storytelling, classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks",
+          "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+          "style_reference": "sketch_style",
+          "word_count": 52
+        },
+        {
+          "variant_id": 2,
+          "variant_key": "2_character_portrait_sketch",
+          "variant_name": "Character Portrait (Sketch Style)",
+          "description": "central protagonist in historically grounded attire, expressive face, and purposeful posture",
+          "prompt": "Classical engraving portrait of central protagonist in historically grounded attire, expressive face, and purposeful posture, classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks",
+          "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+          "style_reference": "sketch_style",
+          "word_count": 51
+        },
+        {
+          "variant_id": 3,
+          "variant_key": "3_setting_landscape_sketch",
+          "variant_name": "Setting / Landscape (Sketch Style)",
+          "description": "key story environment with layered architecture, atmospheric depth, and symbolic objects",
+          "prompt": "Detailed 19th-century book illustration of key story environment with layered architecture, atmospheric depth, and symbolic objects, classical pen-and-ink sketch, detailed engraving illustration, sepia tones, hand-drawn crosshatching, 19th century book illustration style, warm parchment tones, fine line work, copper plate etching quality, circular vignette composition, no text, no letters, no words, no watermarks",
+          "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+          "style_reference": "sketch_style",
+          "word_count": 52
+        },
+        {
+          "variant_id": 4,
+          "variant_key": "4_dramatic_oil_painting",
+          "variant_name": "Dramatic Oil Painting",
+          "description": "climactic turning point under turbulent light, motion, and heightened emotional stakes",
+          "prompt": "Dramatic oil painting of climactic turning point under turbulent light, motion, and heightened emotional stakes, classical oil painting, masterpiece quality, warm golden lighting, renaissance art style, detailed brushwork, gallery-quality illustration, circular vignette composition, rich color palette, dramatic chiaroscuro, no text, no letters, no words, no watermarks",
+          "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+          "style_reference": "oil_painting_style",
+          "word_count": 46
+        },
+        {
+          "variant_id": 5,
+          "variant_key": "5_symbolic_alternative",
+          "variant_name": "Symbolic / Alternative Style",
+          "description": "core themes represented by allegorical objects, contrasting light, and recursive geometry",
+          "prompt": "period-inspired mixed-media engraving symbolizing core themes represented by allegorical objects, contrasting light, and recursive geometry, period-appropriate artistic style, hand-crafted aesthetic, classical composition, warm tones matching navy-and-gold cover design, unique artistic interpretation, circular vignette composition, no text, no letters, no words, no watermarks",
+          "negative_prompt": "text, letters, words, watermark, signature, photorealistic, 3d render, cartoon, anime, comic, digital art, modern, neon, flat colors, low quality, blurry, deformed, ugly, bad anatomy, distorted hands, extra fingers, mutated, obviously AI-generated, stock photo, generic",
+          "style_reference": "alternative_style",
+          "word_count": 42
+        }
+      ]
+    }
+  ]
+}

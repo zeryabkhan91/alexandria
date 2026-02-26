@@ -1,0 +1,145 @@
+:root {
+  --bg: #1a2744;
+  --panel: #243454;
+  --panel-2: #1f2f50;
+  --text: #f5e6c8;
+  --gold: #c4a352;
+  --muted: #bfae8f;
+  --line: rgba(245, 230, 200, 0.2);
+  --good: #74c497;
+  --bad: #e39090;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  background: radial-gradient(circle at top left, #243454, #1a2744 42%, #15233e);
+  color: var(--text);
+}
+
+.nav {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(20, 31, 55, 0.95);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.nav a {
+  color: var(--gold);
+  text-decoration: none;
+  font-weight: 700;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.nav a.active {
+  background: rgba(196, 163, 82, 0.18);
+}
+
+.nav .catalog {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.nav .catalog select {
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #1b2a49;
+  color: var(--text);
+  padding: 6px 8px;
+}
+
+main {
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+h1,
+h2 {
+  margin: 0 0 8px;
+  color: var(--gold);
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.mode-card {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.mode-card h3 {
+  margin: 0;
+  color: var(--gold);
+  font-size: 18px;
+}
+
+button {
+  border-radius: 8px;
+  border: none;
+  background: var(--gold);
+  color: #1a2744;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 9px 12px;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+a.download {
+  display: inline-block;
+  color: var(--gold);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.result-good {
+  color: var(--good);
+}
+
+.result-bad {
+  color: var(--bad);
+}
+
+@media (max-width: 1100px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
