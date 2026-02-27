@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/performance.css" />
+  <title>Alexandria Performance Dashboard</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a href="/review">Review</a>
+    <a href="/batch">Batch</a>
+    <a href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/analytics/models">Model Analytics</a>
+    <a href="/prompts">Prompts</a>
+    <a href="/catalog/settings">Catalog Settings</a>
+    <a href="/admin/performance" class="active">Performance</a>
+    <a href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+  </nav>
+
+  <main>
+    <section class="card header">
+      <h1>Performance Monitoring</h1>
+      <div class="header-controls">
+        <label>
+          Catalog
+          <select id="catalogSelect"></select>
+        </label>
+        <button id="refreshBtn" type="button">Refresh</button>
+      </div>
+    </section>
+
+    <section class="metric-grid" id="kpiGrid"></section>
+
+    <section class="grid">
+      <article class="card panel">
+        <h2>Response Time (slow-request sample)</h2>
+        <div id="responseSummary" class="status u-mt-8">Loading...</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Endpoint</th>
+                <th>Count</th>
+                <th>Avg (s)</th>
+                <th>Max (s)</th>
+              </tr>
+            </thead>
+            <tbody id="slowEndpointRows"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card panel">
+        <h2>Error & Worker Health</h2>
+        <div id="workerStatus" class="status u-mt-8">Loading...</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Error Type</th>
+                <th>Count</th>
+              </tr>
+            </thead>
+            <tbody id="errorRows"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid">
+      <article class="card panel">
+        <h2>Slow Requests (latest)</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Method</th>
+                <th>Path</th>
+                <th>Duration</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="slowRequestRows"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card panel">
+        <h2>Cache Effectiveness</h2>
+        <div id="cacheSummary" class="status u-mt-8">Loading...</div>
+        <div class="u-mt-10">
+          <div>Hit rate</div>
+          <div class="bar-track"><div id="hitRateFill" class="bar-fill"></div></div>
+          <div id="hitRateLabel" class="status u-mt-6">-</div>
+        </div>
+      </article>
+    </section>
+
+    <section id="status" class="status"></section>
+  </main>
+
+  <script>
+    const state = {
+      catalog: 'classics',
+      catalogs: [],
+    };
+
+    function q(id) { return document.getElementById(id); }
+    function catalogQuery(catalog) { return `catalog=${encodeURIComponent(catalog || state.catalog)}`; }
+
+    function esc(value) {
+      return String(value || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    async function fetchJson(url) {
+      const res = await fetch(url, { cache: 'no-store' });
+      let payload = {};
+      try {
+        payload = await res.json();
+      } catch (_) {
+        payload = {};
+      }
+      if (!res.ok || payload.ok === false) {
+        throw new Error(payload.error || payload.message || `HTTP ${res.status}`);
+      }
+      return payload;
+    }
+
+    function bindEvents() {
+      q('refreshBtn').addEventListener('click', () => refresh());
+      q('catalogSelect').addEventListener('change', (event) => {
+        state.catalog = String(event.target.value || 'classics');
+        const url = new URL(window.location.href);
+        url.searchParams.set('catalog', state.catalog);
+        window.history.replaceState({}, '', url.toString());
+        refresh();
+      });
+    }
+
+    async function init() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('catalog')) state.catalog = String(params.get('catalog'));
+      bindEvents();
+      await loadCatalogs();
+      await refresh();
+    }
+
+    async function loadCatalogs() {
+      const payload = await fetchJson('/api/catalogs');
+      state.catalogs = Array.isArray(payload.catalogs) ? payload.catalogs : [];
+      if (!state.catalog && payload.active_catalog) state.catalog = String(payload.active_catalog);
+      q('catalogSelect').innerHTML = state.catalogs
+        .map((row) => `<option value="${esc(row.id)}" ${row.id === state.catalog ? 'selected' : ''}>${esc(row.name || row.id)}</option>`)
+        .join('');
+    }
+
+    async function refresh() {
+      q('status').textContent = 'Loading performance telemetry...';
+      try {
+        const [summary, metrics] = await Promise.all([
+          fetchJson(`/api/performance/summary?${catalogQuery()}`),
+          fetchJson(`/api/metrics?${catalogQuery()}`),
+        ]);
+        renderKpis(summary, metrics);
+        renderResponse(summary);
+        renderErrors(summary, metrics);
+        renderSlowRequests(summary);
+        renderCache(metrics);
+        q('status').textContent = `Performance data refreshed at ${new Date(summary.generated_at || Date.now()).toLocaleString()}.`;
+      } catch (error) {
+        q('status').textContent = `Performance load failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    function renderKpis(summary, metrics) {
+      const response = summary.response_time || {};
+      const slow = summary.slow_requests || {};
+      const cache = metrics.cache || {};
+      const errors = summary.errors || {};
+      const totalErrors = Number(errors.total || 0);
+      const inFlight = Number((metrics.jobs && metrics.jobs.worker_service && metrics.jobs.worker_service.in_flight_requests) || metrics.in_flight_requests || 0);
+      q('kpiGrid').innerHTML = [
+        ['p50', `${Number(response.p50_seconds || 0).toFixed(3)}s`],
+        ['p95', `${Number(response.p95_seconds || 0).toFixed(3)}s`],
+        ['p99', `${Number(response.p99_seconds || 0).toFixed(3)}s`],
+        ['Slow requests', Number(slow.count || 0).toFixed(0)],
+        ['Cache hit rate', `${(Number(cache.hit_rate || 0) * 100).toFixed(1)}%`],
+        ['Errors', totalErrors.toFixed(0)],
+        ['In flight requests', inFlight.toFixed(0)],
+      ].map(([label, value]) => `<div class="metric-card"><div>${esc(label)}</div><strong>${esc(value)}</strong></div>`).join('');
+    }
+
+    function renderResponse(summary) {
+      const response = summary.response_time || {};
+      q('responseSummary').textContent = [
+        `Sample size ${Number(response.sample_size || 0)}`,
+        `avg ${Number(response.avg_seconds || 0).toFixed(3)}s`,
+        `p50 ${Number(response.p50_seconds || 0).toFixed(3)}s`,
+        `p95 ${Number(response.p95_seconds || 0).toFixed(3)}s`,
+        `p99 ${Number(response.p99_seconds || 0).toFixed(3)}s`,
+        `threshold ${Number(summary.request_threshold_seconds || 5).toFixed(1)}s`,
+      ].join(' • ');
+
+      const endpoints = (summary.slow_requests && summary.slow_requests.top_endpoints) || [];
+      if (!endpoints.length) {
+        q('slowEndpointRows').innerHTML = '<tr><td colspan="4" class="status">No slow endpoint entries yet.</td></tr>';
+        return;
+      }
+      q('slowEndpointRows').innerHTML = endpoints.map((row) => `
+        <tr>
+          <td class="mono">${esc(row.path)}</td>
+          <td>${Number(row.count || 0)}</td>
+          <td>${Number(row.avg_duration_seconds || 0).toFixed(3)}</td>
+          <td>${Number(row.max_duration_seconds || 0).toFixed(3)}</td>
+        </tr>
+      `).join('');
+    }
+
+    function renderErrors(summary, metrics) {
+      const workers = metrics.jobs || {};
+      const statusCounts = workers.status_counts || {};
+      const workerMode = String(workers.worker_mode || 'inline');
+      const workerRows = (workers.worker_service && workers.worker_service.workers) || {};
+      const runningWorkers = Object.values(workerRows).filter((row) => row && row.state === 'running').length;
+      q('workerStatus').textContent = [
+        `mode ${workerMode}`,
+        `running workers ${runningWorkers}`,
+        `queued jobs ${Number(statusCounts.queued || 0)}`,
+        `running jobs ${Number(statusCounts.running || 0)}`,
+        `retrying jobs ${Number(statusCounts.retrying || 0)}`,
+      ].join(' • ');
+
+      const errors = summary.errors || {};
+      const rows = Object.entries(errors.by_error || {});
+      if (!rows.length) {
+        q('errorRows').innerHTML = '<tr><td colspan="2" class="status">No recorded errors.</td></tr>';
+        return;
+      }
+      q('errorRows').innerHTML = rows
+        .sort((left, right) => Number(right[1] || 0) - Number(left[1] || 0))
+        .slice(0, 20)
+        .map(([name, count]) => `<tr><td class="mono">${esc(name)}</td><td>${Number(count || 0)}</td></tr>`)
+        .join('');
+    }
+
+    function renderSlowRequests(summary) {
+      const latest = (summary.slow_requests && summary.slow_requests.latest) || [];
+      if (!latest.length) {
+        q('slowRequestRows').innerHTML = '<tr><td colspan="5" class="status">No slow requests captured yet.</td></tr>';
+        return;
+      }
+      q('slowRequestRows').innerHTML = latest.slice(0, 100).map((row) => {
+        const timestamp = row.timestamp ? new Date(row.timestamp).toLocaleString() : '-';
+        const statusClass = Number(row.status_code || 0) >= 500 ? 'status-pill error' : 'status-pill';
+        return `
+          <tr>
+            <td>${esc(timestamp)}</td>
+            <td>${esc(String(row.method || 'GET'))}</td>
+            <td class="mono">${esc(String(row.path || '/'))}</td>
+            <td>${Number(row.duration_seconds || 0).toFixed(3)}s</td>
+            <td><span class="${statusClass}">${Number(row.status_code || 0)}</span></td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderCache(metrics) {
+      const cache = metrics.cache || {};
+      const hits = Number(cache.hits || 0);
+      const misses = Number(cache.misses || 0);
+      const hitRate = Number(cache.hit_rate || 0);
+      const entries = Number(cache.entries || 0);
+      const expired = Number(cache.expired || 0);
+      q('cacheSummary').textContent = [
+        `entries ${entries}`,
+        `hits ${hits}`,
+        `misses ${misses}`,
+        `expired ${expired}`,
+      ].join(' • ');
+      q('hitRateFill').style.width = `${Math.max(0, Math.min(100, hitRate * 100))}%`;
+      q('hitRateLabel').textContent = `Hit rate ${(hitRate * 100).toFixed(1)}%`;
+    }
+
+    init();
+  </script>
+</body>
+</html>

@@ -22,6 +22,50 @@ def test_cache_key_stable_and_sorted():
     assert key == "classics:/api/x?a=z&b=1,2"
 
 
+def test_performance_summary_payload_reports_quantiles(monkeypatch: pytest.MonkeyPatch):
+    runtime = SimpleNamespace(catalog_id="classics")
+    sample_rows = [
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "method": "GET",
+            "path": "/api/a",
+            "duration_seconds": 5.2,
+            "status_code": 200,
+            "catalog": "classics",
+        },
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "method": "POST",
+            "path": "/api/b",
+            "duration_seconds": 8.1,
+            "status_code": 500,
+            "catalog": "classics",
+        },
+    ]
+    with qr._SLOW_REQUEST_LOG_LOCK:
+        previous = list(qr._SLOW_REQUEST_LOG)
+        qr._SLOW_REQUEST_LOG[:] = sample_rows
+
+    monkeypatch.setattr(qr.error_metrics, "get_metrics", lambda **_kwargs: {"total": 2, "by_error": {"TimeoutError": 1}})
+    monkeypatch.setattr(qr.data_cache, "stats", lambda: {"hits": 3, "misses": 1, "hit_rate": 0.75})
+    monkeypatch.setattr(qr.job_db_store, "status_counts", lambda: {"queued": 1, "running": 0})
+    monkeypatch.setattr(qr, "_worker_runtime_status", lambda: {"mode": "inline", "workers": {}})
+
+    try:
+        payload = qr._performance_summary_payload(runtime=runtime)  # type: ignore[arg-type]
+    finally:
+        with qr._SLOW_REQUEST_LOG_LOCK:
+            qr._SLOW_REQUEST_LOG[:] = previous
+
+    assert payload.get("ok") is True
+    response = payload.get("response_time", {})
+    assert response.get("sample_size") == 2
+    assert float(response.get("p95_seconds", 0.0)) >= float(response.get("p50_seconds", 0.0))
+    slow = payload.get("slow_requests", {})
+    assert int(slow.get("count", 0)) == 2
+    assert isinstance(slow.get("top_endpoints"), list)
+
+
 def test_generation_idempotency_key_stable_model_order():
     key_a = qr._generation_idempotency_key(
         catalog_id="classics",

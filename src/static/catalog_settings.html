@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/catalog_settings.css" />
+  <title>Alexandria Catalog Settings</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a href="/review">Review</a>
+    <a href="/batch">Batch</a>
+    <a href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/analytics/models">Model Analytics</a>
+    <a href="/prompts">Prompts</a>
+    <a href="/catalog/settings" class="active">Catalog Settings</a>
+    <a href="/admin/performance">Performance</a>
+    <a href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+  </nav>
+
+  <main>
+    <section class="card header">
+      <h1>Catalog Settings & Multi-Catalog Workflow</h1>
+      <div class="header-controls">
+        <button id="refreshBtn" type="button">Refresh</button>
+        <button id="newCatalogBtn" type="button" class="secondary">Create Catalog</button>
+        <button id="importCatalogBtn" type="button" class="ghost">Import Catalog</button>
+        <label class="ghost" for="importCatalogInput">Choose Import File</label>
+        <input id="importCatalogInput" type="file" accept="application/json" class="hidden" />
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card panel">
+        <h2>Catalogs</h2>
+        <div id="catalogList" class="catalog-list"></div>
+      </article>
+
+      <article class="card panel">
+        <h2>Settings</h2>
+        <div id="settingsStatus" class="status u-mt-8">Select a catalog.</div>
+
+        <div class="form-grid">
+          <label>
+            Catalog ID
+            <input id="catalogId" type="text" placeholder="catalog-id" />
+          </label>
+          <label>
+            Name
+            <input id="catalogName" type="text" placeholder="Catalog name" />
+          </label>
+          <label>
+            Description
+            <input id="catalogDescription" type="text" placeholder="Catalog description" />
+          </label>
+          <label>
+            Default Models (comma-separated)
+            <input id="defaultModels" type="text" placeholder="openrouter/google/gemini-2.5-flash-image" />
+          </label>
+          <label>
+            Quality Threshold
+            <input id="qualityThreshold" type="number" min="0" max="1" step="0.01" placeholder="0.75" />
+          </label>
+          <label>
+            Monthly Budget (USD)
+            <input id="monthlyBudget" type="number" min="0" step="0.01" placeholder="50.00" />
+          </label>
+          <label>
+            Drive Source Folder ID
+            <input id="driveSourceFolder" type="text" placeholder="Drive source folder id" />
+          </label>
+          <label>
+            Drive Output Folder ID
+            <input id="driveOutputFolder" type="text" placeholder="Drive output folder id" />
+          </label>
+          <label>
+            Export Defaults (JSON)
+            <input id="exportDefaults" type="text" placeholder='{"platforms":["amazon","ingram"]}' />
+          </label>
+        </div>
+
+        <label class="u-mt-10">
+          Notes
+          <textarea id="catalogNotes" placeholder="Optional catalog notes"></textarea>
+        </label>
+
+        <div class="actions">
+          <button id="saveSettingsBtn" type="button">Save Settings</button>
+          <button id="activateCatalogBtn" type="button" class="secondary">Activate Catalog</button>
+          <button id="exportCatalogBtn" type="button" class="ghost">Export Catalog JSON</button>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody id="catalogStatsRows">
+              <tr><td colspan="2" class="status">No catalog selected.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <section id="status" class="status"></section>
+  </main>
+
+  <script>
+    const state = {
+      catalogs: [],
+      activeCatalog: 'classics',
+      selectedCatalogId: '',
+      catalogSettings: {},
+    };
+
+    function q(id) { return document.getElementById(id); }
+    function catalogQuery(catalog) { return `catalog=${encodeURIComponent(catalog || state.activeCatalog)}`; }
+
+    function esc(value) {
+      return String(value || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function splitCsv(value) {
+      return String(value || '').split(',').map((part) => part.trim()).filter(Boolean);
+    }
+
+    function parseJsonSafe(value) {
+      const text = String(value || '').trim();
+      if (!text) return {};
+      try {
+        const parsed = JSON.parse(text);
+        return (parsed && typeof parsed === 'object') ? parsed : {};
+      } catch (_) {
+        return {};
+      }
+    }
+
+    async function fetchJson(url, options) {
+      const response = await fetch(url, options);
+      let payload = {};
+      try {
+        payload = await response.json();
+      } catch (_) {
+        payload = {};
+      }
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.error || payload.message || `HTTP ${response.status}`);
+      }
+      return payload;
+    }
+
+    function bindEvents() {
+      q('refreshBtn').addEventListener('click', () => refresh());
+      q('newCatalogBtn').addEventListener('click', () => clearFormForNewCatalog());
+      q('saveSettingsBtn').addEventListener('click', () => saveCatalogSettings());
+      q('activateCatalogBtn').addEventListener('click', () => activateSelectedCatalog());
+      q('exportCatalogBtn').addEventListener('click', () => exportSelectedCatalog());
+      q('importCatalogBtn').addEventListener('click', () => q('importCatalogInput').click());
+      q('importCatalogInput').addEventListener('change', (event) => importCatalog(event));
+    }
+
+    async function init() {
+      bindEvents();
+      await refresh();
+    }
+
+    async function refresh() {
+      q('status').textContent = 'Loading catalogs...';
+      try {
+        const payload = await fetchJson('/api/catalogs');
+        state.catalogs = Array.isArray(payload.catalogs) ? payload.catalogs : [];
+        state.activeCatalog = String(payload.active_catalog || state.activeCatalog || 'classics');
+        if (!state.selectedCatalogId) state.selectedCatalogId = state.activeCatalog;
+        renderCatalogList();
+        await loadCatalogDetails(state.selectedCatalogId);
+        q('status').textContent = `Loaded ${state.catalogs.length} catalog(s).`;
+      } catch (error) {
+        q('status').textContent = `Catalog load failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    function renderCatalogList() {
+      if (!state.catalogs.length) {
+        q('catalogList').innerHTML = '<div class="empty-state">No catalogs found.</div>';
+        return;
+      }
+      q('catalogList').innerHTML = state.catalogs.map((row) => {
+        const id = String(row.id || row.catalog_id || '');
+        const active = id === state.selectedCatalogId ? ' active' : '';
+        const isLive = id === state.activeCatalog ? ' (active)' : '';
+        return `
+          <div class="catalog-item${active}" data-catalog-id="${esc(id)}">
+            <strong>${esc(row.name || id)}${esc(isLive)}</strong>
+            <div class="meta">id: ${esc(id)}</div>
+            <div class="meta">${esc(row.description || '')}</div>
+          </div>
+        `;
+      }).join('');
+      q('catalogList').querySelectorAll('[data-catalog-id]').forEach((node) => {
+        node.addEventListener('click', async () => {
+          state.selectedCatalogId = String(node.getAttribute('data-catalog-id') || '');
+          renderCatalogList();
+          await loadCatalogDetails(state.selectedCatalogId);
+        });
+      });
+    }
+
+    async function loadCatalogDetails(catalogId) {
+      if (!catalogId) {
+        q('settingsStatus').textContent = 'Select a catalog.';
+        return;
+      }
+      q('settingsStatus').textContent = `Loading ${catalogId}...`;
+      try {
+        const [catalogPayload, settingsPayload] = await Promise.all([
+          fetchJson(`/api/catalogs/${encodeURIComponent(catalogId)}`),
+          fetchJson(`/api/catalogs/${encodeURIComponent(catalogId)}/settings`),
+        ]);
+        const catalog = catalogPayload.catalog || {};
+        const settings = settingsPayload.settings || {};
+        state.catalogSettings[catalogId] = settings;
+
+        q('catalogId').value = String(catalog.id || catalog.catalog_id || catalogId);
+        q('catalogName').value = String(catalog.name || '');
+        q('catalogDescription').value = String(catalog.description || '');
+        q('defaultModels').value = Array.isArray(settings.default_models) ? settings.default_models.join(', ') : '';
+        q('qualityThreshold').value = String(settings.quality_threshold || settings.min_quality_threshold || '');
+        q('monthlyBudget').value = String(settings.monthly_budget || settings.monthly_budget_usd || settings.budget_limit_usd || '');
+        q('driveSourceFolder').value = String(settings.gdrive_source_folder_id || '');
+        q('driveOutputFolder').value = String(settings.gdrive_output_folder_id || '');
+        q('exportDefaults').value = JSON.stringify(settings.export_defaults || {}, null, 0);
+        q('catalogNotes').value = String(settings.notes || '');
+
+        const stats = catalog.stats || {};
+        q('catalogStatsRows').innerHTML = [
+          ['Catalog ID', String(catalog.id || catalog.catalog_id || catalogId)],
+          ['Name', String(catalog.name || '')],
+          ['Description', String(catalog.description || '')],
+          ['Books', Number(stats.books || 0).toFixed(0)],
+          ['Winners', Number(stats.winners || 0).toFixed(0)],
+          ['Average Quality', Number(stats.average_quality || 0).toFixed(2)],
+          ['Total Cost', `$${Number(stats.total_cost_usd || 0).toFixed(3)}`],
+        ].map(([label, value]) => `<tr><td>${esc(label)}</td><td>${esc(value)}</td></tr>`).join('');
+
+        q('settingsStatus').textContent = `Loaded settings for ${catalogId}.`;
+      } catch (error) {
+        q('settingsStatus').textContent = `Catalog settings load failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    function clearFormForNewCatalog() {
+      state.selectedCatalogId = '';
+      q('catalogId').value = '';
+      q('catalogName').value = '';
+      q('catalogDescription').value = '';
+      q('defaultModels').value = '';
+      q('qualityThreshold').value = '';
+      q('monthlyBudget').value = '';
+      q('driveSourceFolder').value = '';
+      q('driveOutputFolder').value = '';
+      q('exportDefaults').value = '{}';
+      q('catalogNotes').value = '';
+      q('catalogStatsRows').innerHTML = '<tr><td colspan="2" class="status">New catalog mode.</td></tr>';
+      q('settingsStatus').textContent = 'Creating a new catalog.';
+      renderCatalogList();
+    }
+
+    function settingsPayloadFromForm() {
+      return {
+        default_models: splitCsv(q('defaultModels').value),
+        quality_threshold: Number(q('qualityThreshold').value || 0),
+        monthly_budget: Number(q('monthlyBudget').value || 0),
+        gdrive_source_folder_id: String(q('driveSourceFolder').value || '').trim(),
+        gdrive_output_folder_id: String(q('driveOutputFolder').value || '').trim(),
+        export_defaults: parseJsonSafe(q('exportDefaults').value),
+        notes: String(q('catalogNotes').value || '').trim(),
+      };
+    }
+
+    async function saveCatalogSettings() {
+      const catalogId = String(q('catalogId').value || '').trim();
+      const name = String(q('catalogName').value || '').trim();
+      const description = String(q('catalogDescription').value || '').trim();
+      if (!name) {
+        q('status').textContent = 'Catalog name is required.';
+        return;
+      }
+
+      const settings = settingsPayloadFromForm();
+      q('status').textContent = 'Saving catalog settings...';
+      try {
+        let targetCatalogId = state.selectedCatalogId;
+        if (!targetCatalogId) {
+          const created = await fetchJson('/api/catalogs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              catalog_id: catalogId || undefined,
+              name,
+              description,
+            }),
+          });
+          targetCatalogId = String((created.catalog && (created.catalog.catalog_id || created.catalog.id)) || catalogId || '');
+          state.selectedCatalogId = targetCatalogId;
+        }
+        await fetchJson(`/api/catalogs/${encodeURIComponent(targetCatalogId)}/settings?${catalogQuery(targetCatalogId)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settings),
+        });
+
+        await fetchJson(`/api/catalogs/${encodeURIComponent(targetCatalogId)}?${catalogQuery(targetCatalogId)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, description }),
+        });
+
+        await refresh();
+      } catch (error) {
+        q('status').textContent = `Catalog save failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    async function activateSelectedCatalog() {
+      if (!state.selectedCatalogId) {
+        q('status').textContent = 'Select a catalog first.';
+        return;
+      }
+      q('status').textContent = `Activating ${state.selectedCatalogId}...`;
+      try {
+        await fetchJson(`/api/catalogs/${encodeURIComponent(state.selectedCatalogId)}/activate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        await refresh();
+      } catch (error) {
+        q('status').textContent = `Catalog activation failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    async function exportSelectedCatalog() {
+      if (!state.selectedCatalogId) {
+        q('status').textContent = 'Select a catalog first.';
+        return;
+      }
+      q('status').textContent = `Exporting ${state.selectedCatalogId}...`;
+      try {
+        const payload = await fetchJson(`/api/catalogs/${encodeURIComponent(state.selectedCatalogId)}/export`);
+        const bundle = payload.bundle || payload;
+        const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `catalog_${state.selectedCatalogId}_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        q('status').textContent = `Catalog ${state.selectedCatalogId} exported.`;
+      } catch (error) {
+        q('status').textContent = `Catalog export failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    async function importCatalog(event) {
+      const file = event.target && event.target.files ? event.target.files[0] : null;
+      if (!file) return;
+      q('status').textContent = 'Importing catalog...';
+      try {
+        const text = await file.text();
+        const bundle = JSON.parse(text);
+        await fetchJson('/api/catalogs/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bundle }),
+        });
+        await refresh();
+      } catch (error) {
+        q('status').textContent = `Catalog import failed: ${String(error && error.message || error)}`;
+      } finally {
+        q('importCatalogInput').value = '';
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

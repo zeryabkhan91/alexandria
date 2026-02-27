@@ -514,6 +514,41 @@ def test_generate_all_models_dry_run_resume_and_failures(tmp_path: Path, monkeyp
         )
 
 
+def test_diversify_prompt_for_model_variant_injects_style_and_provider_hint():
+    prompt = ig._diversify_prompt_for_model_variant(
+        prompt="Classical medallion scene for the title.",
+        model="openrouter/google/gemini-2.5-flash-image",
+        provider="openrouter",
+        variant=2,
+        model_index=0,
+    )
+    assert "Style direction:" in prompt
+    assert "Color direction:" in prompt
+    assert "Composition direction:" in prompt
+    assert "conceptual symbolism" in prompt.lower()
+
+
+def test_generate_all_models_applies_model_specific_diversity(tmp_path: Path, monkeypatch):
+    runtime = _Runtime(tmp_path)
+    monkeypatch.setattr(ig.config, "get_config", lambda: runtime)
+    output_dir = tmp_path / "generated"
+    results = ig.generate_all_models(
+        book_number=9,
+        prompt="Classical medallion scene for the title.",
+        negative_prompt="bad",
+        models=["openrouter/google/gemini-2.5-flash-image", "fal/fal-ai/flux-2/klein/4b"],
+        variants_per_model=1,
+        output_dir=output_dir,
+        dry_run=True,
+        resume=False,
+    )
+    assert len(results) == 2
+    prompt_by_model = {row.model: row.prompt for row in results}
+    assert len(prompt_by_model) == 2
+    prompts = list(prompt_by_model.values())
+    assert prompts[0] != prompts[1]
+
+
 def test_generate_single_book_and_batch(tmp_path: Path, monkeypatch):
     runtime = _Runtime(tmp_path)
     monkeypatch.setattr(ig.config, "get_config", lambda: runtime)

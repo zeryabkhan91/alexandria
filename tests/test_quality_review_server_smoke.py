@@ -29,13 +29,25 @@ def _fetch_status(base_url: str, path: str) -> int:
         return int(getattr(response, "status", 200))
 
 
-def _request_json(base_url: str, path: str, *, method: str = "GET", payload: dict | None = None) -> tuple[int, dict]:
+def _request_json(
+    base_url: str,
+    path: str,
+    *,
+    method: str = "GET",
+    payload: dict | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, dict]:
     data = json.dumps(payload or {}).encode("utf-8") if method in {"POST", "PUT", "PATCH"} else None
+    req_headers: dict[str, str] = {}
+    if data is not None:
+        req_headers["Content-Type"] = "application/json"
+    if headers:
+        req_headers.update(headers)
     request = Request(
         f"{base_url}{path}",
         method=method,
         data=data,
-        headers={"Content-Type": "application/json"} if data is not None else {},
+        headers=req_headers,
     )
     with urlopen(request, timeout=15) as response:
         body = response.read().decode("utf-8")
@@ -108,6 +120,10 @@ def test_quality_review_server_primary_routes_smoke():
             "/compare",
             "/history",
             "/dashboard",
+            "/analytics/models",
+            "/prompts",
+            "/catalog/settings",
+            "/admin/performance",
             "/similarity",
             "/mockups",
         ]
@@ -115,6 +131,7 @@ def test_quality_review_server_primary_routes_smoke():
             "/api/version",
             "/api/health",
             "/api/metrics",
+            "/api/performance/summary",
             "/api/providers/runtime",
             "/api/workers",
             "/api/jobs",
@@ -131,6 +148,8 @@ def test_quality_review_server_primary_routes_smoke():
             "/api/analytics/quality/by-prompt-pattern",
             "/api/analytics/quality/distribution",
             "/api/analytics/models/compare",
+            "/api/analytics/models/recommendation",
+            "/api/analytics/ab-tests",
             "/api/analytics/cost-projection?books=10&variants=2&models=openrouter/google/gemini-2.5-flash-image",
             "/api/analytics/prompts/effectiveness",
             "/api/analytics/quality/breakdown",
@@ -150,6 +169,8 @@ def test_quality_review_server_primary_routes_smoke():
             "/api/storage/usage",
             "/api/review-data",
             "/api/iterate-data",
+            "/api/prompts",
+            "/api/prompts/export",
             "/api/dashboard-data",
             "/api/books",
             "/api/compare",
@@ -188,6 +209,83 @@ def test_quality_review_server_drive_and_provider_connectivity_payloads():
         assert isinstance(connectivity_1.get("providers"), dict)
         assert connectivity_2.get("cached") is True
         assert connectivity_force.get("cached") is False
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_prompt_library_crud_and_versions():
+    process, base_url = _start_server()
+    try:
+        mutation_headers: dict[str, str] = {}
+        token = str(os.environ.get("MUTATION_API_TOKEN", "")).strip()
+        if token:
+            mutation_headers["X-API-Token"] = token
+
+        status_create, created = _request_json(
+            base_url,
+            "/api/prompts",
+            method="POST",
+            payload={
+                "name": "Smoke Prompt",
+                "prompt_template": "Dramatic cover for {title} with layered symbolism.",
+                "category": "smoke",
+                "tags": ["smoke", "test"],
+            },
+            headers=mutation_headers,
+        )
+        assert status_create == 200
+        assert created.get("ok") is True
+        prompt = created.get("prompt", {})
+        prompt_id = str(prompt.get("id") or created.get("prompt_id") or "")
+        assert prompt_id
+
+        status_list, listing = _request_json(base_url, "/api/prompts")
+        assert status_list == 200
+        prompt_ids = {str(item.get("id")) for item in listing.get("prompts", []) if isinstance(item, dict)}
+        assert prompt_id in prompt_ids
+
+        status_update, updated = _request_json(
+            base_url,
+            f"/api/prompts/{prompt_id}",
+            method="POST",
+            payload={
+                "action": "update",
+                "name": "Smoke Prompt v2",
+                "prompt_template": "Bold redesign concept for {title} with higher contrast.",
+            },
+            headers=mutation_headers,
+        )
+        assert status_update == 200
+        assert updated.get("ok") is True
+        assert str(updated.get("prompt", {}).get("name", "")) == "Smoke Prompt v2"
+
+        status_versions, versions = _request_json(base_url, f"/api/prompts/{prompt_id}/versions")
+        assert status_versions == 200
+        assert versions.get("ok") is True
+        assert isinstance(versions.get("versions"), list)
+        assert len(versions.get("versions", [])) >= 1
+
+        status_usage, usage = _request_json(
+            base_url,
+            f"/api/prompts/{prompt_id}",
+            method="POST",
+            payload={"action": "record_usage", "won": True},
+            headers=mutation_headers,
+        )
+        assert status_usage == 200
+        usage_prompt = usage.get("prompt", {})
+        assert int(usage_prompt.get("usage_count", 0)) >= 1
+        assert int(usage_prompt.get("win_count", 0)) >= 1
+
+        status_delete, deleted = _request_json(
+            base_url,
+            f"/api/prompts/{prompt_id}",
+            method="POST",
+            payload={"action": "delete"},
+            headers=mutation_headers,
+        )
+        assert status_delete == 200
+        assert deleted.get("ok") is True
     finally:
         _stop_server(process)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import io
 import json
 import logging
@@ -40,6 +41,68 @@ except ModuleNotFoundError:  # pragma: no cover
 logger = get_logger(__name__)
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+MODEL_STYLE_PROFILES: list[dict[str, str]] = [
+    {
+        "style": "dramatic cinematic classic",
+        "detail": "deep chiaroscuro, controlled golden highlights, tactile brush texture",
+        "palette": "deep navy, gold, and warm amber contrast",
+        "composition": "full-bleed scene with title-safe center focus",
+    },
+    {
+        "style": "minimal modern literary",
+        "detail": "restrained geometry, clean negative space, strong silhouette hierarchy",
+        "palette": "off-white base with one bold accent hue",
+        "composition": "split layout with asymmetric visual weight",
+    },
+    {
+        "style": "vintage engraved classic",
+        "detail": "fine line etching texture, aged paper grain, ornate vignette rhythm",
+        "palette": "sepia, umber, and antique brass",
+        "composition": "central medallion motif with breathing room around edges",
+    },
+    {
+        "style": "bold graphic poster",
+        "detail": "high-contrast blocks, simplified shapes, strong focal tension",
+        "palette": "vibrant jewel tones with one dark anchor color",
+        "composition": "dominant foreground subject and simplified layered background",
+    },
+    {
+        "style": "ethereal painterly",
+        "detail": "soft atmospheric diffusion, subtle edge blending, dreamlike depth",
+        "palette": "pastel gradients with desaturated supporting tones",
+        "composition": "floating central subject with directional light drift",
+    },
+    {
+        "style": "dark moody gothic",
+        "detail": "inky shadows, selective highlights, dramatic depth cues",
+        "palette": "deep charcoal with selective neon or gold accents",
+        "composition": "close-up focal subject with layered foreground framing",
+    },
+    {
+        "style": "illustrated hand-crafted",
+        "detail": "ink-and-wash feel, visible hand-drawn imperfections, textured brush marks",
+        "palette": "earth pigments with muted cool balancing tones",
+        "composition": "scene-led narrative tableau with diagonal motion",
+    },
+    {
+        "style": "typography-led conceptual cover",
+        "detail": "image mass arranged to support bold title area and clear hierarchy",
+        "palette": "monochrome base plus one accent color family",
+        "composition": "structured geometry with deliberate text-safe negative space",
+    },
+]
+
+MODEL_PROVIDER_HINTS: tuple[tuple[str, str], ...] = (
+    ("midjourney", "Emphasize artistic direction, stylized brushwork, and cinematic composition cues."),
+    ("dalle", "Use precise scene layout instructions and clear object placement relationships."),
+    ("gpt-image", "Use precise scene layout instructions and clear object placement relationships."),
+    ("openai", "Use precise scene layout instructions and clear object placement relationships."),
+    ("flux", "Prioritize tactile lighting realism and material texture fidelity."),
+    ("gemini", "Lean into conceptual symbolism and non-literal narrative framing."),
+    ("stable-diffusion", "Include technical style keywords and painterly medium guidance."),
+    ("sdxl", "Include technical style keywords and painterly medium guidance."),
+)
 
 
 def _host_matches_allowlist(host: str, pattern: str) -> bool:
@@ -975,7 +1038,7 @@ def generate_all_models(
 
     tasks: list[tuple[str, int, Path, str, str, int]] = []
     rng = random.SystemRandom()
-    for model in models:
+    for model_index, model in enumerate(models):
         model_dir = output_dir / str(book_number) / _model_to_directory(model)
         model_dir.mkdir(parents=True, exist_ok=True)
 
@@ -984,7 +1047,13 @@ def generate_all_models(
 
         for variant in range(1, variants_per_model + 1):
             image_path = model_dir / f"variant_{variant}.png"
-            diversified_prompt = _diversify_prompt_for_variant(prompt=prompt, variant=variant)
+            diversified_prompt = _diversify_prompt_for_model_variant(
+                prompt=prompt,
+                model=model,
+                provider=provider,
+                variant=variant,
+                model_index=model_index,
+            )
             seed = _variant_seed(rng=rng, book_number=book_number, model=model, variant=variant)
             if resume and image_path.exists():
                 logger.info(
@@ -1100,6 +1169,49 @@ def _diversify_prompt_for_variant(*, prompt: str, variant: int) -> str:
             f"{diversified} Create a visibly distinct composition from prior variants for this title."
         ).strip()
     return prompt_generator.enforce_prompt_constraints(diversified)
+
+
+def _stable_model_seed(*, model: str, provider: str) -> int:
+    token = f"{provider.strip().lower()}::{model.strip().lower()}"
+    digest = hashlib.sha1(token.encode("utf-8")).hexdigest()
+    return int(digest[:8], 16)
+
+
+def _provider_model_hint(*, model: str, provider: str) -> str:
+    token = f"{provider.strip().lower()} {model.strip().lower()}"
+    for marker, hint in MODEL_PROVIDER_HINTS:
+        if marker in token:
+            return hint
+    return ""
+
+
+def _diversify_prompt_for_model_variant(
+    *,
+    prompt: str,
+    model: str,
+    provider: str,
+    variant: int,
+    model_index: int,
+) -> str:
+    diversified = _diversify_prompt_for_variant(prompt=prompt, variant=variant)
+    if not MODEL_STYLE_PROFILES:
+        return diversified
+
+    stable_seed = _stable_model_seed(model=model, provider=provider)
+    profile = MODEL_STYLE_PROFILES[(stable_seed + int(model_index) + int(variant)) % len(MODEL_STYLE_PROFILES)]
+    provider_hint = _provider_model_hint(model=model, provider=provider)
+    directive_parts = [
+        f"Model signature: {provider.strip().lower()}/{model.strip().lower()}.",
+        f"Style direction: {profile['style']}.",
+        f"Color direction: {profile['palette']}.",
+        f"Composition direction: {profile['composition']}.",
+        f"Visual treatment: {profile['detail']}.",
+        "Ensure this result is intentionally different from other models in the same run.",
+    ]
+    if provider_hint:
+        directive_parts.append(provider_hint)
+    merged = f"{' '.join(directive_parts)} {diversified}".strip()
+    return prompt_generator.enforce_prompt_constraints(merged)
 
 
 def _variant_seed(*, rng: random.Random | random.SystemRandom, book_number: int, model: str, variant: int) -> int:

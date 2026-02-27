@@ -1,0 +1,158 @@
+main {
+  display: grid;
+  gap: 12px;
+}
+
+.header-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px;
+}
+
+.header-card h1 {
+  margin: 0;
+  color: var(--gold-500);
+  font-size: 25px;
+}
+
+.header-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(400px, 2fr);
+  gap: 12px;
+}
+
+.panel {
+  padding: 14px;
+}
+
+.panel h2 {
+  margin: 0;
+  color: var(--gold-500);
+  font-size: 19px;
+}
+
+.filter-row {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 1fr 170px;
+  gap: 8px;
+}
+
+.list {
+  margin-top: 10px;
+  max-height: 560px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.list-item {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(15, 23, 42, 0.55);
+  cursor: pointer;
+}
+
+.list-item.active {
+  border-color: rgba(212, 168, 71, 0.5);
+  background: rgba(212, 168, 71, 0.12);
+}
+
+.list-item .meta {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.form-grid {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.form-grid label {
+  display: grid;
+  gap: 4px;
+}
+
+textarea {
+  min-height: 130px;
+  width: 100%;
+  resize: vertical;
+}
+
+.row-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.preview {
+  margin-top: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(10, 15, 26, 0.52);
+  white-space: pre-wrap;
+}
+
+.version-list {
+  margin-top: 10px;
+  max-height: 230px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+}
+
+.version-item {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(17, 24, 39, 0.7);
+  padding: 8px;
+}
+
+.metrics-grid {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.metric-cell {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.metric-cell strong {
+  color: var(--gold-500);
+  display: block;
+  font-size: 18px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+@media (max-width: 1040px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .list {
+    max-height: 300px;
+  }
+}

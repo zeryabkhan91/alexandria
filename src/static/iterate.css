@@ -29,6 +29,25 @@ body.iterate-page { margin: 0; font-family: Georgia, "Times New Roman", serif; b
 .nav a.active { background: rgba(196, 163, 82, 0.18); }
 .nav .catalog { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .nav select { border-radius: 8px; border: 1px solid var(--line); background: #1b2a49; color: var(--text); padding: 6px 8px; }
+.notification-bell {
+  margin-left: 8px;
+  background: rgba(196, 163, 82, 0.15) !important;
+  color: var(--gold) !important;
+  border: 1px solid rgba(196, 163, 82, 0.35) !important;
+  font-size: 12px;
+}
+.notification-count {
+  display: inline-flex;
+  margin-left: 6px;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  align-items: center;
+  justify-content: center;
+  background: #f87171;
+  color: #fff;
+  font-size: 11px;
+}
 
 /* ─── HEADER ─── */
 header { padding: 14px 18px; border-bottom: 1px solid var(--line); }
@@ -39,6 +58,45 @@ h1 { margin: 0; color: var(--gold); font-size: 22px; }
 .layout { display: grid; grid-template-columns: 380px 1fr; gap: 14px; padding: 14px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
 .card h2 { margin: 0 0 10px; color: var(--gold); font-size: 20px; }
+
+.mode-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+body.iterate-page button.mode-active {
+  background: linear-gradient(135deg, var(--gold), #d4b362);
+  color: #1c2b49;
+}
+.quick-controls {
+  border: 1px solid rgba(196, 163, 82, 0.3);
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 12px;
+  background: rgba(0, 0, 0, 0.2);
+}
+.quick-models {
+  display: grid;
+  gap: 8px;
+}
+.quick-models label {
+  text-transform: none;
+  letter-spacing: 0;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid rgba(245, 230, 200, 0.16);
+  border-radius: 8px;
+  background: rgba(16, 28, 52, 0.7);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+.quick-models small {
+  color: var(--muted);
+  font-size: 11px;
+}
 
 .how-it-works {
   background: rgba(196, 163, 82, 0.07);
@@ -323,6 +381,48 @@ body.iterate-page button.btn-download-winner {
   color: #172744;
 }
 
+.run-summary-banner {
+  position: sticky;
+  top: 64px;
+  z-index: 6;
+  border: 1px solid rgba(196, 163, 82, 0.45);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(20, 31, 55, 0.96);
+  margin-bottom: 10px;
+}
+.run-summary-title {
+  color: var(--gold);
+  font-weight: 700;
+  font-size: 13px;
+}
+.run-summary-body {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.recent-generations {
+  margin-top: 12px;
+  border: 1px solid rgba(245, 230, 200, 0.18);
+  border-radius: 10px;
+  padding: 8px;
+}
+.recent-generations summary {
+  cursor: pointer;
+  color: var(--gold);
+}
+.recent-generations-list {
+  margin-top: 8px;
+  display: grid;
+  gap: 8px;
+}
+.recent-generations-list img {
+  width: 92px;
+  border-radius: 8px;
+  border: 1px solid rgba(245, 230, 200, 0.2);
+}
+
 /* ─── TABS — proper tab styling ─── */
 body.iterate-page .tabs { display: flex; gap: 0; margin-bottom: 12px; border-bottom: 2px solid rgba(245, 230, 200, 0.12); }
 body.iterate-page .tabs button {
@@ -376,7 +476,31 @@ body.iterate-page .tabs button.active:hover:not(:disabled):not(.btn-loading) {
 .ab-top { position: absolute; inset: 0; overflow: hidden; }
 .help-grid { display: grid; grid-template-columns: 160px 1fr; gap: 8px; font-size: 13px; }
 .help-grid div { padding: 4px 0; border-bottom: 1px solid rgba(245,230,200,.08); }
-#zoomModal img { max-width: 94vw; max-height: 94vh; border-radius: 8px; }
+#zoomModal .zoom-shell {
+  position: relative;
+  min-width: min(92vw, 900px);
+  min-height: 240px;
+}
+#zoomModal img {
+  max-width: 94vw;
+  max-height: 94vh;
+  border-radius: 8px;
+  transition: filter 0.25s ease;
+}
+#zoomModal img.zoom-loading-image {
+  filter: blur(1.5px);
+}
+.zoom-loading {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(20, 31, 55, 0.92);
+  border: 1px solid rgba(196, 163, 82, 0.3);
+  color: var(--text);
+  font-size: 12px;
+}
 
 .iterate-help-card {
   max-width: 680px;
@@ -467,6 +591,45 @@ body.iterate-page .tabs button.active:hover:not(:disabled):not(.btn-loading) {
   word-break: break-word;
 }
 
+.heartbeat-model-progress {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+.heartbeat-model-row {
+  border: 1px solid rgba(245, 230, 200, 0.16);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(27, 42, 73, 0.7);
+}
+.heartbeat-model-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.heartbeat-model-head span {
+  color: var(--muted);
+}
+.heartbeat-progress {
+  margin-top: 6px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(10, 15, 26, 0.8);
+  border: 1px solid rgba(245, 230, 200, 0.16);
+  overflow: hidden;
+}
+.heartbeat-progress-fill {
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold), #d4b362);
+}
+.heartbeat-cancel-btn {
+  margin-top: 6px;
+  font-size: 11px !important;
+  padding: 5px 8px !important;
+}
+
 /* ─── TOAST NOTIFICATIONS ─── */
 .toast-container {
   position: fixed;
@@ -524,6 +687,49 @@ body.iterate-page .tabs button.active:hover:not(:disabled):not(.btn-loading) {
   border-left: 3px solid var(--gold);
   color: var(--text);
   margin-top: 0;
+}
+
+.notification-panel {
+  position: fixed;
+  top: 76px;
+  right: 14px;
+  width: min(400px, 92vw);
+  max-height: 70vh;
+  overflow: auto;
+  z-index: 1200;
+  background: #111a2f;
+  border: 1px solid rgba(196, 163, 82, 0.45);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+}
+.notification-list {
+  display: grid;
+  gap: 8px;
+}
+
+.tour-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(0, 0, 0, 0.65);
+  display: grid;
+  place-items: center;
+}
+.tour-card {
+  width: min(560px, 92vw);
+}
+.tour-highlight {
+  outline: 3px solid rgba(196, 163, 82, 0.85);
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+
+body.iterate-page.iterate-quick-mode #advancedControlsWrap {
+  display: none;
+}
+body.iterate-page:not(.iterate-quick-mode) #quickControls {
+  display: none;
 }
 
 /* ─── RESPONSIVE ─── */

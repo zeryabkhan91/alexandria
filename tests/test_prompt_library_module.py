@@ -145,4 +145,4 @@ def test_load_or_seed_recovers_from_invalid_library_json(tmp_path: Path, monkeyp
     assert library.get_style_anchors()
     assert library.get_prompts()
     payload = json.loads(lib_path.read_text(encoding="utf-8"))
-    assert payload.get("version") == 1
+    assert payload.get("version") == 2

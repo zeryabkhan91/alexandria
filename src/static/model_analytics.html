@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/model_analytics.css" />
+  <title>Alexandria Model Analytics</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a href="/review">Review</a>
+    <a href="/batch">Batch</a>
+    <a href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/analytics/models" class="active">Model Analytics</a>
+    <a href="/prompts">Prompts</a>
+    <a href="/catalog/settings">Catalog Settings</a>
+    <a href="/admin/performance">Performance</a>
+    <a href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+  </nav>
+
+  <main>
+    <section class="card page-header">
+      <h1 class="header-title">Model Analytics & Comparison</h1>
+      <div class="header-controls">
+        <label>
+          Catalog
+          <select id="catalogSelect"></select>
+        </label>
+        <label>
+          Book (optional)
+          <input id="bookNumber" type="number" min="0" step="1" placeholder="0 = all" />
+        </label>
+        <button id="reloadBtn" type="button">Refresh</button>
+      </div>
+    </section>
+
+    <section class="card section-card">
+      <h2>Recommendation</h2>
+      <div id="recommendationBox" class="recommendation status">Loading recommendation...</div>
+      <div id="summaryMetrics" class="metric-grid u-mt-10"></div>
+    </section>
+
+    <section class="section-grid">
+      <article class="card section-card">
+        <h2>Model Performance</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Avg Quality</th>
+                <th>Avg Cost</th>
+                <th>Avg Time</th>
+                <th>Win Rate</th>
+                <th>Total Generations</th>
+              </tr>
+            </thead>
+            <tbody id="modelRows">
+              <tr><td colspan="6" class="status">Loading model metrics...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card chart-card">
+        <h3>Quality vs Cost Scatter</h3>
+        <canvas id="scatterChart" width="900" height="420"></canvas>
+      </article>
+    </section>
+
+    <section class="section-grid">
+      <article class="card section-card">
+        <h2>Cost Projection</h2>
+        <div class="form-grid">
+          <label>
+            Books
+            <input id="projectionBooks" type="number" min="1" step="1" value="1" />
+          </label>
+          <label>
+            Variants per Model
+            <input id="projectionVariants" type="number" min="1" step="1" value="5" />
+          </label>
+        </div>
+        <div id="projectionModels" class="model-checks"></div>
+        <button id="projectBtn" type="button" class="u-mt-10">Estimate Cost</button>
+        <div id="projectionSummary" class="status u-mt-10">Select models and click Estimate Cost.</div>
+      </article>
+
+      <article class="card section-card">
+        <h2>A/B Winner Log</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Book</th>
+                <th>Winner</th>
+                <th>Compared</th>
+                <th>Comment</th>
+              </tr>
+            </thead>
+            <tbody id="abRows">
+              <tr><td colspan="5" class="status">Loading A/B history...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <section class="card section-card">
+      <h2>Cross-Catalog Efficiency</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Catalog</th>
+              <th>Recommended Model</th>
+              <th>Avg Quality</th>
+              <th>Avg Cost</th>
+              <th>Most Used Model</th>
+            </tr>
+          </thead>
+          <tbody id="crossCatalogRows">
+            <tr><td colspan="5" class="status">Loading cross-catalog comparison...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="status" class="status"></section>
+  </main>
+
+  <script>
+    const state = {
+      catalog: 'classics',
+      catalogs: [],
+      modelRows: [],
+      recommendation: null,
+      abTests: [],
+      crossCatalog: [],
+    };
+
+    function q(id) { return document.getElementById(id); }
+    function catalogQuery(catalog) { return `catalog=${encodeURIComponent(catalog || state.catalog)}`; }
+
+    function esc(value) {
+      return String(value || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    async function fetchJson(url) {
+      const res = await fetch(url, { cache: 'no-store' });
+      let data = {};
+      try {
+        data = await res.json();
+      } catch (_) {
+        data = {};
+      }
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || data.message || `HTTP ${res.status}`);
+      }
+      return data;
+    }
+
+    async function init() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('catalog')) state.catalog = String(params.get('catalog'));
+      if (params.get('book')) q('bookNumber').value = String(params.get('book'));
+      bindEvents();
+      await loadCatalogs();
+      await reload();
+    }
+
+    function bindEvents() {
+      q('reloadBtn').addEventListener('click', () => reload());
+      q('catalogSelect').addEventListener('change', (event) => {
+        state.catalog = String(event.target.value || 'classics');
+        const url = new URL(window.location.href);
+        url.searchParams.set('catalog', state.catalog);
+        window.history.replaceState({}, '', url.toString());
+        reload();
+      });
+      q('projectBtn').addEventListener('click', () => refreshProjection());
+    }
+
+    async function loadCatalogs() {
+      const payload = await fetchJson('/api/catalogs');
+      state.catalogs = Array.isArray(payload.catalogs) ? payload.catalogs : [];
+      if (!state.catalog && payload.active_catalog) state.catalog = String(payload.active_catalog);
+      q('catalogSelect').innerHTML = state.catalogs
+        .map((row) => `<option value="${esc(row.id)}" ${row.id === state.catalog ? 'selected' : ''}>${esc(row.name || row.id)}</option>`)
+        .join('');
+    }
+
+    async function reload() {
+      q('status').textContent = 'Loading model analytics...';
+      const bookNumber = Math.max(0, Number(q('bookNumber').value || 0));
+      try {
+        const [compare, recommendation, abTests] = await Promise.all([
+          fetchJson(`/api/analytics/models/compare?${catalogQuery()}`),
+          fetchJson(`/api/analytics/models/recommendation?${catalogQuery()}&book=${encodeURIComponent(bookNumber)}`),
+          fetchJson(`/api/analytics/ab-tests?${catalogQuery()}&limit=300`),
+        ]);
+        state.modelRows = Array.isArray(compare.models) ? compare.models : [];
+        state.recommendation = recommendation;
+        state.abTests = Array.isArray(abTests.items) ? abTests.items : [];
+        renderModelTable();
+        renderRecommendation(compare, recommendation);
+        renderAbTests();
+        renderProjectionModels();
+        drawScatter();
+        await loadCrossCatalog();
+        q('status').textContent = `Loaded ${state.modelRows.length} model row(s) for catalog ${state.catalog}.`;
+      } catch (error) {
+        q('status').textContent = `Analytics load failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    function renderRecommendation(comparePayload, recommendationPayload) {
+      const recommendation = String((recommendationPayload && recommendationPayload.recommended_model) || (comparePayload && comparePayload.recommended_model) || 'n/a');
+      const sample = Number((recommendationPayload && recommendationPayload.sample_size) || 0);
+      const reason = String((recommendationPayload && recommendationPayload.reason) || 'No recommendation context.');
+      q('recommendationBox').innerHTML = `<strong class="highlight">${esc(recommendation)}</strong> — ${esc(reason)} (sample size: ${sample}).`;
+
+      const totalGenerations = state.modelRows.reduce((sum, row) => sum + Number(row.total_generations || 0), 0);
+      const avgQuality = state.modelRows.length
+        ? state.modelRows.reduce((sum, row) => sum + Number(row.avg_quality || 0), 0) / state.modelRows.length
+        : 0;
+      const avgCost = state.modelRows.length
+        ? state.modelRows.reduce((sum, row) => sum + Number(row.avg_cost || 0), 0) / state.modelRows.length
+        : 0;
+      const avgTime = state.modelRows.length
+        ? state.modelRows.reduce((sum, row) => sum + Number(row.avg_generation_time_seconds || 0), 0) / state.modelRows.length
+        : 0;
+
+      q('summaryMetrics').innerHTML = [
+        ['Models tracked', state.modelRows.length.toFixed(0)],
+        ['Total generations', totalGenerations.toFixed(0)],
+        ['Average quality', avgQuality.toFixed(2)],
+        ['Average cost/image', `$${avgCost.toFixed(4)}`],
+        ['Average generation time', `${avgTime.toFixed(2)}s`],
+      ].map(([label, value]) => `<div class="metric-card"><div>${esc(label)}</div><strong>${esc(value)}</strong></div>`).join('');
+    }
+
+    function renderModelTable() {
+      if (!state.modelRows.length) {
+        q('modelRows').innerHTML = '<tr><td colspan="6" class="status">No model analytics yet.</td></tr>';
+        return;
+      }
+      q('modelRows').innerHTML = state.modelRows.map((row) => {
+        const model = String(row.model || 'unknown');
+        const quality = Number(row.avg_quality || 0);
+        const cost = Number(row.avg_cost || 0);
+        const speed = Number(row.avg_generation_time_seconds || 0);
+        const winRate = Number(row.win_rate || 0) * 100;
+        const total = Number(row.total_generations || 0);
+        return `
+          <tr>
+            <td>${esc(model)}</td>
+            <td>${quality.toFixed(2)}</td>
+            <td>$${cost.toFixed(4)}</td>
+            <td>${speed.toFixed(2)}s</td>
+            <td>${winRate.toFixed(1)}%</td>
+            <td>${total}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderAbTests() {
+      if (!state.abTests.length) {
+        q('abRows').innerHTML = '<tr><td colspan="5" class="status">No winner comparisons recorded yet.</td></tr>';
+        return;
+      }
+      const rows = state.abTests.slice(-120).reverse();
+      q('abRows').innerHTML = rows.map((row) => {
+        const created = row.created_at ? new Date(row.created_at).toLocaleString() : '-';
+        const compared = Array.isArray(row.models_compared) ? row.models_compared.join(', ') : '';
+        return `
+          <tr>
+            <td>${esc(created)}</td>
+            <td>${Number(row.book_id || 0)}</td>
+            <td><span class="badge">${esc(String(row.winner || 'n/a'))}</span></td>
+            <td>${esc(compared)}</td>
+            <td>${esc(String(row.user_comment || ''))}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    async function loadCrossCatalog() {
+      const catalogs = state.catalogs.map((row) => String(row.id || '')).filter(Boolean);
+      if (!catalogs.length) {
+        q('crossCatalogRows').innerHTML = '<tr><td colspan="5" class="status">No catalogs found.</td></tr>';
+        return;
+      }
+      const rows = await Promise.all(catalogs.map(async (catalogId) => {
+        try {
+          const compare = await fetchJson(`/api/analytics/models/compare?${catalogQuery(catalogId)}`);
+          const models = Array.isArray(compare.models) ? compare.models : [];
+          const bestQuality = models.length ? Math.max(...models.map((item) => Number(item.avg_quality || 0))) : 0;
+          const avgCost = models.length
+            ? models.reduce((sum, item) => sum + Number(item.avg_cost || 0), 0) / models.length
+            : 0;
+          const mostUsed = models
+            .slice()
+            .sort((left, right) => Number(right.total_generations || 0) - Number(left.total_generations || 0))[0];
+          return {
+            catalog: catalogId,
+            recommended_model: String(compare.recommended_model || ''),
+            avg_quality: bestQuality,
+            avg_cost: avgCost,
+            most_used_model: String((mostUsed && mostUsed.model) || 'n/a'),
+          };
+        } catch (_) {
+          return {
+            catalog: catalogId,
+            recommended_model: 'n/a',
+            avg_quality: 0,
+            avg_cost: 0,
+            most_used_model: 'n/a',
+          };
+        }
+      }));
+      state.crossCatalog = rows;
+      q('crossCatalogRows').innerHTML = rows.map((row) => `
+        <tr>
+          <td>${esc(row.catalog)}</td>
+          <td>${esc(row.recommended_model)}</td>
+          <td>${Number(row.avg_quality || 0).toFixed(2)}</td>
+          <td>$${Number(row.avg_cost || 0).toFixed(4)}</td>
+          <td>${esc(row.most_used_model)}</td>
+        </tr>
+      `).join('');
+    }
+
+    function renderProjectionModels() {
+      if (!state.modelRows.length) {
+        q('projectionModels').innerHTML = '<div class="empty-state">No models available for projection.</div>';
+        return;
+      }
+      q('projectionModels').innerHTML = state.modelRows.map((row, index) => {
+        const model = String(row.model || '');
+        return `
+          <label class="model-check">
+            <input type="checkbox" value="${esc(model)}" ${index < 3 ? 'checked' : ''} />
+            <span>${esc(model)}</span>
+          </label>
+        `;
+      }).join('');
+    }
+
+    function selectedProjectionModels() {
+      return Array.from(q('projectionModels').querySelectorAll('input[type="checkbox"]:checked'))
+        .map((input) => String(input.value || '').trim())
+        .filter(Boolean);
+    }
+
+    async function refreshProjection() {
+      const models = selectedProjectionModels();
+      if (!models.length) {
+        q('projectionSummary').textContent = 'Select at least one model for cost projection.';
+        return;
+      }
+      const books = Math.max(1, Number(q('projectionBooks').value || 1));
+      const variants = Math.max(1, Number(q('projectionVariants').value || 1));
+      q('projectionSummary').textContent = 'Estimating...';
+      try {
+        const payload = await fetchJson(`/api/analytics/cost-projection?${catalogQuery()}&books=${books}&variants=${variants}&models=${encodeURIComponent(models.join(','))}`);
+        const lines = [
+          `${Number(payload.totalImages || 0)} images`,
+          `${Number(payload.models && payload.models.length || 0)} model(s)`,
+          `estimated cost $${Number(payload.estimatedCostUsd || 0).toFixed(3)}`,
+          `estimated time ${Number(payload.estimatedTimeHours || 0).toFixed(2)}h`,
+        ];
+        q('projectionSummary').textContent = lines.join(' • ');
+      } catch (error) {
+        q('projectionSummary').textContent = `Projection failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    function drawScatter() {
+      const canvas = q('scatterChart');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const width = canvas.width;
+      const height = canvas.height;
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, width, height);
+
+      const rows = state.modelRows;
+      if (!rows.length) {
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '14px sans-serif';
+        ctx.fillText('No model data yet.', 20, 30);
+        return;
+      }
+
+      const maxCost = Math.max(0.0001, ...rows.map((row) => Number(row.avg_cost || 0)));
+      const maxQuality = Math.max(1, ...rows.map((row) => Number(row.avg_quality || 0)));
+      const pad = 50;
+      const chartWidth = width - (pad * 2);
+      const chartHeight = height - (pad * 2);
+
+      ctx.strokeStyle = 'rgba(148,163,184,0.3)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(pad, height - pad);
+      ctx.lineTo(width - pad, height - pad);
+      ctx.moveTo(pad, pad);
+      ctx.lineTo(pad, height - pad);
+      ctx.stroke();
+
+      ctx.fillStyle = '#c4a352';
+      ctx.font = '12px sans-serif';
+      ctx.fillText('Cost', width - pad + 8, height - pad + 4);
+      ctx.fillText('Quality', pad - 6, pad - 10);
+
+      rows.forEach((row) => {
+        const cost = Number(row.avg_cost || 0);
+        const quality = Number(row.avg_quality || 0);
+        const x = pad + (cost / maxCost) * chartWidth;
+        const y = height - pad - (quality / maxQuality) * chartHeight;
+        ctx.beginPath();
+        ctx.fillStyle = '#d4a847';
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = '11px sans-serif';
+        ctx.fillText(String(row.model || '').slice(0, 20), x + 7, y - 7);
+      });
+    }
+
+    init();
+  </script>
+</body>
+</html>

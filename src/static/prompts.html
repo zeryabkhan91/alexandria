@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/src/static/shared.css" />
+  <link rel="stylesheet" href="/src/static/prompts.css" />
+  <title>Alexandria Prompt Library</title>
+</head>
+<body>
+  <nav class="nav">
+    <a href="/iterate">Iterate</a>
+    <a href="/review">Review</a>
+    <a href="/batch">Batch</a>
+    <a href="/history">History</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/analytics/models">Model Analytics</a>
+    <a href="/prompts" class="active">Prompts</a>
+    <a href="/catalog/settings">Catalog Settings</a>
+    <a href="/admin/performance">Performance</a>
+    <a href="/similarity">Similarity</a>
+    <a href="/mockups">Mockups</a>
+    <a href="/catalogs">Catalogs</a>
+    <a href="/jobs">Jobs</a>
+    <a href="/compare">Compare</a>
+    <a href="/api/docs" target="_blank">API Docs</a>
+  </nav>
+
+  <main>
+    <section class="card header-card">
+      <h1>Prompt Library</h1>
+      <div class="header-controls">
+        <label>
+          Catalog
+          <select id="catalogSelect"></select>
+        </label>
+        <button id="refreshBtn" type="button">Refresh</button>
+        <button id="newBtn" type="button" class="secondary">New Prompt</button>
+        <button id="exportBtn" type="button" class="ghost">Export JSON</button>
+        <label class="ghost" for="importInput">Import JSON</label>
+        <input id="importInput" type="file" accept="application/json" class="hidden" />
+      </div>
+    </section>
+
+    <section class="layout">
+      <article class="card panel">
+        <h2>Library</h2>
+        <div class="filter-row">
+          <input id="searchInput" type="search" placeholder="Search by name, tag, or text..." />
+          <select id="categoryFilter"></select>
+        </div>
+        <div id="promptList" class="list"></div>
+      </article>
+
+      <article class="card panel">
+        <h2>Prompt Editor</h2>
+        <div id="editorStatus" class="status u-mt-8">Select a prompt or create a new one.</div>
+        <div class="form-grid">
+          <label>
+            Name
+            <input id="promptName" type="text" placeholder="Prompt name" />
+          </label>
+          <label>
+            Category
+            <input id="promptCategory" type="text" placeholder="general" />
+          </label>
+          <label>
+            Source Model
+            <input id="promptModel" type="text" placeholder="openrouter/google/gemini-2.5-flash-image" />
+          </label>
+          <label>
+            Quality Score
+            <input id="promptQuality" type="number" min="0" max="10" step="0.01" placeholder="0.80" />
+          </label>
+          <label>
+            Tags (comma-separated)
+            <input id="promptTags" type="text" placeholder="dramatic, typography, vintage" />
+          </label>
+          <label>
+            Style Anchors (comma-separated)
+            <input id="promptAnchors" type="text" placeholder="warm_sepia_sketch, engraving_detailed" />
+          </label>
+        </div>
+
+        <label class="u-mt-10">
+          Prompt Template
+          <textarea id="promptTemplate" placeholder="Use variables like {title}, {author}, {genre}."></textarea>
+        </label>
+
+        <label class="u-mt-8">
+          Negative Prompt
+          <textarea id="negativePrompt" placeholder="Optional negative prompt"></textarea>
+        </label>
+
+        <label class="u-mt-8">
+          Notes
+          <textarea id="promptNotes" placeholder="What worked, for which books/models, etc."></textarea>
+        </label>
+
+        <div class="row-actions">
+          <button id="saveBtn" type="button">Save</button>
+          <button id="deleteBtn" type="button" class="secondary">Delete</button>
+          <button id="useBtn" type="button" class="ghost">Use In Iterate</button>
+          <button id="recordUseBtn" type="button" class="ghost">Record Usage</button>
+          <button id="recordWinBtn" type="button" class="ghost">Record Win</button>
+        </div>
+
+        <div class="metrics-grid" id="promptMetrics"></div>
+        <div id="promptPreview" class="preview">Preview appears here.</div>
+
+        <h2 class="u-mt-12">Version History</h2>
+        <div id="versionList" class="version-list"></div>
+      </article>
+    </section>
+
+    <section id="status" class="status"></section>
+  </main>
+
+  <script>
+    const state = {
+      catalog: 'classics',
+      catalogs: [],
+      prompts: [],
+      selectedPromptId: '',
+    };
+
+    function q(id) { return document.getElementById(id); }
+    function catalogQuery(catalog) { return `catalog=${encodeURIComponent(catalog || state.catalog)}`; }
+
+    function esc(value) {
+      return String(value || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function splitCsv(value) {
+      return String(value || '').split(',').map((part) => part.trim()).filter(Boolean);
+    }
+
+    function fetchJson(url, options) {
+      return fetch(url, options).then(async (res) => {
+        let data = {};
+        try {
+          data = await res.json();
+        } catch (_) {
+          data = {};
+        }
+        if (!res.ok || data.ok === false) {
+          throw new Error(data.error || data.message || `HTTP ${res.status}`);
+        }
+        return data;
+      });
+    }
+
+    function bindEvents() {
+      q('catalogSelect').addEventListener('change', (event) => {
+        state.catalog = String(event.target.value || 'classics');
+        const url = new URL(window.location.href);
+        url.searchParams.set('catalog', state.catalog);
+        window.history.replaceState({}, '', url.toString());
+        refresh();
+      });
+      q('refreshBtn').addEventListener('click', () => refresh());
+      q('newBtn').addEventListener('click', () => setFormFromPrompt(null));
+      q('searchInput').addEventListener('input', () => renderList());
+      q('categoryFilter').addEventListener('change', () => renderList());
+      q('saveBtn').addEventListener('click', () => savePrompt());
+      q('deleteBtn').addEventListener('click', () => deletePrompt());
+      q('useBtn').addEventListener('click', () => usePromptInIterate());
+      q('recordUseBtn').addEventListener('click', () => recordUsage(false));
+      q('recordWinBtn').addEventListener('click', () => recordUsage(true));
+      q('exportBtn').addEventListener('click', () => exportLibrary());
+      q('importInput').addEventListener('change', (event) => importLibrary(event));
+      ['promptTemplate', 'promptName', 'promptCategory', 'promptModel', 'promptQuality', 'promptTags', 'promptAnchors'].forEach((id) => {
+        q(id).addEventListener('input', () => renderPreview());
+      });
+    }
+
+    async function init() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('catalog')) state.catalog = String(params.get('catalog'));
+      if (params.get('prompt_id')) state.selectedPromptId = String(params.get('prompt_id'));
+      bindEvents();
+      await loadCatalogs();
+      await refresh();
+    }
+
+    async function loadCatalogs() {
+      const payload = await fetchJson('/api/catalogs');
+      state.catalogs = Array.isArray(payload.catalogs) ? payload.catalogs : [];
+      if (!state.catalog && payload.active_catalog) state.catalog = String(payload.active_catalog);
+      q('catalogSelect').innerHTML = state.catalogs
+        .map((row) => `<option value="${esc(row.id)}" ${row.id === state.catalog ? 'selected' : ''}>${esc(row.name || row.id)}</option>`)
+        .join('');
+    }
+
+    async function refresh() {
+      q('status').textContent = 'Loading prompts...';
+      try {
+        const payload = await fetchJson(`/api/prompts?${catalogQuery()}`);
+        state.prompts = Array.isArray(payload.prompts) ? payload.prompts : [];
+        renderCategoryFilter();
+        renderList();
+        if (state.selectedPromptId) {
+          const item = state.prompts.find((row) => String(row.id) === state.selectedPromptId);
+          setFormFromPrompt(item || null);
+        } else {
+          setFormFromPrompt(null);
+        }
+        q('status').textContent = `Loaded ${state.prompts.length} prompt(s) for catalog ${state.catalog}.`;
+      } catch (error) {
+        q('status').textContent = `Prompt load failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    function renderCategoryFilter() {
+      const categories = new Set(['all']);
+      state.prompts.forEach((row) => categories.add(String(row.category || 'general')));
+      q('categoryFilter').innerHTML = Array.from(categories).map((category) => (
+        `<option value="${esc(category)}">${esc(category)}</option>`
+      )).join('');
+    }
+
+    function filteredPrompts() {
+      const search = String(q('searchInput').value || '').toLowerCase().trim();
+      const category = String(q('categoryFilter').value || 'all').toLowerCase();
+      return state.prompts.filter((row) => {
+        if (category !== 'all' && String(row.category || '').toLowerCase() !== category) return false;
+        if (!search) return true;
+        const blob = `${row.name || ''} ${row.prompt_template || ''} ${(row.tags || []).join(' ')} ${(row.notes || '')}`.toLowerCase();
+        return blob.includes(search);
+      });
+    }
+
+    function renderList() {
+      const rows = filteredPrompts();
+      const activeId = String(state.selectedPromptId || '');
+      if (!rows.length) {
+        q('promptList').innerHTML = '<div class="empty-state">No prompts match current filters.</div>';
+        return;
+      }
+      q('promptList').innerHTML = rows.map((row) => {
+        const usage = Number(row.usage_count || 0);
+        const wins = Number(row.win_count || 0);
+        const winRate = usage > 0 ? ((wins / usage) * 100).toFixed(1) : '0.0';
+        const active = String(row.id) === activeId ? ' active' : '';
+        return `
+          <div class="list-item${active}" data-prompt-id="${esc(row.id)}">
+            <strong>${esc(row.name || row.id)}</strong>
+            <div class="meta">${esc(row.category || 'general')} · score ${Number(row.quality_score || 0).toFixed(3)} · v${Number(row.version || 1)}</div>
+            <div class="meta">usage ${usage} · wins ${wins} · win rate ${winRate}%</div>
+            <div class="meta">model ${esc(row.best_model_pairing || row.source_model || 'n/a')}</div>
+          </div>
+        `;
+      }).join('');
+      q('promptList').querySelectorAll('[data-prompt-id]').forEach((node) => {
+        node.addEventListener('click', () => {
+          state.selectedPromptId = String(node.getAttribute('data-prompt-id') || '');
+          const selected = state.prompts.find((row) => String(row.id) === state.selectedPromptId);
+          setFormFromPrompt(selected || null);
+          renderList();
+        });
+      });
+    }
+
+    function setFormFromPrompt(prompt) {
+      if (!prompt) {
+        state.selectedPromptId = '';
+        q('editorStatus').textContent = 'Creating a new prompt.';
+        q('promptName').value = '';
+        q('promptCategory').value = 'general';
+        q('promptModel').value = '';
+        q('promptQuality').value = '';
+        q('promptTags').value = '';
+        q('promptAnchors').value = '';
+        q('promptTemplate').value = '';
+        q('negativePrompt').value = '';
+        q('promptNotes').value = '';
+        q('promptMetrics').innerHTML = '';
+        q('versionList').innerHTML = '<div class="empty-state">No versions yet.</div>';
+        renderPreview();
+        return;
+      }
+
+      state.selectedPromptId = String(prompt.id || '');
+      q('editorStatus').textContent = `Editing prompt ${state.selectedPromptId}`;
+      q('promptName').value = String(prompt.name || '');
+      q('promptCategory').value = String(prompt.category || 'general');
+      q('promptModel').value = String(prompt.source_model || '');
+      q('promptQuality').value = String(prompt.quality_score || '');
+      q('promptTags').value = Array.isArray(prompt.tags) ? prompt.tags.join(', ') : '';
+      q('promptAnchors').value = Array.isArray(prompt.style_anchors) ? prompt.style_anchors.join(', ') : '';
+      q('promptTemplate').value = String(prompt.prompt_template || '');
+      q('negativePrompt').value = String(prompt.negative_prompt || '');
+      q('promptNotes').value = String(prompt.notes || '');
+
+      const usage = Number(prompt.usage_count || 0);
+      const wins = Number(prompt.win_count || 0);
+      const winRate = usage > 0 ? (wins / usage) * 100 : 0;
+      q('promptMetrics').innerHTML = [
+        ['Version', Number(prompt.version || 1).toFixed(0)],
+        ['Usage', usage.toFixed(0)],
+        ['Wins', wins.toFixed(0)],
+        ['Win Rate', `${winRate.toFixed(1)}%`],
+        ['Last Used', String(prompt.last_used_at || '-')],
+        ['Updated', String(prompt.updated_at || '-')],
+      ].map(([label, value]) => `<div class="metric-cell"><div>${esc(label)}</div><strong>${esc(value)}</strong></div>`).join('');
+
+      renderPreview();
+      loadVersions(state.selectedPromptId);
+    }
+
+    function payloadFromForm() {
+      return {
+        name: String(q('promptName').value || '').trim(),
+        category: String(q('promptCategory').value || 'general').trim() || 'general',
+        source_model: String(q('promptModel').value || '').trim(),
+        quality_score: Number(q('promptQuality').value || 0),
+        tags: splitCsv(q('promptTags').value),
+        style_anchors: splitCsv(q('promptAnchors').value),
+        prompt_template: String(q('promptTemplate').value || '').trim(),
+        negative_prompt: String(q('negativePrompt').value || '').trim(),
+        notes: String(q('promptNotes').value || '').trim(),
+      };
+    }
+
+    async function savePrompt() {
+      const payload = payloadFromForm();
+      if (!payload.name) {
+        q('status').textContent = 'Prompt name is required.';
+        return;
+      }
+      if (!payload.prompt_template.includes('{title}')) {
+        q('status').textContent = 'Prompt template must include {title}.';
+        return;
+      }
+      q('status').textContent = 'Saving prompt...';
+      try {
+        if (!state.selectedPromptId) {
+          await fetchJson(`/api/prompts?${catalogQuery()}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+        } else {
+          await fetchJson(`/api/prompts/${encodeURIComponent(state.selectedPromptId)}?${catalogQuery()}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'update', ...payload }),
+          });
+        }
+        await refresh();
+      } catch (error) {
+        q('status').textContent = `Save failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    async function deletePrompt() {
+      if (!state.selectedPromptId) {
+        q('status').textContent = 'Select a prompt first.';
+        return;
+      }
+      if (!window.confirm(`Delete prompt ${state.selectedPromptId}?`)) return;
+      q('status').textContent = 'Deleting prompt...';
+      try {
+        await fetchJson(`/api/prompts/${encodeURIComponent(state.selectedPromptId)}?${catalogQuery()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'delete' }),
+        });
+        state.selectedPromptId = '';
+        await refresh();
+      } catch (error) {
+        q('status').textContent = `Delete failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    async function recordUsage(won) {
+      if (!state.selectedPromptId) {
+        q('status').textContent = 'Select a prompt first.';
+        return;
+      }
+      q('status').textContent = won ? 'Recording win...' : 'Recording usage...';
+      try {
+        await fetchJson(`/api/prompts/${encodeURIComponent(state.selectedPromptId)}?${catalogQuery()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'record_usage', won: Boolean(won) }),
+        });
+        await refresh();
+      } catch (error) {
+        q('status').textContent = `Usage update failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    async function loadVersions(promptId) {
+      if (!promptId) {
+        q('versionList').innerHTML = '<div class="empty-state">No versions yet.</div>';
+        return;
+      }
+      q('versionList').innerHTML = '<div class="status">Loading versions...</div>';
+      try {
+        const payload = await fetchJson(`/api/prompts/${encodeURIComponent(promptId)}/versions?${catalogQuery()}`);
+        const versions = Array.isArray(payload.versions) ? payload.versions : [];
+        if (!versions.length) {
+          q('versionList').innerHTML = '<div class="empty-state">No historical versions for this prompt yet.</div>';
+          return;
+        }
+        q('versionList').innerHTML = versions.slice().reverse().map((row, index) => {
+          const label = `v${Number(row.version || 1)} (${String(row.updated_at || row.created_at || 'unknown')})`;
+          return `
+            <article class="version-item">
+              <strong>${esc(label)}</strong>
+              <div class="meta">${esc(String(row.name || ''))}</div>
+              <div class="meta">${esc(String(row.prompt_template || '')).slice(0, 220)}</div>
+              <button type="button" data-rollback-index="${index}" class="u-mt-6 secondary">Rollback To This Version</button>
+            </article>
+          `;
+        }).join('');
+        const chronological = versions.slice().reverse();
+        q('versionList').querySelectorAll('[data-rollback-index]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const index = Number(button.getAttribute('data-rollback-index') || -1);
+            const target = chronological[index];
+            if (!target) return;
+            q('promptName').value = String(target.name || '');
+            q('promptCategory').value = String(target.category || 'general');
+            q('promptModel').value = String(target.source_model || '');
+            q('promptQuality').value = String(target.quality_score || '');
+            q('promptTags').value = Array.isArray(target.tags) ? target.tags.join(', ') : '';
+            q('promptAnchors').value = Array.isArray(target.style_anchors) ? target.style_anchors.join(', ') : '';
+            q('promptTemplate').value = String(target.prompt_template || '');
+            q('negativePrompt').value = String(target.negative_prompt || '');
+            q('promptNotes').value = String(target.notes || '');
+            q('status').textContent = 'Rollback snapshot loaded into form. Click Save to persist it as a new version.';
+            renderPreview();
+          });
+        });
+      } catch (error) {
+        q('versionList').innerHTML = `<div class="error-text">Version load failed: ${esc(String(error && error.message || error))}</div>`;
+      }
+    }
+
+    function renderPreview() {
+      const template = String(q('promptTemplate').value || '');
+      const preview = template
+        .replaceAll('{title}', 'Moby Dick')
+        .replaceAll('{author}', 'Herman Melville')
+        .replaceAll('{genre}', 'Classic Adventure');
+      q('promptPreview').textContent = preview || 'Preview appears here.';
+    }
+
+    function usePromptInIterate() {
+      if (!state.selectedPromptId) {
+        q('status').textContent = 'Select a prompt first.';
+        return;
+      }
+      const url = new URL('/iterate', window.location.origin);
+      url.searchParams.set('catalog', state.catalog);
+      url.searchParams.set('prompt_id', state.selectedPromptId);
+      window.location.href = url.toString();
+    }
+
+    async function exportLibrary() {
+      try {
+        const payload = await fetchJson(`/api/prompts/export?${catalogQuery()}`);
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `prompt_library_${state.catalog}_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        q('status').textContent = 'Prompt library exported.';
+      } catch (error) {
+        q('status').textContent = `Export failed: ${String(error && error.message || error)}`;
+      }
+    }
+
+    async function importLibrary(event) {
+      const file = event.target && event.target.files ? event.target.files[0] : null;
+      if (!file) return;
+      q('status').textContent = 'Importing prompt library...';
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        const prompts = Array.isArray(parsed.prompts) ? parsed.prompts : [];
+        const payload = await fetchJson(`/api/prompts/import?${catalogQuery()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompts }),
+        });
+        q('status').textContent = `Imported ${Number(payload.imported || 0)} prompt(s).`;
+        await refresh();
+      } catch (error) {
+        q('status').textContent = `Import failed: ${String(error && error.message || error)}`;
+      } finally {
+        q('importInput').value = '';
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

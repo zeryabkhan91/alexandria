@@ -172,6 +172,11 @@ def _normalize_worker_mode(raw: str | None) -> str:
 
 
 ACTIVE_WORKER_MODE = _normalize_worker_mode(JOB_WORKER_MODE)
+_JOB_CANCELLED_MODELS: dict[str, dict[str, set[str]]] = {}
+_JOB_CANCELLED_MODELS_LOCK = threading.Lock()
+_SLOW_REQUEST_LOG: list[dict[str, Any]] = []
+_SLOW_REQUEST_LOG_LOCK = threading.Lock()
+_SLOW_REQUEST_THRESHOLD_SECONDS = 5.0
 
 
 def _sync_generation_allowed(*, worker_mode: str | None = None) -> bool:
@@ -720,6 +725,7 @@ class JobWorkerPool:
         idempotency_key: str,
         cover_source: str = "catalog",
         selected_cover_id: str = "",
+        library_prompt_id: str = "",
         drive_folder_id: str = "",
         input_folder_id: str = "",
         credentials_path: str = "",
@@ -734,6 +740,7 @@ class JobWorkerPool:
         if normalized_cover_source not in {"catalog", "drive"}:
             normalized_cover_source = "catalog"
         normalized_selected_cover_id = str(selected_cover_id or "").strip()
+        normalized_library_prompt_id = str(library_prompt_id or "").strip()
         payload = {
             "catalog": str(catalog_id),
             "book": int(book),
@@ -743,6 +750,7 @@ class JobWorkerPool:
             "provider": normalized_provider,
             "cover_source": normalized_cover_source,
             "selected_cover_id": normalized_selected_cover_id,
+            "library_prompt_id": normalized_library_prompt_id,
             "drive_folder_id": str(drive_folder_id or "").strip(),
             "input_folder_id": str(input_folder_id or "").strip(),
             "credentials_path": str(credentials_path or "").strip(),
@@ -1497,6 +1505,126 @@ def _max_generation_variants(runtime: config.Config) -> int:
     return max(1, configured)
 
 
+def _mark_job_model_cancelled(*, job_id: str, catalog_id: str, model: str) -> None:
+    with _JOB_CANCELLED_MODELS_LOCK:
+        catalog_rows = _JOB_CANCELLED_MODELS.setdefault(str(catalog_id), {})
+        rows = catalog_rows.setdefault(str(job_id), set())
+        rows.add(str(model))
+
+
+def _is_job_model_cancelled(*, job_id: str, catalog_id: str, model: str) -> bool:
+    with _JOB_CANCELLED_MODELS_LOCK:
+        catalog_rows = _JOB_CANCELLED_MODELS.get(str(catalog_id), {})
+        rows = catalog_rows.get(str(job_id), set())
+        return str(model) in rows
+
+
+def _clear_job_model_cancellations(*, job_id: str, catalog_id: str) -> None:
+    with _JOB_CANCELLED_MODELS_LOCK:
+        catalog_rows = _JOB_CANCELLED_MODELS.get(str(catalog_id), {})
+        catalog_rows.pop(str(job_id), None)
+        if not catalog_rows and str(catalog_id) in _JOB_CANCELLED_MODELS:
+            _JOB_CANCELLED_MODELS.pop(str(catalog_id), None)
+
+
+def _record_slow_request(*, method: str, path: str, duration_seconds: float, status_code: int, catalog_id: str) -> None:
+    if float(duration_seconds) < _SLOW_REQUEST_THRESHOLD_SECONDS:
+        return
+    row = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "method": str(method),
+        "path": str(path),
+        "duration_seconds": round(float(duration_seconds), 4),
+        "status_code": int(status_code),
+        "catalog": str(catalog_id),
+    }
+    with _SLOW_REQUEST_LOG_LOCK:
+        _SLOW_REQUEST_LOG.append(row)
+        if len(_SLOW_REQUEST_LOG) > 2000:
+            del _SLOW_REQUEST_LOG[:-2000]
+
+
+def _slow_request_snapshot(*, limit: int = 200) -> list[dict[str, Any]]:
+    with _SLOW_REQUEST_LOG_LOCK:
+        rows = list(_SLOW_REQUEST_LOG[-max(1, min(2000, int(limit))) :])
+    rows.sort(key=lambda item: (_safe_float(item.get("duration_seconds"), 0.0), str(item.get("timestamp", ""))), reverse=True)
+    return rows
+
+
+def _percentile(values: list[float], p: float) -> float:
+    if not values:
+        return 0.0
+    if len(values) == 1:
+        return float(values[0])
+    ordered = sorted(float(v) for v in values)
+    rank = max(0.0, min(1.0, float(p))) * (len(ordered) - 1)
+    lower = int(math.floor(rank))
+    upper = int(math.ceil(rank))
+    if lower == upper:
+        return float(ordered[lower])
+    weight = rank - float(lower)
+    return float(ordered[lower] + (ordered[upper] - ordered[lower]) * weight)
+
+
+def _performance_summary_payload(*, runtime: config.Config) -> dict[str, Any]:
+    slow_rows = _slow_request_snapshot(limit=500)
+    durations = [max(0.0, _safe_float(row.get("duration_seconds"), 0.0)) for row in slow_rows]
+    endpoint_rollup: dict[str, dict[str, float]] = {}
+    for row in slow_rows:
+        path = str(row.get("path", "")).strip() or "/"
+        bucket = endpoint_rollup.setdefault(path, {"count": 0.0, "max_duration_seconds": 0.0, "total_duration_seconds": 0.0})
+        duration = max(0.0, _safe_float(row.get("duration_seconds"), 0.0))
+        bucket["count"] += 1.0
+        bucket["total_duration_seconds"] += duration
+        if duration > bucket["max_duration_seconds"]:
+            bucket["max_duration_seconds"] = duration
+    top_slow = sorted(
+        (
+            {
+                "path": path,
+                "count": int(values["count"]),
+                "max_duration_seconds": round(values["max_duration_seconds"], 4),
+                "avg_duration_seconds": round(
+                    values["total_duration_seconds"] / max(1.0, values["count"]),
+                    4,
+                ),
+            }
+            for path, values in endpoint_rollup.items()
+        ),
+        key=lambda item: (int(item.get("count", 0)), float(item.get("max_duration_seconds", 0.0))),
+        reverse=True,
+    )[:25]
+
+    worker_status = _worker_runtime_status()
+    return {
+        "ok": True,
+        "catalog": runtime.catalog_id,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "request_threshold_seconds": float(_SLOW_REQUEST_THRESHOLD_SECONDS),
+        "response_time": {
+            "sample_size": len(durations),
+            "avg_seconds": round(sum(durations) / len(durations), 4) if durations else 0.0,
+            "p50_seconds": round(_percentile(durations, 0.50), 4),
+            "p95_seconds": round(_percentile(durations, 0.95), 4),
+            "p99_seconds": round(_percentile(durations, 0.99), 4),
+        },
+        "slow_requests": {
+            "count": len(slow_rows),
+            "threshold_seconds": float(_SLOW_REQUEST_THRESHOLD_SECONDS),
+            "top_endpoints": top_slow,
+            "latest": slow_rows[:100],
+        },
+        "errors": error_metrics.get_metrics(catalog_id=runtime.catalog_id),
+        "cache": data_cache.stats(),
+        "jobs": {
+            "status_counts": job_db_store.status_counts(),
+            "workers_configured": JOB_WORKER_COUNT,
+            "worker_mode": worker_status.get("mode"),
+            "worker_service": worker_status,
+        },
+    }
+
+
 def _serialize_generation_results(
     *,
     runtime: config.Config,
@@ -1718,6 +1846,7 @@ def _execute_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
     variants = _safe_int(payload.get("variants"), 5)
     prompt = str(payload.get("prompt", ""))
     provider = str(payload.get("provider", "")).strip().lower()
+    library_prompt_id = str(payload.get("library_prompt_id", "")).strip()
     cover_source = str(payload.get("cover_source", "catalog")).strip().lower() or "catalog"
     if cover_source not in {"catalog", "drive"}:
         cover_source = "catalog"
@@ -1763,6 +1892,11 @@ def _execute_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
         cached_rows = checkpoint.get("results", [])
         serialized = [row for row in cached_rows if isinstance(row, dict)] if isinstance(cached_rows, list) else []
     else:
+        def _cancel_checker(model_name: str, _variant: int) -> bool:
+            if not job_id:
+                return False
+            return _is_job_model_cancelled(job_id=job_id, catalog_id=runtime.catalog_id, model=str(model_name))
+
         try:
             results = image_generator.generate_single_book(
                 book_number=book,
@@ -1771,11 +1905,17 @@ def _execute_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 models=active_models,
                 variants=variants,
                 prompt_text=prompt,
+                library_prompt_id=library_prompt_id or None,
                 provider_override=provider_override,
                 resume=False,
                 dry_run=dry_run,
+                cancel_checker=_cancel_checker if job_id else None,
             )
             serialized = _serialize_generation_results(runtime=runtime, book=book, results=results)
+            if library_prompt_id:
+                for row in serialized:
+                    if isinstance(row, dict):
+                        row["library_prompt_id"] = library_prompt_id
             if not dry_run:
                 successful_rows = [row for row in serialized if isinstance(row, dict) and bool(row.get("success"))]
                 if not successful_rows:
@@ -1885,6 +2025,11 @@ def _execute_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not (checkpoint and _checkpoint_stage_completed(checkpoint, "persist")):
         try:
             _record_generation_costs(runtime=runtime, book_number=book, rows=serialized, job_id=job_id)
+            if library_prompt_id and any(isinstance(row, dict) and bool(row.get("success")) for row in serialized):
+                try:
+                    _record_prompt_usage(runtime=runtime, prompt_id=library_prompt_id, won=False)
+                except Exception:
+                    pass
             with state_lock:
                 history_payload: dict[str, Any]
                 try:
@@ -1942,6 +2087,8 @@ def _execute_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
         _clear_job_checkpoint(runtime=runtime, job_id=job_id)
 
     message = "Dry-run generation plan created (no API keys configured)." if dry_run else "Generation complete."
+    if job_id:
+        _clear_job_model_cancellations(job_id=job_id, catalog_id=runtime.catalog_id)
     return {
         "catalog": runtime.catalog_id,
         "book": book,
@@ -3015,6 +3162,219 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
     return iterate_path
 
 
+def _ab_tests_path_for_runtime(runtime: config.Config) -> Path:
+    return runtime.data_dir / ("ab_tests.json" if runtime.catalog_id == config.DEFAULT_CATALOG_ID else f"ab_tests_{runtime.catalog_id}.json")
+
+
+def _load_ab_test_rows(*, runtime: config.Config) -> list[dict[str, Any]]:
+    payload = _load_json(_ab_tests_path_for_runtime(runtime), {"items": []})
+    rows = payload.get("items", []) if isinstance(payload, dict) else []
+    if not isinstance(rows, list):
+        rows = []
+    return [dict(row) for row in rows if isinstance(row, dict)]
+
+
+def _record_ab_test(*, runtime: config.Config, body: dict[str, Any]) -> dict[str, Any]:
+    rows = _load_ab_test_rows(runtime=runtime)
+    compared = body.get("models_compared", [])
+    if not isinstance(compared, list):
+        compared = []
+    quality_scores = body.get("quality_scores", {})
+    if not isinstance(quality_scores, dict):
+        quality_scores = {}
+    row = {
+        "id": str(uuid.uuid4()),
+        "catalog": runtime.catalog_id,
+        "book_id": _safe_int(body.get("book_id"), 0),
+        "models_compared": [str(item).strip() for item in compared if str(item).strip()],
+        "winner": str(body.get("winner", "")).strip(),
+        "quality_scores": {str(key): _safe_float(value, 0.0) for key, value in quality_scores.items()},
+        "user_comment": str(body.get("user_comment", "")).strip(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    rows.append(row)
+    rows = rows[-5000:]
+    safe_json.atomic_write_json(_ab_tests_path_for_runtime(runtime), {"updated_at": datetime.now(timezone.utc).isoformat(), "items": rows})
+    return {"ok": True, "item": row, "count": len(rows)}
+
+
+def _prompt_library_payload(
+    *,
+    runtime: config.Config,
+    query_text: str = "",
+    category: str = "",
+    tags: list[str] | None = None,
+) -> dict[str, Any]:
+    library = PromptLibrary(runtime.prompt_library_path)
+    prompts = library.search_prompts(query=query_text, tags=tags or [], min_quality=0.0)
+    rows: list[dict[str, Any]] = []
+    for prompt in prompts:
+        payload = asdict(prompt)
+        if category and str(payload.get("category", "")).strip().lower() != category:
+            continue
+        usage = _safe_int(payload.get("usage_count"), 0)
+        wins = _safe_int(payload.get("win_count"), 0)
+        payload["win_rate_percent"] = round((wins / usage) * 100.0, 3) if usage > 0 else 0.0
+        payload["versions_count"] = len(library.get_versions(prompt.id))
+        payload["best_model_pairing"] = str(payload.get("source_model", "")).strip() or "unknown"
+        rows.append(payload)
+    rows.sort(key=lambda item: (_safe_float(item.get("quality_score"), 0.0), _safe_int(item.get("usage_count"), 0)), reverse=True)
+    return {"ok": True, "catalog": runtime.catalog_id, "prompts": rows, "count": len(rows)}
+
+
+def _prompt_library_export_payload(*, runtime: config.Config) -> dict[str, Any]:
+    library = PromptLibrary(runtime.prompt_library_path)
+    payload = {
+        "ok": True,
+        "catalog": runtime.catalog_id,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "style_anchors": [asdict(anchor) for anchor in library.get_style_anchors()],
+        "prompts": [asdict(prompt) for prompt in library.get_prompts()],
+        "versions": {prompt.id: library.get_versions(prompt.id) for prompt in library.get_prompts()},
+    }
+    return payload
+
+
+def _prompt_versions_payload(*, runtime: config.Config, prompt_id: str) -> dict[str, Any]:
+    library = PromptLibrary(runtime.prompt_library_path)
+    prompt = library.get_prompt(prompt_id)
+    if prompt is None:
+        raise KeyError(prompt_id)
+    return {
+        "ok": True,
+        "catalog": runtime.catalog_id,
+        "prompt": asdict(prompt),
+        "versions": library.get_versions(prompt_id),
+    }
+
+
+def _create_prompt_from_request(*, runtime: config.Config, body: dict[str, Any]) -> dict[str, Any]:
+    library = PromptLibrary(runtime.prompt_library_path)
+    prompt = LibraryPrompt(
+        id=str(uuid.uuid4()),
+        name=str(body.get("name", "Saved Prompt") or "Saved Prompt"),
+        prompt_template=str(body.get("prompt_template", "{title}") or "{title}"),
+        style_anchors=list(body.get("style_anchors", [])) if isinstance(body.get("style_anchors", []), list) else [],
+        negative_prompt=str(body.get("negative_prompt", "")),
+        source_book=str(body.get("source_book", "iteration")),
+        source_model=str(body.get("source_model", body.get("model", "manual"))),
+        quality_score=_safe_float(body.get("quality_score"), 0.75),
+        saved_by=str(body.get("saved_by", "tim")),
+        created_at=datetime.now(timezone.utc).isoformat(),
+        notes=str(body.get("notes", "saved from iterate page")),
+        tags=list(body.get("tags", [])) if isinstance(body.get("tags", []), list) else ["iterative"],
+        category=str(body.get("category", "general") or "general"),
+    )
+    library.save_prompt(prompt)
+    return {"ok": True, "prompt": asdict(library.get_prompt(prompt.id)), "prompt_id": prompt.id}
+
+
+def _update_prompt_from_request(*, runtime: config.Config, prompt_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    library = PromptLibrary(runtime.prompt_library_path)
+    updates: dict[str, object] = {}
+    for key in ("name", "prompt_template", "style_anchors", "negative_prompt", "notes", "tags", "category", "quality_score", "source_model"):
+        if key in body:
+            updates[key] = body.get(key)
+    updated = library.update_prompt(prompt_id, **updates)
+    return {"ok": True, "prompt": asdict(updated), "versions_count": len(library.get_versions(prompt_id))}
+
+
+def _delete_prompt(*, runtime: config.Config, prompt_id: str) -> dict[str, Any]:
+    library = PromptLibrary(runtime.prompt_library_path)
+    removed = library.delete_prompt(prompt_id)
+    if not removed:
+        raise KeyError(prompt_id)
+    return {"ok": True, "prompt_id": prompt_id, "deleted": True}
+
+
+def _record_prompt_usage(*, runtime: config.Config, prompt_id: str, won: bool = False) -> dict[str, Any]:
+    library = PromptLibrary(runtime.prompt_library_path)
+    updated = library.record_usage(prompt_id, won=won)
+    return {"ok": True, "prompt": asdict(updated)}
+
+
+def _import_prompt_payload(*, runtime: config.Config, body: dict[str, Any]) -> dict[str, Any]:
+    prompts = body.get("prompts", body.get("items", []))
+    if not isinstance(prompts, list):
+        raise ValueError("prompts must be a list")
+    library = PromptLibrary(runtime.prompt_library_path)
+    imported = 0
+    for row in prompts:
+        if not isinstance(row, dict):
+            continue
+        template = str(row.get("prompt_template", "")).strip()
+        if "{title}" not in template:
+            continue
+        prompt = LibraryPrompt(
+            id=str(row.get("id", "") or str(uuid.uuid4())),
+            name=str(row.get("name", "Imported Prompt")),
+            prompt_template=template,
+            style_anchors=list(row.get("style_anchors", [])) if isinstance(row.get("style_anchors", []), list) else [],
+            negative_prompt=str(row.get("negative_prompt", "")),
+            source_book=str(row.get("source_book", "import")),
+            source_model=str(row.get("source_model", "import")),
+            quality_score=_safe_float(row.get("quality_score"), 0.0),
+            saved_by=str(row.get("saved_by", "import")),
+            created_at=str(row.get("created_at", datetime.now(timezone.utc).isoformat())),
+            notes=str(row.get("notes", "imported")),
+            tags=list(row.get("tags", [])) if isinstance(row.get("tags", []), list) else [],
+            category=str(row.get("category", "general") or "general"),
+            usage_count=_safe_int(row.get("usage_count"), 0),
+            win_count=_safe_int(row.get("win_count"), 0),
+        )
+        library.save_prompt(prompt)
+        imported += 1
+    return {"ok": True, "imported": imported}
+
+
+def _model_recommendation_payload(*, runtime: config.Config, book_number: int | None = None) -> dict[str, Any]:
+    rows = _load_generation_records(runtime=runtime)
+    if book_number and int(book_number) > 0:
+        scoped = [row for row in rows if _safe_int(row.get("book_number"), 0) == int(book_number)]
+        if scoped:
+            rows = scoped
+    if not rows:
+        compare = _quality_by_model_payload(runtime=runtime)
+        recommendation = str(compare.get("recommended_model", "") or "")
+        return {
+            "catalog": runtime.catalog_id,
+            "book_number": int(book_number or 0),
+            "recommended_model": recommendation,
+            "reason": "No generation history yet. Using global model comparison.",
+            "sample_size": 0,
+        }
+    buckets: dict[str, dict[str, float]] = {}
+    for row in rows:
+        model = str(row.get("model", "unknown"))
+        entry = buckets.setdefault(model, {"quality_total": 0.0, "cost_total": 0.0, "count": 0.0})
+        entry["quality_total"] += _safe_float(row.get("quality_score"), 0.0) * 100.0
+        entry["cost_total"] += max(0.000001, _safe_float(row.get("cost"), 0.0))
+        entry["count"] += 1.0
+    ranked: list[tuple[str, float, float, float]] = []
+    for model, stats in buckets.items():
+        count = max(1.0, stats["count"])
+        avg_quality = stats["quality_total"] / count
+        avg_cost = stats["cost_total"] / count
+        score = avg_quality / avg_cost if avg_cost > 0 else avg_quality
+        ranked.append((model, score, avg_quality, avg_cost))
+    ranked.sort(key=lambda item: item[1], reverse=True)
+    best = ranked[0] if ranked else ("", 0.0, 0.0, 0.0)
+    return {
+        "catalog": runtime.catalog_id,
+        "book_number": int(book_number or 0),
+        "recommended_model": best[0],
+        "sample_size": len(rows),
+        "avg_quality": round(best[2], 4),
+        "avg_cost_per_variant": round(best[3], 6),
+        "reason": (
+            f"Based on {len(rows)} previous generation result(s), {best[0]} has the best quality-to-cost score "
+            f"({best[2]:.1f}/100 quality at ${best[3]:.4f} average cost)."
+            if best[0]
+            else "No recommendation available."
+        ),
+    }
+
+
 def generate_review_gallery(
     output_dir: Path,
     output_path: Path = FALLBACK_HTML_PATH,
@@ -3695,9 +4055,12 @@ def serve_review_webapp(
             return self._send_file(safe_path, content_type=content_type, cache_control=cache_control)
 
         def do_GET(self):
+            self._request_started_at = time.perf_counter()
+            self._request_method = "GET"
             parsed = urlparse(self.path)
             path = parsed.path
             query = parse_qs(parsed.query)
+            self._request_path = str(path)
             self._set_active_runtime(None)
             self._set_request_id(str(self.headers.get("X-Request-Id", "")).strip() or str(uuid.uuid4()))
             requested_catalog_raw = str(query.get("catalog", [default_runtime.catalog_id])[0]).strip()
@@ -3820,6 +4183,30 @@ def serve_review_webapp(
             if path == "/compare":
                 return self._serve_project_relative(
                     "/src/static/compare.html",
+                    allowed_roots=[PROJECT_ROOT / "src" / "static"],
+                    cache_control="no-store",
+                )
+            if path == "/analytics/models":
+                return self._serve_project_relative(
+                    "/src/static/model_analytics.html",
+                    allowed_roots=[PROJECT_ROOT / "src" / "static"],
+                    cache_control="no-store",
+                )
+            if path == "/prompts":
+                return self._serve_project_relative(
+                    "/src/static/prompts.html",
+                    allowed_roots=[PROJECT_ROOT / "src" / "static"],
+                    cache_control="no-store",
+                )
+            if path == "/catalog/settings":
+                return self._serve_project_relative(
+                    "/src/static/catalog_settings.html",
+                    allowed_roots=[PROJECT_ROOT / "src" / "static"],
+                    cache_control="no-store",
+                )
+            if path == "/admin/performance":
+                return self._serve_project_relative(
+                    "/src/static/performance.html",
                     allowed_roots=[PROJECT_ROOT / "src" / "static"],
                     cache_control="no-store",
                 )
@@ -3975,6 +4362,8 @@ def serve_review_webapp(
                         },
                     }
                 )
+            if path == "/api/performance/summary":
+                return self._send_json(_performance_summary_payload(runtime=runtime_req))
             if path == "/api/providers/runtime":
                 return self._send_json(
                     {
@@ -4073,6 +4462,10 @@ def serve_review_webapp(
                 return _cache_and_send({"ok": True, **payload})
             if path == "/api/analytics/models/compare":
                 payload = _quality_by_model_payload(runtime=runtime_req)
+                return _cache_and_send({"ok": True, **payload})
+            if path == "/api/analytics/models/recommendation":
+                book = _safe_int(query.get("book", ["0"])[0], 0)
+                payload = _model_recommendation_payload(runtime=runtime_req, book_number=book if book > 0 else None)
                 return _cache_and_send({"ok": True, **payload})
             if path == "/api/analytics/prompts/effectiveness":
                 payload = _quality_prompt_pattern_payload(runtime=runtime_req)
@@ -4387,6 +4780,84 @@ def serve_review_webapp(
                 except FileNotFoundError as exc:
                     return self._send_error(
                         code="WINNER_NOT_FOUND",
+                        message=str(exc),
+                        status=HTTPStatus.NOT_FOUND,
+                        endpoint=path,
+                    )
+                return self._send_file(
+                    zip_path,
+                    content_type="application/zip",
+                    cache_control="no-store",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                )
+            if path == "/api/source-download":
+                book_number = _safe_int(query.get("book", ["0"])[0], 0)
+                variant = _safe_int(query.get("variant", ["0"])[0], 0)
+                model = str(query.get("model", [""])[0] or "").strip()
+                if book_number <= 0 or variant <= 0:
+                    return self._send_error(
+                        code="INVALID_SOURCE_DOWNLOAD_REQUEST",
+                        message="book and variant must be positive integers",
+                        details={"book": query.get("book", [""])[0], "variant": query.get("variant", [""])[0]},
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                try:
+                    source_file, filename = _build_source_download_file(
+                        runtime=runtime_req,
+                        book_number=book_number,
+                        variant=variant,
+                        model=model,
+                    )
+                except FileNotFoundError as exc:
+                    return self._send_error(
+                        code="SOURCE_IMAGE_NOT_FOUND",
+                        message=str(exc),
+                        status=HTTPStatus.NOT_FOUND,
+                        endpoint=path,
+                    )
+                content_type = "image/png"
+                if source_file.suffix.lower() in {".jpg", ".jpeg"}:
+                    content_type = "image/jpeg"
+                elif source_file.suffix.lower() == ".webp":
+                    content_type = "image/webp"
+                return self._send_file(
+                    source_file,
+                    content_type=content_type,
+                    cache_control="no-store",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                )
+            if path == "/api/download-book":
+                book_number = _safe_int(query.get("book", ["0"])[0], 0)
+                if book_number <= 0:
+                    return self._send_error(
+                        code="INVALID_DOWNLOAD_REQUEST",
+                        message="book must be a positive integer",
+                        details={"book": query.get("book", [""])[0]},
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                try:
+                    zip_path, filename = _build_book_download_zip(runtime=runtime_req, book_number=book_number)
+                except FileNotFoundError as exc:
+                    return self._send_error(
+                        code="BOOK_VARIANTS_NOT_FOUND",
+                        message=str(exc),
+                        status=HTTPStatus.NOT_FOUND,
+                        endpoint=path,
+                    )
+                return self._send_file(
+                    zip_path,
+                    content_type="application/zip",
+                    cache_control="no-store",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                )
+            if path == "/api/download-approved":
+                try:
+                    zip_path, filename = _build_approved_download_zip(runtime=runtime_req)
+                except FileNotFoundError as exc:
+                    return self._send_error(
+                        code="APPROVED_VARIANTS_NOT_FOUND",
                         message=str(exc),
                         status=HTTPStatus.NOT_FOUND,
                         endpoint=path,
@@ -4736,6 +5207,41 @@ def serve_review_webapp(
                 if not isinstance(payload, dict):
                     payload = {"patterns": {}}
                 return _cache_and_send(payload)
+            if path == "/api/prompts":
+                query_text = str(query.get("q", [""])[0] or "").strip()
+                category = str(query.get("category", [""])[0] or "").strip().lower()
+                tags = [token.strip() for token in str(query.get("tags", [""])[0] or "").split(",") if token.strip()]
+                payload = _prompt_library_payload(runtime=runtime_req, query_text=query_text, category=category, tags=tags)
+                return _cache_and_send(payload)
+            if path == "/api/prompts/export":
+                payload = _prompt_library_export_payload(runtime=runtime_req)
+                return self._send_json(payload)
+            if path.startswith("/api/prompts/") and path.endswith("/versions"):
+                token = path.split("/api/prompts/", 1)[1].split("/versions", 1)[0].strip()
+                if not token:
+                    return self._send_error(
+                        code="PROMPT_ID_REQUIRED",
+                        message="prompt id is required",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                try:
+                    payload = _prompt_versions_payload(runtime=runtime_req, prompt_id=token)
+                except KeyError:
+                    return self._send_error(
+                        code="PROMPT_NOT_FOUND",
+                        message="Prompt not found",
+                        details={"prompt_id": token},
+                        status=HTTPStatus.NOT_FOUND,
+                        endpoint=path,
+                    )
+                return _cache_and_send(payload)
+            if path == "/api/analytics/ab-tests":
+                limit = _safe_int(query.get("limit", ["200"])[0], 200)
+                rows = _load_ab_test_rows(runtime=runtime_req)
+                if limit > 0:
+                    rows = rows[-max(1, min(2000, limit)) :]
+                return _cache_and_send({"ok": True, "catalog": runtime_req.catalog_id, "items": rows, "count": len(rows)})
             if path == "/api/health":
                 payload = _health_payload(runtime=runtime_req)
                 payload["default_reviewer"] = configured_reviewer
@@ -5121,9 +5627,12 @@ def serve_review_webapp(
             )
 
         def do_POST(self):
+            self._request_started_at = time.perf_counter()
+            self._request_method = "POST"
             parsed = urlparse(self.path)
             path = parsed.path
             query = parse_qs(parsed.query)
+            self._request_path = str(path)
             self._set_active_runtime(None)
             self._set_request_id(str(self.headers.get("X-Request-Id", "")).strip() or str(uuid.uuid4()))
             size = int(self.headers.get("Content-Length", "0"))
@@ -5184,6 +5693,48 @@ def serve_review_webapp(
                     endpoint=path,
                     headers={"Retry-After": "60"},
                 )
+
+            if path == "/api/catalogs/import":
+                bundle = body.get("bundle", body if isinstance(body, dict) else {})
+                if not isinstance(bundle, dict):
+                    return self._send_error(
+                        code="CATALOG_IMPORT_INVALID",
+                        message="bundle payload must be an object",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                catalog_block = bundle.get("catalog", bundle)
+                if not isinstance(catalog_block, dict):
+                    catalog_block = {}
+                catalog_name = str(catalog_block.get("name", bundle.get("name", ""))).strip()
+                if not catalog_name:
+                    return self._send_error(
+                        code="CATALOG_NAME_REQUIRED",
+                        message="Catalog name is required for import",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                try:
+                    created = catalog_registry.create_catalog(
+                        name=catalog_name,
+                        description=str(catalog_block.get("description", "")),
+                        input_dir=str(catalog_block.get("input_dir", "Input Covers")),
+                        output_dir=str(catalog_block.get("output_dir", "Output Covers")),
+                        config_dir=str(catalog_block.get("config_dir", "config")),
+                        catalog_id=str(catalog_block.get("id", catalog_block.get("catalog_id", ""))).strip() or None,
+                    )
+                    settings = bundle.get("settings", {})
+                    if isinstance(settings, dict) and settings:
+                        catalog_registry.update_settings(created.catalog_id, settings)
+                except Exception as exc:
+                    return self._send_error(
+                        code="CATALOG_IMPORT_FAILED",
+                        message=str(exc),
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                _invalidate_cache("/api/catalogs")
+                return self._send_json({"ok": True, "catalog": created.to_dict(), "imported": True})
 
             if path == "/api/catalogs":
                 name = str(body.get("name", "")).strip()
@@ -5807,6 +6358,30 @@ def serve_review_webapp(
                 payload = _save_drive_schedule(runtime_req, body if isinstance(body, dict) else {})
                 _invalidate_cache("/api/drive/schedule", "/api/drive/status")
                 return self._send_json({"ok": True, "catalog": runtime_req.catalog_id, "schedule": payload})
+
+            if path.startswith("/api/jobs/") and path.endswith("/cancel-model"):
+                token = path.rsplit("/", 1)[0].split("/api/jobs/", 1)[1].strip()
+                model_name = str(body.get("model", "")).strip()
+                if not token:
+                    return self._send_error(
+                        code="JOB_ID_REQUIRED",
+                        message="job id is required",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                if not model_name:
+                    return self._send_error(
+                        code="MODEL_REQUIRED",
+                        message="model is required",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                _mark_job_model_cancelled(job_id=token, catalog_id=runtime_req.catalog_id, model=model_name)
+                job_event_broker.publish(
+                    "job_model_cancelled",
+                    {"job_id": token, "catalog_id": runtime_req.catalog_id, "model": model_name, "status": "cancelled"},
+                )
+                return self._send_json({"ok": True, "job_id": token, "model": model_name, "status": "cancelled"})
 
             if path.startswith("/api/jobs/") and path.endswith("/cancel"):
                 token = path.rsplit("/", 1)[0].split("/api/jobs/", 1)[1].strip()
@@ -6919,6 +7494,58 @@ def serve_review_webapp(
                 write_iterate_data(runtime=runtime_req)
                 return self._send_json({"ok": True, "prompt_id": prompt.id})
 
+            if path == "/api/prompts":
+                payload = _create_prompt_from_request(runtime=runtime_req, body=body)
+                write_iterate_data(runtime=runtime_req)
+                _invalidate_cache("/api/prompts", "/api/iterate-data")
+                return self._send_json(payload)
+
+            if path == "/api/prompts/import":
+                imported = _import_prompt_payload(runtime=runtime_req, body=body)
+                write_iterate_data(runtime=runtime_req)
+                _invalidate_cache("/api/prompts", "/api/iterate-data")
+                return self._send_json(imported)
+
+            if path.startswith("/api/prompts/"):
+                token = path.split("/api/prompts/", 1)[1].strip("/")
+                if not token:
+                    return self._send_error(
+                        code="PROMPT_ID_REQUIRED",
+                        message="prompt id is required",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                action = str(body.get("action", "update")).strip().lower()
+                try:
+                    if action == "delete":
+                        payload = _delete_prompt(runtime=runtime_req, prompt_id=token)
+                    elif action == "record_usage":
+                        payload = _record_prompt_usage(runtime=runtime_req, prompt_id=token, won=bool(body.get("won", False)))
+                    else:
+                        payload = _update_prompt_from_request(runtime=runtime_req, prompt_id=token, body=body)
+                except KeyError:
+                    return self._send_error(
+                        code="PROMPT_NOT_FOUND",
+                        message="Prompt not found",
+                        details={"prompt_id": token},
+                        status=HTTPStatus.NOT_FOUND,
+                        endpoint=path,
+                    )
+                except ValueError as exc:
+                    return self._send_error(
+                        code="PROMPT_UPDATE_INVALID",
+                        message=str(exc),
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                write_iterate_data(runtime=runtime_req)
+                _invalidate_cache("/api/prompts", "/api/iterate-data")
+                return self._send_json(payload)
+
+            if path == "/api/analytics/ab-tests":
+                payload = _record_ab_test(runtime=runtime_req, body=body)
+                return self._send_json(payload)
+
             if path == "/api/test-connection":
                 provider = str(body.get("provider", "")).strip().lower()
                 selected = [provider] if provider and provider != "all" else None
@@ -6946,6 +7573,7 @@ def serve_review_webapp(
                 drive_folder_id = str(body.get("drive_folder_id", "")).strip()
                 input_folder_id = str(body.get("input_folder_id", "")).strip()
                 credentials_path = str(body.get("credentials_path", "")).strip()
+                library_prompt_id = str(body.get("library_prompt_id", "")).strip()
                 async_mode = bool(body.get("async", True))
                 worker_mode = _normalize_worker_mode(body.get("worker_mode", ACTIVE_WORKER_MODE))
                 if _is_generation_budget_blocked(runtime_req):
@@ -7035,6 +7663,7 @@ def serve_review_webapp(
                             provider=provider or "all",
                             cover_source=cover_source,
                             selected_cover_id=selected_cover_id,
+                            library_prompt_id=library_prompt_id,
                             drive_folder_id=drive_folder_id,
                             input_folder_id=input_folder_id,
                             credentials_path=credentials_path,
@@ -7117,8 +7746,9 @@ def serve_review_webapp(
                             "prompt": prompt,
                             "provider": provider or "all",
                             "cover_source": cover_source,
-                            "selected_cover_id": selected_cover_id,
-                            "drive_folder_id": drive_folder_id,
+                    "selected_cover_id": selected_cover_id,
+                    "library_prompt_id": library_prompt_id,
+                    "drive_folder_id": drive_folder_id,
                             "input_folder_id": input_folder_id,
                             "credentials_path": credentials_path,
                             "dry_run": bool(body.get("dry_run", False)),
@@ -7683,6 +8313,18 @@ def serve_review_webapp(
             self.end_headers()
             self.wfile.write(data)
             try:
+                started = float(getattr(self, "_request_started_at", 0.0) or 0.0)
+                if started > 0:
+                    _record_slow_request(
+                        method=str(getattr(self, "_request_method", "GET")),
+                        path=str(getattr(self, "_request_path", self.path)),
+                        duration_seconds=time.perf_counter() - started,
+                        status_code=int(status),
+                        catalog_id=str(catalog_id or self._current_catalog() or ""),
+                    )
+            except Exception:
+                pass
+            try:
                 runtime_for_slo = self._runtime_for_catalog_token(str(catalog_id or "").strip() or self._current_catalog())
                 _slo_tracker_for_runtime(runtime_for_slo).record_response(
                     int(status),
@@ -7730,6 +8372,18 @@ def serve_review_webapp(
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+            try:
+                started = float(getattr(self, "_request_started_at", 0.0) or 0.0)
+                if started > 0:
+                    _record_slow_request(
+                        method=str(getattr(self, "_request_method", "GET")),
+                        path=str(getattr(self, "_request_path", self.path)),
+                        duration_seconds=time.perf_counter() - started,
+                        status_code=int(HTTPStatus.OK),
+                        catalog_id=str(catalog_id or self._current_catalog() or ""),
+                    )
+            except Exception:
+                pass
             try:
                 runtime_for_slo = self._runtime_for_catalog_token(str(catalog_id or "").strip() or self._current_catalog())
                 _slo_tracker_for_runtime(runtime_for_slo).record_response(
@@ -9224,6 +9878,60 @@ def _safe_file_stem(text: str) -> str:
     return (token[:120] or "book")
 
 
+def _descriptive_download_filename(
+    *,
+    book_number: int,
+    title: str,
+    edition: str,
+    model: str,
+    variant: int,
+    ext: str,
+    source: bool = False,
+) -> str:
+    safe_title = _safe_file_stem(title)
+    safe_model = _safe_file_stem(_normalize_model_name(model or "unknown"))
+    safe_edition = _safe_file_stem(edition or "standard")
+    suffix = "source" if source else "cover"
+    return f"Book{int(book_number):03d}_{safe_title}_{safe_edition}_{safe_model}_{suffix}_v{int(variant)}.{ext.lstrip('.')}"
+
+
+def _book_title_and_edition(*, runtime: config.Config, book_number: int) -> tuple[str, str]:
+    payload = _load_json(runtime.book_catalog_path, [])
+    rows = payload if isinstance(payload, list) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if _safe_int(row.get("number"), 0) != int(book_number):
+            continue
+        title = str(row.get("title", f"Book {book_number}"))
+        edition = str(row.get("edition", row.get("format", "paperback")) or "paperback").strip() or "paperback"
+        return title, edition
+    return f"Book {book_number}", "paperback"
+
+
+def _source_image_for_variant(
+    *,
+    runtime: config.Config,
+    book_number: int,
+    variant: int,
+    model: str = "",
+    record: dict[str, Any] | None = None,
+) -> Path | None:
+    medallion_png = _project_path_if_exists((record or {}).get("image_path")) if isinstance(record, dict) else None
+    if medallion_png is not None and medallion_png.exists():
+        return medallion_png
+    generated_dir = runtime.tmp_dir / "generated" / str(int(book_number))
+    if model:
+        model_dir = generated_dir / image_generator._model_to_directory(model)  # type: ignore[attr-defined]
+        candidate = model_dir / f"variant_{int(variant)}.png"
+        if candidate.exists():
+            return candidate
+    candidate = next(iter(sorted(generated_dir.glob(f"*/variant_{int(variant)}.png"))), None)
+    if candidate and candidate.exists():
+        return candidate
+    return None
+
+
 def _project_path_if_exists(path_token: str | Path | None) -> Path | None:
     if path_token is None:
         return None
@@ -9310,30 +10018,53 @@ def _build_variant_download_zip(
     if cover_jpg is None:
         raise FileNotFoundError(f"Missing composited JPG for book {book_number} variant {variant}")
 
-    if isinstance(record, dict):
-        medallion_png = _project_path_if_exists(record.get("image_path"))
-    if medallion_png is None:
-        generated_dir = runtime.tmp_dir / "generated" / str(int(book_number))
-        if model:
-            model_dir = generated_dir / image_generator._model_to_directory(model)  # type: ignore[attr-defined]
-            candidate = model_dir / f"variant_{int(variant)}.png"
-            if candidate.exists():
-                medallion_png = candidate
-        if medallion_png is None:
-            candidate = next(iter(sorted(generated_dir.glob(f"*/variant_{int(variant)}.png"))), None)
-            if candidate and candidate.exists():
-                medallion_png = candidate
+    medallion_png = _source_image_for_variant(
+        runtime=runtime,
+        book_number=book_number,
+        variant=variant,
+        model=model,
+        record=record,
+    )
     if medallion_png is None:
         # Keep ZIP structure stable even if medallion image is absent.
         logger.warning("Variant download missing medallion PNG for book %s variant %s", book_number, variant)
 
     _, folder_by_book = _catalog_maps(catalog_path=runtime.book_catalog_path)
     folder_name = folder_by_book.get(int(book_number), "")
+    book_title, edition = _book_title_and_edition(runtime=runtime, book_number=book_number)
+    model_name = str((record or {}).get("model", model or "unknown"))
+    cover_jpg_name = _descriptive_download_filename(
+        book_number=book_number,
+        title=book_title,
+        edition=edition,
+        model=model_name,
+        variant=variant,
+        ext="jpg",
+        source=False,
+    )
+    cover_pdf_name = _descriptive_download_filename(
+        book_number=book_number,
+        title=book_title,
+        edition=edition,
+        model=model_name,
+        variant=variant,
+        ext="pdf",
+        source=False,
+    )
+    source_png_name = _descriptive_download_filename(
+        book_number=book_number,
+        title=book_title,
+        edition=edition,
+        model=model_name,
+        variant=variant,
+        ext="png",
+        source=True,
+    )
     metadata = {
         "book_number": int(book_number),
-        "book_title": str(_catalog_maps(catalog_path=runtime.book_catalog_path)[0].get(int(book_number), f"Book {book_number}")),
+        "book_title": book_title,
         "variant_number": int(variant),
-        "model": str((record or {}).get("model", model or "unknown")),
+        "model": model_name,
         "prompt": str((record or {}).get("prompt", "")),
         "quality_score": _safe_float((record or {}).get("quality_score"), 0.0),
         "generation_timestamp": str((record or {}).get("timestamp", "")),
@@ -9347,16 +10078,30 @@ def _build_variant_download_zip(
         zip_path = Path(handle.name)
 
     with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.write(cover_jpg, arcname=f"cover_variant_{int(variant)}.jpg")
+        archive.write(cover_jpg, arcname=f"composites/{cover_jpg_name}")
         if cover_pdf is not None and cover_pdf.exists():
-            archive.write(cover_pdf, arcname=f"cover_variant_{int(variant)}.pdf")
+            archive.write(cover_pdf, arcname=f"composites/{cover_pdf_name}")
         else:
-            archive.writestr(f"cover_variant_{int(variant)}.pdf", _jpg_to_pdf_bytes(cover_jpg))
+            archive.writestr(f"composites/{cover_pdf_name}", _jpg_to_pdf_bytes(cover_jpg))
         if medallion_png is not None and medallion_png.exists():
-            archive.write(medallion_png, arcname=f"medallion_variant_{int(variant)}.png")
+            archive.write(medallion_png, arcname=f"source_images/{source_png_name}")
+        manifest_csv = (
+            "book_number,title,edition,model,variant,composite_jpg,composite_pdf,source_image,quality_score\n"
+            f"{int(book_number)},\"{book_title}\",\"{edition}\",\"{model_name}\",{int(variant)},\"composites/{cover_jpg_name}\",\"composites/{cover_pdf_name}\",\"source_images/{source_png_name}\",{_safe_float((record or {}).get('quality_score'), 0.0):.4f}\n"
+        )
+        archive.writestr("manifest.csv", manifest_csv)
         archive.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
 
-    return zip_path, f"book_{int(book_number)}_variant_{int(variant)}.zip"
+    zip_name = _descriptive_download_filename(
+        book_number=book_number,
+        title=book_title,
+        edition=edition,
+        model=model_name,
+        variant=variant,
+        ext="zip",
+        source=False,
+    ).replace("_cover_", "_package_")
+    return zip_path, zip_name
 
 
 def _build_winner_download_zip(*, runtime: config.Config, book_number: int) -> tuple[Path, str]:
@@ -9388,6 +10133,8 @@ def _build_winner_download_zip(*, runtime: config.Config, book_number: int) -> t
     title_by_book, _ = _catalog_maps(catalog_path=runtime.book_catalog_path)
     book_title = str(title_by_book.get(int(book_number), f"Book {book_number}"))
     safe_title = _safe_file_stem(book_title)
+    _, edition = _book_title_and_edition(runtime=runtime, book_number=book_number)
+    model_name = str((variant_record or {}).get("model", "unknown"))
 
     cover_jpg = next(iter(sorted(variant_dir.glob("*.jpg"))), None)
     if cover_jpg is None:
@@ -9397,18 +10144,47 @@ def _build_winner_download_zip(*, runtime: config.Config, book_number: int) -> t
     if cmyk_pdf is None:
         cmyk_pdf = next(iter(sorted(variant_dir.glob("*cmyk*.pdf"))), None)
 
-    medallion_png = _project_path_if_exists((variant_record or {}).get("image_path"))
-    if medallion_png is None:
-        generated_dir = runtime.tmp_dir / "generated" / str(int(book_number))
-        candidate = next(iter(sorted(generated_dir.glob(f"*/variant_{int(winner_variant)}.png"))), None)
-        if candidate and candidate.exists():
-            medallion_png = candidate
+    medallion_png = _source_image_for_variant(
+        runtime=runtime,
+        book_number=int(book_number),
+        variant=int(winner_variant),
+        model=model_name,
+        record=variant_record,
+    )
+
+    cover_jpg_name = _descriptive_download_filename(
+        book_number=book_number,
+        title=book_title,
+        edition=edition,
+        model=model_name,
+        variant=winner_variant,
+        ext="jpg",
+        source=False,
+    )
+    cover_pdf_name = _descriptive_download_filename(
+        book_number=book_number,
+        title=book_title,
+        edition=edition,
+        model=model_name,
+        variant=winner_variant,
+        ext="pdf",
+        source=False,
+    )
+    source_png_name = _descriptive_download_filename(
+        book_number=book_number,
+        title=book_title,
+        edition=edition,
+        model=model_name,
+        variant=winner_variant,
+        ext="png",
+        source=True,
+    )
 
     metadata = {
         "book_number": int(book_number),
         "book_title": book_title,
         "winner_variant": int(winner_variant),
-        "model": str((variant_record or {}).get("model", "unknown")),
+        "model": model_name,
         "prompt": str((variant_record or {}).get("prompt", "")),
         "quality_score": _safe_float((variant_record or {}).get("quality_score"), winner_score),
         "generation_timestamp": str((variant_record or {}).get("timestamp", "")),
@@ -9423,18 +10199,231 @@ def _build_winner_download_zip(*, runtime: config.Config, book_number: int) -> t
         zip_path = Path(handle.name)
 
     with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.write(cover_jpg, arcname=f"{safe_title}_cover_FINAL.jpg")
+        archive.write(cover_jpg, arcname=f"composites/{cover_jpg_name}")
         if cover_pdf is not None and cover_pdf.exists():
-            archive.write(cover_pdf, arcname=f"{safe_title}_cover_FINAL.pdf")
+            archive.write(cover_pdf, arcname=f"composites/{cover_pdf_name}")
         else:
-            archive.writestr(f"{safe_title}_cover_FINAL.pdf", _jpg_to_pdf_bytes(cover_jpg))
+            archive.writestr(f"composites/{cover_pdf_name}", _jpg_to_pdf_bytes(cover_jpg))
         if medallion_png is not None and medallion_png.exists():
-            archive.write(medallion_png, arcname=f"{safe_title}_medallion.png")
+            archive.write(medallion_png, arcname=f"source_images/{source_png_name}")
         if cmyk_pdf is not None and cmyk_pdf.exists():
-            archive.write(cmyk_pdf, arcname=f"{safe_title}_cover_CMYK.pdf")
+            cmyk_name = _descriptive_download_filename(
+                book_number=book_number,
+                title=book_title,
+                edition=edition,
+                model=model_name,
+                variant=winner_variant,
+                ext="pdf",
+                source=False,
+            ).replace(".pdf", "_CMYK.pdf")
+            archive.write(cmyk_pdf, arcname=f"composites/{cmyk_name}")
+        manifest_csv = (
+            "book_number,title,edition,model,variant,composite_jpg,composite_pdf,source_image,quality_score\n"
+            f"{int(book_number)},\"{book_title}\",\"{edition}\",\"{model_name}\",{int(winner_variant)},\"composites/{cover_jpg_name}\",\"composites/{cover_pdf_name}\",\"source_images/{source_png_name}\",{_safe_float((variant_record or {}).get('quality_score'), winner_score):.4f}\n"
+        )
+        archive.writestr("manifest.csv", manifest_csv)
         archive.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
 
-    return zip_path, f"{safe_title}_winner_cover.zip"
+    zip_name = _descriptive_download_filename(
+        book_number=book_number,
+        title=book_title,
+        edition=edition,
+        model=model_name,
+        variant=winner_variant,
+        ext="zip",
+        source=False,
+    ).replace("_cover_", "_winner_")
+    return zip_path, zip_name
+
+
+def _latest_rows_for_book(*, runtime: config.Config, book_number: int) -> list[dict[str, Any]]:
+    rows = [
+        row
+        for row in _load_generation_records(runtime=runtime)
+        if isinstance(row, dict) and _safe_int(row.get("book_number"), 0) == int(book_number)
+    ]
+    latest: dict[tuple[str, int], dict[str, Any]] = {}
+    for row in rows:
+        model = str(row.get("model", "unknown"))
+        variant = _safe_int(row.get("variant", row.get("variant_id", 0)), 0)
+        if variant <= 0:
+            continue
+        key = (model, variant)
+        current = latest.get(key)
+        if current is None or str(row.get("timestamp", "")) > str(current.get("timestamp", "")):
+            latest[key] = row
+    out = list(latest.values())
+    out.sort(key=lambda item: (str(item.get("model", "")), _safe_int(item.get("variant"), 0)))
+    return out
+
+
+def _build_source_download_file(
+    *,
+    runtime: config.Config,
+    book_number: int,
+    variant: int,
+    model: str = "",
+) -> tuple[Path, str]:
+    record = _latest_variant_record(runtime=runtime, book_number=book_number, variant=variant, model=model)
+    source = _source_image_for_variant(
+        runtime=runtime,
+        book_number=book_number,
+        variant=variant,
+        model=str(model),
+        record=record,
+    )
+    if source is None or not source.exists():
+        raise FileNotFoundError(f"Source image not found for book {book_number} variant {variant}")
+    title, edition = _book_title_and_edition(runtime=runtime, book_number=book_number)
+    model_name = str((record or {}).get("model", model or "unknown"))
+    filename = _descriptive_download_filename(
+        book_number=book_number,
+        title=title,
+        edition=edition,
+        model=model_name,
+        variant=variant,
+        ext=source.suffix.lstrip(".") or "png",
+        source=True,
+    )
+    return source, filename
+
+
+def _build_book_download_zip(*, runtime: config.Config, book_number: int) -> tuple[Path, str]:
+    rows = _latest_rows_for_book(runtime=runtime, book_number=book_number)
+    if not rows:
+        raise FileNotFoundError(f"No generated variants found for book {book_number}")
+    title, edition = _book_title_and_edition(runtime=runtime, book_number=book_number)
+    book_dir = f"Book{int(book_number):03d}_{_safe_file_stem(title)}"
+    manifest_lines = ["book_number,title,edition,model,variant,composite_file,source_file,quality_score"]
+
+    downloads_dir = runtime.tmp_dir / "downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix="book-", suffix=".zip", dir=str(downloads_dir), delete=False) as handle:
+        zip_path = Path(handle.name)
+
+    with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for row in rows:
+            model_name = str(row.get("model", "unknown"))
+            variant = _safe_int(row.get("variant", row.get("variant_id", 0)), 0)
+            if variant <= 0:
+                continue
+            composite = _project_path_if_exists(row.get("composited_path"))
+            if composite is None:
+                image_source = _project_path_if_exists(row.get("image_path"))
+                if image_source is not None:
+                    candidate = _resolve_composited_candidate(image_source, runtime=runtime)
+                    if candidate is not None and candidate.exists():
+                        composite = candidate
+            source = _source_image_for_variant(
+                runtime=runtime,
+                book_number=book_number,
+                variant=variant,
+                model=model_name,
+                record=row,
+            )
+            composite_name = _descriptive_download_filename(
+                book_number=book_number,
+                title=title,
+                edition=edition,
+                model=model_name,
+                variant=variant,
+                ext="jpg",
+                source=False,
+            )
+            source_name = _descriptive_download_filename(
+                book_number=book_number,
+                title=title,
+                edition=edition,
+                model=model_name,
+                variant=variant,
+                ext="png",
+                source=True,
+            )
+            composite_arc = f"{book_dir}/composites/{composite_name}"
+            source_arc = f"{book_dir}/source_images/{source_name}"
+            if composite is not None and composite.exists():
+                archive.write(composite, arcname=composite_arc)
+            if source is not None and source.exists():
+                archive.write(source, arcname=source_arc)
+            manifest_lines.append(
+                f"{int(book_number)},\"{title}\",\"{edition}\",\"{model_name}\",{int(variant)},\"{composite_arc}\",\"{source_arc}\",{_safe_float(row.get('quality_score'), 0.0):.4f}"
+            )
+        archive.writestr("manifest.csv", "\n".join(manifest_lines) + "\n")
+
+    return zip_path, f"{book_dir}_all_variants.zip"
+
+
+def _build_approved_download_zip(*, runtime: config.Config) -> tuple[Path, str]:
+    winners_payload = _load_winner_payload(_winner_path_for_runtime(runtime))
+    selections = winners_payload.get("selections", {}) if isinstance(winners_payload, dict) else {}
+    if not isinstance(selections, dict) or not selections:
+        raise FileNotFoundError("No approved winners available for download")
+    downloads_dir = runtime.tmp_dir / "downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix="approved-", suffix=".zip", dir=str(downloads_dir), delete=False) as handle:
+        zip_path = Path(handle.name)
+    manifest_lines = ["book_number,title,edition,model,variant,composite_file,source_file,quality_score"]
+
+    with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for key, selection in sorted(selections.items(), key=lambda item: _safe_int(item[0], 0)):
+            book_number = _safe_int(key, 0)
+            if book_number <= 0:
+                continue
+            if isinstance(selection, dict):
+                winner_variant = _safe_int(selection.get("winner"), 0)
+                score = _safe_float(selection.get("score"), 0.0)
+            else:
+                winner_variant = _safe_int(selection, 0)
+                score = 0.0
+            if winner_variant <= 0:
+                continue
+            record = _latest_variant_record(runtime=runtime, book_number=book_number, variant=winner_variant)
+            model_name = str((record or {}).get("model", "unknown"))
+            title, edition = _book_title_and_edition(runtime=runtime, book_number=book_number)
+            book_dir = f"Book{int(book_number):03d}_{_safe_file_stem(title)}"
+            composite = None
+            variant_dir = _variant_output_dir(runtime=runtime, book_number=book_number, variant=winner_variant)
+            if variant_dir is not None:
+                composite = next(iter(sorted(variant_dir.glob("*.jpg"))), None)
+            if composite is None and isinstance(record, dict):
+                composite = _project_path_if_exists(record.get("composited_path"))
+            source = _source_image_for_variant(
+                runtime=runtime,
+                book_number=book_number,
+                variant=winner_variant,
+                model=model_name,
+                record=record,
+            )
+            composite_name = _descriptive_download_filename(
+                book_number=book_number,
+                title=title,
+                edition=edition,
+                model=model_name,
+                variant=winner_variant,
+                ext="jpg",
+                source=False,
+            )
+            source_name = _descriptive_download_filename(
+                book_number=book_number,
+                title=title,
+                edition=edition,
+                model=model_name,
+                variant=winner_variant,
+                ext="png",
+                source=True,
+            )
+            composite_arc = f"{book_dir}/composites/{composite_name}"
+            source_arc = f"{book_dir}/source_images/{source_name}"
+            if composite is not None and composite.exists():
+                archive.write(composite, arcname=composite_arc)
+            if source is not None and source.exists():
+                archive.write(source, arcname=source_arc)
+            manifest_lines.append(
+                f"{int(book_number)},\"{title}\",\"{edition}\",\"{model_name}\",{int(winner_variant)},\"{composite_arc}\",\"{source_arc}\",{_safe_float((record or {}).get('quality_score'), score):.4f}"
+            )
+        archive.writestr("manifest.csv", "\n".join(manifest_lines) + "\n")
+
+    return zip_path, f"approved_covers_{_safe_file_stem(runtime.catalog_id)}.zip"
 
 
 def _load_generation_records(*, runtime: config.Config | None = None) -> list[dict[str, Any]]:
@@ -10502,6 +11491,10 @@ def _build_api_docs_html() -> str:
         ("GET", "/catalogs", "Catalog UI", "-", "-", "Generate winner catalogs/contact sheets/all-variants PDFs."),
         ("GET", "/history", "History UI", "-", "-", "Generation history viewer with filters."),
         ("GET", "/dashboard", "Dashboard UI", "-", "-", "Cost/quality dashboard."),
+        ("GET", "/analytics/models", "Model analytics UI", "-", "-", "Model performance, recommendation, and cross-catalog analytics dashboard."),
+        ("GET", "/prompts", "Prompt library UI", "-", "-", "Prompt CRUD/versioning and prompt performance workspace."),
+        ("GET", "/catalog/settings", "Catalog settings UI", "-", "-", "Create/switch/configure catalogs and import/export catalog bundles."),
+        ("GET", "/admin/performance", "Performance UI", "-", "-", "Request latency/error/cache/slow-endpoint monitoring page."),
         ("GET", "/batch", "Batch UI", "-", "-", "Batch generation planning and live progress page."),
         ("GET", "/similarity", "Similarity UI", "-", "-", "Cross-book similarity heatmap, alerts, and clusters."),
         ("GET", "/mockups", "Mockup UI", "-", "-", "Mockup gallery and generation controls."),
@@ -10509,6 +11502,7 @@ def _build_api_docs_html() -> str:
         ("GET", "/api/catalogs", "Catalog list", "-", "{\"catalogs\":[...],\"active_catalog\":\"classics\"}", "Available catalogs for selector dropdowns."),
         ("GET", "/api/health", "Health check", "-", "{\"status\":\"ok\",...}", "Runtime health and config status."),
         ("GET", "/api/metrics", "Runtime metrics", "-", "{\"cache\":{...},\"errors\":{...},\"jobs\":{...}}", "Operational counters, error metrics, queue state, and worker service telemetry."),
+        ("GET", "/api/performance/summary", "Performance summary", "catalog", "{\"response_time\":{...},\"slow_requests\":{...}}", "Slow-request response-time quantiles, endpoint rollups, and latest slow request samples."),
         ("GET", "/api/providers/runtime", "Provider runtime", "-", "{\"providers\":{...}}", "Provider request/error counters, circuit breaker, and rate-limit windows."),
         ("GET", "/api/workers", "Worker service status", "-", "{\"workers\":{...}}", "Worker mode + heartbeat status for inline/external workers."),
         ("GET", "/api/audit-log?limit=100", "Audit log", "limit", "{\"items\":[...]}", "Signed audit entries for cost/destructive operations."),
@@ -10522,6 +11516,9 @@ def _build_api_docs_html() -> str:
         ("GET", "/api/analytics/quality/trends?period=30d", "Quality trends", "period,catalog", "{\"trend\":[...]}", "Quality evolution over time."),
         ("GET", "/api/analytics/quality/distribution", "Quality distribution", "catalog", "{\"bins\":[...]}", "Quality score histogram."),
         ("GET", "/api/analytics/models/compare", "Model compare", "catalog", "{\"models\":[...],\"recommended_model\":\"...\"}", "Quality/cost/speed/failure comparison."),
+        ("GET", "/api/analytics/models/recommendation", "Model recommendation", "catalog,book", "{\"recommended_model\":\"...\",\"reason\":\"...\"}", "Per-book or catalog-level model recommendation summary."),
+        ("GET", "/api/analytics/ab-tests", "A/B test log", "catalog,limit", "{\"items\":[...]}", "Recent winner selections and compared model sets."),
+        ("POST", "/api/analytics/ab-tests", "Record A/B winner", "{\"book_id\":42,\"models_compared\":[...],\"winner\":\"...\"}", "{\"ok\":true}", "Store winner decisions for model comparison analytics."),
         ("GET", "/api/analytics/completion", "Catalog completion", "catalog", "{\"completion_percent\":85.8}", "Winner completion and production-readiness summary."),
         ("GET", "/api/analytics/cost-projection?books=99&variants=5&models=openrouter/google/gemini-2.5-flash-image", "Cost projection", "books,variants,models,catalog", "{\"estimatedCostUsd\":1.48,...}", "Estimate total cost/time/storage before starting large runs."),
         ("POST", "/api/analytics/export-report", "Export analytics report", "{\"period\":\"30d\"}", "{\"report_id\":\"...\"}", "Generate report artifact in data/reports."),
@@ -10535,6 +11532,12 @@ def _build_api_docs_html() -> str:
         ("GET", "/api/events/batch/{batchId}", "Batch SSE stream", "batchId,catalog", "event-stream", "Real-time stream for one batch run."),
         ("GET", "/api/review-data?catalog=classics&limit=25&offset=0", "Review data", "catalog,limit,offset,sort,order,search,status,tags", "{\"books\":[...],\"pagination\":{...}}", "Paginated review books, winners, and filters."),
         ("GET", "/api/iterate-data?catalog=classics&limit=25&offset=0", "Iterate data", "catalog,limit,offset,sort,order,search,status", "{\"books\":[...],\"pagination\":{...}}", "Paginated iterate books + model configuration."),
+        ("GET", "/api/prompts", "Prompt library list", "catalog,q,category,tags", "{\"prompts\":[...]}", "Search/list prompt library with usage, win rate, and version counts."),
+        ("POST", "/api/prompts", "Create prompt", "{\"name\":\"...\",\"prompt_template\":\"...\"}", "{\"ok\":true,\"prompt\":{...}}", "Create a prompt-library entry."),
+        ("POST", "/api/prompts/{id}", "Update/delete/usage", "{\"action\":\"update|delete|record_usage\"}", "{\"ok\":true}", "Update prompt fields, delete prompt, or record usage/win counters."),
+        ("GET", "/api/prompts/{id}/versions", "Prompt version history", "catalog", "{\"versions\":[...]}", "List historical prompt versions for rollback."),
+        ("GET", "/api/prompts/export", "Export prompt library", "catalog", "{\"prompts\":[...],\"versions\":{...}}", "Export prompt library payload as JSON."),
+        ("POST", "/api/prompts/import", "Import prompts", "{\"prompts\":[...]}", "{\"ok\":true,\"imported\":12}", "Bulk import prompt library entries."),
         ("GET", "/api/prompt-performance", "Prompt pattern stats", "-", "{\"patterns\":{...}}", "Prompt performance breakdown for intelligent prompting."),
         ("GET", "/api/history?book=2", "Book history", "book", "{\"items\":[...]}", "History subset for one book."),
         ("GET", "/api/generation-history?book=2&model=flux&status=success&limit=50&offset=0", "Filtered generation history", "book,model,provider,status,date_from,date_to,quality_min,quality_max,limit,offset", "{\"items\":[...],\"total\":123,\"pagination\":{...}}", "Global sortable/filterable generation records."),
@@ -10556,6 +11559,9 @@ def _build_api_docs_html() -> str:
         ("GET", "/api/drive/input-covers", "Drive input covers", "catalog,drive_folder_id,input_folder_id,limit", "{\"covers\":[...]}", "List top-level source covers/folders from Google Drive for iterate selection."),
         ("GET", "/api/variant-download?book=15&variant=2", "Variant ZIP download", "book,variant,model,catalog", "binary zip", "Download one generated variant package (JPG/PDF/medallion/metadata)."),
         ("GET", "/api/winner-download?book=15", "Winner ZIP download", "book,catalog", "binary zip", "Download selected winner package for one book."),
+        ("GET", "/api/source-download?book=15&variant=2&model=openrouter/google/gemini-2.5-flash-image", "Source image download", "book,variant,model,catalog", "binary image", "Download raw source image for one generated variant."),
+        ("GET", "/api/download-book?book=15", "Book variants ZIP", "book,catalog", "binary zip", "Download all generated variants (composited + source) for one book."),
+        ("GET", "/api/download-approved", "Approved variants ZIP", "catalog", "binary zip", "Download all approved winner variants (composited + source)."),
         ("GET", "/api/exports", "List exports", "catalog,limit,offset", "{\"exports\":[...],\"pagination\":{...}}", "Export artifacts with size and file counts."),
         ("GET", "/api/export/status", "Export status tracking", "catalog,limit,offset", "{\"items\":[...]}", "Per-book/per-platform export status including changed-since-last-export flags."),
         ("GET", "/api/exports/{id}/download", "Download export ZIP", "id", "binary zip", "Build and stream a ZIP for a single export artifact."),
@@ -10582,6 +11588,7 @@ def _build_api_docs_html() -> str:
         ("POST", "/api/batch-generate/{batchId}/resume", "Resume batch", "{}", "{\"ok\":true,\"status\":\"queued\"}", "Resume paused jobs in a batch."),
         ("POST", "/api/batch-generate/{batchId}/cancel", "Cancel batch", "{\"reason\":\"manual\"}", "{\"ok\":true,\"status\":\"cancelled\"}", "Cancel queued jobs in a batch."),
         ("POST", "/api/jobs/{id}/cancel", "Cancel async job", "{\"reason\":\"...\"}", "{\"ok\":true,\"job\":{...}}", "Cancel queued/retrying/running async job."),
+        ("POST", "/api/jobs/{id}/cancel-model", "Cancel one model in job", "{\"model\":\"...\",\"reason\":\"...\"}", "{\"ok\":true}", "Cancel one model stream while leaving the rest of the generation job running."),
         ("POST", "/api/regenerate", "Re-generate weak book(s)", "{\"book\":15,\"variants\":5,\"use_library\":true}", "{\"ok\":true,\"summary\":{...}}", "Run targeted re-generation workflow."),
         ("POST", "/api/similarity/recompute", "Recompute similarity cache", "{\"threshold\":0.25}", "{\"ok\":true,\"job\":{...}}", "Trigger background full similarity recompute."),
         ("POST", "/api/similarity/update", "Incremental similarity update", "{\"book\":15}", "{\"ok\":true}", "Recompute similarity pairs for one book only."),

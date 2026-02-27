@@ -46,6 +46,12 @@ class LibraryPrompt:
     created_at: str
     notes: str
     tags: list[str]
+    category: str = "general"
+    version: int = 1
+    usage_count: int = 0
+    win_count: int = 0
+    last_used_at: str = ""
+    updated_at: str = ""
 
 
 class PromptLibrary:
@@ -56,6 +62,7 @@ class PromptLibrary:
         self.library_path.parent.mkdir(parents=True, exist_ok=True)
         self._style_anchors: dict[str, StyleAnchor] = {}
         self._prompts: dict[str, LibraryPrompt] = {}
+        self._versions: dict[str, list[dict[str, object]]] = {}
         self._load_or_seed()
 
     def get_style_anchors(self) -> list[StyleAnchor]:
@@ -66,7 +73,34 @@ class PromptLibrary:
         """Save a successful prompt to the library."""
         if "{title}" not in prompt.prompt_template:
             raise ValueError("Prompt template must include '{title}' placeholder for title-agnostic reuse.")
-        self._prompts[prompt.id] = prompt
+        existing = self._prompts.get(prompt.id)
+        normalized = LibraryPrompt(
+            id=str(prompt.id),
+            name=str(prompt.name or prompt.id),
+            prompt_template=str(prompt.prompt_template),
+            style_anchors=[str(anchor).strip() for anchor in list(prompt.style_anchors)],
+            negative_prompt=str(prompt.negative_prompt or ""),
+            source_book=str(prompt.source_book or ""),
+            source_model=str(prompt.source_model or ""),
+            quality_score=float(prompt.quality_score or 0.0),
+            saved_by=str(prompt.saved_by or "auto"),
+            created_at=str(prompt.created_at or _utc_now()),
+            notes=str(prompt.notes or ""),
+            tags=[str(tag).strip() for tag in list(prompt.tags)],
+            category=str(getattr(prompt, "category", "general") or "general"),
+            version=max(1, int(getattr(prompt, "version", 1) or 1)),
+            usage_count=max(0, int(getattr(prompt, "usage_count", 0) or 0)),
+            win_count=max(0, int(getattr(prompt, "win_count", 0) or 0)),
+            last_used_at=str(getattr(prompt, "last_used_at", "") or ""),
+            updated_at=str(getattr(prompt, "updated_at", "") or _utc_now()),
+        )
+        if existing is not None:
+            history = self._versions.setdefault(str(prompt.id), [])
+            history.append(asdict(existing))
+            normalized.version = max(1, int(existing.version or 1) + 1)
+            if len(history) > 100:
+                del history[:-100]
+        self._prompts[prompt.id] = normalized
         self._persist()
         logger.info(
             "Saved prompt to library",
@@ -85,6 +119,98 @@ class PromptLibrary:
                 or wanted.intersection({anchor.lower() for anchor in prompt.style_anchors})
             ]
         return sorted(values, key=lambda prompt: prompt.quality_score, reverse=True)
+
+    def get_prompt(self, prompt_id: str) -> LibraryPrompt | None:
+        """Return one prompt by id."""
+        return self._prompts.get(str(prompt_id))
+
+    def get_versions(self, prompt_id: str) -> list[dict[str, object]]:
+        """Return historical versions for one prompt id."""
+        rows = self._versions.get(str(prompt_id), [])
+        return list(rows)
+
+    def update_prompt(self, prompt_id: str, **updates: object) -> LibraryPrompt:
+        """Update one prompt and persist previous state to versions history."""
+        token = str(prompt_id)
+        current = self._prompts.get(token)
+        if current is None:
+            raise KeyError(prompt_id)
+
+        history = self._versions.setdefault(token, [])
+        history.append(asdict(current))
+        if len(history) > 100:
+            del history[:-100]
+
+        name = str(updates.get("name", current.name) or current.name).strip() or current.name
+        prompt_template = str(updates.get("prompt_template", current.prompt_template) or current.prompt_template).strip() or current.prompt_template
+        if "{title}" not in prompt_template:
+            raise ValueError("Prompt template must include '{title}' placeholder for title-agnostic reuse.")
+
+        style_anchors = updates.get("style_anchors", current.style_anchors)
+        tags = updates.get("tags", current.tags)
+        updated = LibraryPrompt(
+            id=current.id,
+            name=name,
+            prompt_template=prompt_template,
+            style_anchors=[str(anchor).strip() for anchor in style_anchors] if isinstance(style_anchors, list) else list(current.style_anchors),
+            negative_prompt=str(updates.get("negative_prompt", current.negative_prompt) or current.negative_prompt),
+            source_book=str(updates.get("source_book", current.source_book) or current.source_book),
+            source_model=str(updates.get("source_model", current.source_model) or current.source_model),
+            quality_score=float(updates.get("quality_score", current.quality_score) or current.quality_score),
+            saved_by=str(updates.get("saved_by", current.saved_by) or current.saved_by),
+            created_at=current.created_at,
+            notes=str(updates.get("notes", current.notes) or current.notes),
+            tags=[str(tag).strip() for tag in tags] if isinstance(tags, list) else list(current.tags),
+            category=str(updates.get("category", current.category) or current.category or "general"),
+            version=max(1, int(current.version or 1) + 1),
+            usage_count=max(0, int(updates.get("usage_count", current.usage_count) or current.usage_count)),
+            win_count=max(0, int(updates.get("win_count", current.win_count) or current.win_count)),
+            last_used_at=str(updates.get("last_used_at", current.last_used_at) or current.last_used_at),
+            updated_at=_utc_now(),
+        )
+        self._prompts[token] = updated
+        self._persist()
+        return updated
+
+    def delete_prompt(self, prompt_id: str) -> bool:
+        """Delete one prompt by id."""
+        token = str(prompt_id)
+        if token not in self._prompts:
+            return False
+        self._prompts.pop(token, None)
+        self._versions.pop(token, None)
+        self._persist()
+        return True
+
+    def record_usage(self, prompt_id: str, *, won: bool = False) -> LibraryPrompt:
+        """Increment usage and optional win counters for one prompt."""
+        token = str(prompt_id)
+        current = self._prompts.get(token)
+        if current is None:
+            raise KeyError(prompt_id)
+        updated = LibraryPrompt(
+            id=current.id,
+            name=current.name,
+            prompt_template=current.prompt_template,
+            style_anchors=list(current.style_anchors),
+            negative_prompt=current.negative_prompt,
+            source_book=current.source_book,
+            source_model=current.source_model,
+            quality_score=current.quality_score,
+            saved_by=current.saved_by,
+            created_at=current.created_at,
+            notes=current.notes,
+            tags=list(current.tags),
+            category=current.category,
+            version=max(1, int(current.version or 1)),
+            usage_count=max(0, int(current.usage_count or 0) + 1),
+            win_count=max(0, int(current.win_count or 0) + (1 if won else 0)),
+            last_used_at=_utc_now(),
+            updated_at=_utc_now(),
+        )
+        self._prompts[token] = updated
+        self._persist()
+        return updated
 
     def search_prompts(
         self,
@@ -206,12 +332,29 @@ class PromptLibrary:
                 created_at=str(item.get("created_at", _utc_now()) or _utc_now()),
                 notes=str(item.get("notes", "")).strip(),
                 tags=[str(tag).strip() for tag in tags_raw] if isinstance(tags_raw, list) else [],
+                category=str(item.get("category", "general") or "general"),
+                version=max(1, int(item.get("version", 1) or 1)),
+                usage_count=max(0, int(item.get("usage_count", 0) or 0)),
+                win_count=max(0, int(item.get("win_count", 0) or 0)),
+                last_used_at=str(item.get("last_used_at", "") or ""),
+                updated_at=str(item.get("updated_at", "") or ""),
             )
         self._prompts = prompts
 
+        versions_payload = payload.get("versions", {})
+        versions: dict[str, list[dict[str, object]]] = {}
+        if isinstance(versions_payload, dict):
+            for key, rows in versions_payload.items():
+                if not isinstance(rows, list):
+                    continue
+                cleaned = [dict(item) for item in rows if isinstance(item, dict)]
+                if cleaned:
+                    versions[str(key)] = cleaned[-100:]
+        self._versions = versions
+
     def _persist(self) -> None:
         payload = {
-            "version": 1,
+            "version": 2,
             "updated_at": _utc_now(),
             "style_anchors": [asdict(anchor) for anchor in self.get_style_anchors()],
             "prompts": [
@@ -222,6 +365,7 @@ class PromptLibrary:
                     reverse=True,
                 )
             ],
+            "versions": {prompt_id: rows for prompt_id, rows in self._versions.items()},
         }
         safe_json.atomic_write_json(self.library_path, payload)
         logger.debug("Persisted prompt library", extra={"path": str(self.library_path), "anchors": len(self._style_anchors), "prompts": len(self._prompts)})
