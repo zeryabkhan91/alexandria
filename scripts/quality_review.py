@@ -4161,6 +4161,10 @@ def _seed_builtin_prompts(*, runtime: config.Config, actor: str = "tim", overwri
             "quality_score": 0.82,
             "source_model": "openrouter/google/gemini-3-pro-image-preview",
         }
+        if style_id == "sevastopol-conflict":
+            payload["tags"].append("builtin_v2:sevastopol-dramatic-conflict")
+        if style_id == "cossack-epic":
+            payload["tags"].append("builtin_v2:cossack-epic-journey")
 
         if existing_prompt is None:
             prompt = LibraryPrompt(

@@ -39,8 +39,10 @@ VARIANT_PLAN = [
     (4, "4_dramatic_oil_painting", "DRAMATIC OIL PAINTING", "oil"),
     (5, "5_symbolic_allegorical", "SYMBOLIC/ALLEGORICAL", "symbolic"),
 ]
-REQUIRED_COMPOSITION = "circular vignette composition"
+REQUIRED_COMPOSITION = "circular medallion vignette composition"
 REQUIRED_TEXT_BLOCK = "no text, no letters, no words, no watermarks"
+REQUIRED_COLOR_BLOCK = "colorful, richly colored"
+REQUIRED_SPACE_BLOCK = "no empty space, no plain backgrounds"
 
 
 @dataclass(slots=True)
@@ -643,11 +645,11 @@ def _fallback_variant_prompts(row: dict[str, Any]) -> list[str]:
     motif = motifs[0] if motifs else "symbolic visual motif"
 
     prompts = [
-        f"Classical pen-and-ink sketch of {scene_1}, fine crosshatching, warm sepia tonal structure, precise period costume details, layered depth, restrained dramatic lighting, {REQUIRED_COMPOSITION}, {REQUIRED_TEXT_BLOCK}",
-        f"Classical engraved portrait of {protagonist} in a defining narrative instant, expressive posture, period-authentic attire, subtle environmental storytelling, elegant line hierarchy, warm parchment tones, {REQUIRED_COMPOSITION}, {REQUIRED_TEXT_BLOCK}",
-        f"Detailed setting-focused engraving of {scene_3}, architectural and environmental detail, atmospheric perspective, balanced foreground and background rhythm, classical etching line work, muted warm palette, {REQUIRED_COMPOSITION}, {REQUIRED_TEXT_BLOCK}",
-        f"Dramatic classical oil painting of a pivotal moment tied to {theme}, rich brushwork, deep chiaroscuro, warm highlights against controlled shadow masses, emotionally charged composition, {REQUIRED_COMPOSITION}, {REQUIRED_TEXT_BLOCK}",
-        f"Symbolic allegorical classical illustration using {motif} to represent the core themes, layered iconography, painterly-engraving hybrid texture, deliberate color direction, elegant negative space, {REQUIRED_COMPOSITION}, {REQUIRED_TEXT_BLOCK}",
+        f"Colorful richly colored historical scene of {scene_1}, with deep crimson, burnt sienna, imperial gold, slate blue-grey, and amber light, dense detail and strong focal storytelling, {REQUIRED_COMPOSITION}, {REQUIRED_TEXT_BLOCK}",
+        f"Colorful richly colored engraved portrait of {protagonist} in a defining narrative instant, with ruby, emerald, sapphire, ivory, and bronze accents, expressive posture and layered atmosphere, {REQUIRED_COMPOSITION}, {REQUIRED_TEXT_BLOCK}",
+        f"Colorful richly colored setting-focused scene of {scene_3}, with terracotta, fresco blue, ochre, umber, and birch-white tones, architectural depth and edge-to-edge detail, {REQUIRED_COMPOSITION}, {REQUIRED_TEXT_BLOCK}",
+        f"Colorful richly colored dramatic oil painting of a pivotal moment tied to {theme}, with molten gold, indigo, blood orange, silver-white, and ocean teal contrast, dynamic motion and dense composition, {REQUIRED_COMPOSITION}, {REQUIRED_TEXT_BLOCK}",
+        f"Colorful richly colored symbolic allegorical illustration using {motif} to represent core themes, with deep purple, amethyst, absinthe green, lapis blue, and antique gold, layered iconography and full-frame detail, {REQUIRED_COMPOSITION}, {REQUIRED_TEXT_BLOCK}",
     ]
     return [_ensure_prompt_constraints(text) for text in prompts]
 
@@ -692,7 +694,12 @@ def _score_prompt(prompt: str, *, row: dict[str, Any], peers: list[str]) -> Prom
     visual_hits = sum(1 for term in visual_terms if term in lower)
     visual_richness = _clip(visual_hits / 8.0)
 
-    has_required = REQUIRED_COMPOSITION in lower and REQUIRED_TEXT_BLOCK in lower
+    has_required = (
+        REQUIRED_COMPOSITION in lower
+        and REQUIRED_TEXT_BLOCK in lower
+        and REQUIRED_COLOR_BLOCK in lower
+        and REQUIRED_SPACE_BLOCK in lower
+    )
     word_ok = 40 <= words <= 80
     compliance = 1.0
     if not has_required:
@@ -728,8 +735,14 @@ def _ensure_prompt_constraints(prompt: str) -> str:
         lower = text.lower()
     if REQUIRED_TEXT_BLOCK not in lower:
         text += f", {REQUIRED_TEXT_BLOCK}"
+        lower = text.lower()
+    if REQUIRED_COLOR_BLOCK not in lower:
+        text += f", {REQUIRED_COLOR_BLOCK}"
+        lower = text.lower()
+    if REQUIRED_SPACE_BLOCK not in lower:
+        text += f", {REQUIRED_SPACE_BLOCK}"
 
-    filler = "warm lighting contrast, refined period detail, coherent focal subject"
+    filler = "warm lighting contrast, refined period detail, coherent focal subject, no empty space"
     while _word_count(text) < 40:
         text += ", " + filler
 
@@ -808,8 +821,8 @@ def _intelligent_system_prompt() -> str:
     return (
         "You are an art director for classical book cover illustrations. "
         "You write prompts for AI image generators (FLUX, GPT Image, Imagen) that produce illustrations for circular medallion frames on book covers. "
-        "CONSTRAINTS: output must work as a circular vignette composition; style must be classical (oil painting, pen-and-ink sketch, engraving) and never photorealistic/cartoonish; "
-        "must include phrase 'no text, no letters, no words, no watermarks'; must include phrase 'circular vignette composition'; each prompt 40-80 words; highly book-specific and recognizable. "
+        "CONSTRAINTS: output must work as a circular medallion vignette composition for a luxury leather-bound edition; style must be classical (oil painting, pen-and-ink sketch, engraving) and never photorealistic/cartoonish; "
+        "must include phrase 'no text, no letters, no words, no watermarks'; must include phrase 'colorful, richly colored'; must include phrase 'no empty space, no plain backgrounds'; each prompt 40-80 words; highly book-specific and recognizable. "
         "Return JSON only."
     )
 
