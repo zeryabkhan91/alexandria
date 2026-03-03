@@ -88,6 +88,27 @@ function resolvePreviewSources(job, keyPrefix = 'display', preferRaw = false) {
   return sources;
 }
 
+function resolveCompositePreviewSources(job, keyPrefix = 'display-composite') {
+  const sources = [];
+  const seen = new Set();
+  const pushSource = (value, suffix) => {
+    if (!isRenderableImageSource(value)) return;
+    const src = getBlobUrl(value, `${job.id}-${keyPrefix}-${suffix}`);
+    if (!src || seen.has(src)) return;
+    seen.add(src);
+    sources.push(src);
+  };
+  pushSource(job.composited_image_blob, 'composite');
+  try {
+    const parsed = JSON.parse(String(job.results_json || '{}'));
+    const row = parsed?.result || {};
+    pushSource(row.composited_path, 'row-composite');
+  } catch {
+    // ignore malformed historical rows
+  }
+  return sources;
+}
+
 function applyPromptPlaceholders(promptText, book) {
   return String(promptText || '')
     .replaceAll('{title}', String(book?.title || ''))
@@ -311,6 +332,8 @@ window.Pages.iterate = {
 
     const templateObj = promptId ? DB.dbGet('prompts', promptId) : null;
     const styleSelections = StyleDiversifier.selectDiverseStyles(selectedModels.length * variantCount);
+    const selectedCoverId = String(book.cover_jpg_id || book.drive_cover_id || '').trim();
+    const selectedCoverBookNumber = Number(book.number || book.id || bookId || 0);
 
     const jobs = [];
     let styleIndex = 0;
@@ -329,6 +352,8 @@ window.Pages.iterate = {
           prompt,
           style_id: style?.id || 'none',
           style_label: style?.label || 'Default',
+          selected_cover_id: selectedCoverId,
+          selected_cover_book_number: selectedCoverBookNumber,
           quality_score: null,
           cost_usd: 0,
           generated_image_blob: null,
@@ -449,7 +474,7 @@ window.Pages.iterate = {
     const completed = jobs.filter((job) => job.status === 'completed').length;
     if (count) count.textContent = `${completed} completed · ${jobs.length} total`;
     grid.innerHTML = jobs.map((job) => {
-      const previewSources = resolvePreviewSources(job, 'display', false);
+      const previewSources = resolveCompositePreviewSources(job, 'display');
       const src = previewSources[0] || '';
       const fallbackSrc = previewSources[1] || '';
       const hasPreview = Boolean(src);
@@ -460,7 +485,7 @@ window.Pages.iterate = {
       return `
         <div class="result-card ${hasPreview ? '' : 'result-card-empty'}" ${hasPreview ? `data-view="${job.id}"` : ''}>
           ${hasPreview
-            ? `<img class="thumb" src="${src}" alt="result" data-fallback-src="${encodeURIComponent(fallbackSrc)}" data-status="${status}" />`
+            ? `<img class="thumb thumb-front" src="${src}" alt="result" data-fallback-src="${encodeURIComponent(fallbackSrc)}" data-status="${status}" />`
             : `<div class="thumb thumb-fallback">${fallbackCardText(status)}</div>`}
           <div class="card-body">
             <div class="flex justify-between">

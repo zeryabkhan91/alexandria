@@ -30,11 +30,12 @@ DETECTION_OPENING_RATIO = 0.965
 DETECTION_OPENING_MIN = 360
 DETECTION_OPENING_MAX = 530
 DETECTION_CONFIDENCE_MIN = 4.0
-OPENING_SAFETY_INSET_PX = 6
+OPENING_SAFETY_INSET_PX = 16
+OVERLAY_PUNCH_INSET_PX = 20
 INNER_FEATHER_PX = 8
 RING_WIDTH_PX = 14
 RING_BEADS = 72
-MIN_OPENING_MARGIN_PX = 6
+MIN_OPENING_MARGIN_PX = 24
 FALLBACK_COVER_WIDTH = 3784
 FALLBACK_COVER_HEIGHT = 2777
 FALLBACK_CENTER_X = 2850
@@ -451,45 +452,9 @@ def _smart_square_crop(image: Image.Image) -> Image.Image:
     img_w, img_h = src.size
     if img_w <= 1 or img_h <= 1:
         return src
-
-    box = _detect_foreground_bbox_norm(src)
-    if box is not None:
-        box_cx = (float(box["x"]) + (float(box["w"]) / 2.0)) * img_w
-        box_cy = (float(box["y"]) + (float(box["h"]) / 2.0)) * img_h
-        box_w = max(1.0, float(box["w"]) * img_w)
-        box_h = max(1.0, float(box["h"]) * img_h)
-        area = float(box.get("box_area", 1.0))
-        if area < 0.08:
-            margin = 0.08
-        elif area < 0.18:
-            margin = 0.12
-        elif area < 0.40:
-            margin = 0.18
-        elif area < 0.65:
-            margin = 0.24
-        else:
-            margin = 0.30
-        src_w = box_w * (1.0 + margin * 2.0)
-        src_h = box_h * (1.0 + margin * 2.0)
-        side = max(src_w, src_h)
-        max_centered_side_x = max(16.0, min(float(img_w), 2.0 * min(float(box_cx), float(img_w - box_cx))))
-        max_centered_side_y = max(16.0, min(float(img_h), 2.0 * min(float(box_cy), float(img_h - box_cy))))
-        centered_cap = max(16.0, min(max_centered_side_x, max_centered_side_y))
-        side = min(float(min(img_w, img_h)), max(16.0, side), centered_cap)
-        left = int(round(box_cx - (side / 2.0)))
-        top = int(round(box_cy - (side / 2.0)))
-        left = max(0, min(img_w - int(round(side)), left))
-        top = max(0, min(img_h - int(round(side)), top))
-        right = min(img_w, left + int(round(side)))
-        bottom = min(img_h, top + int(round(side)))
-        return src.crop((left, top, right, bottom))
-
-    cx_norm, cy_norm = _find_energy_center(src)
     side = min(img_w, img_h)
-    left = int(round((cx_norm * img_w) - (side / 2.0)))
-    top = int(round((cy_norm * img_h) - (side / 2.0)))
-    left = max(0, min(img_w - side, left))
-    top = max(0, min(img_h - side, top))
+    left = max(0, (img_w - side) // 2)
+    top = max(0, (img_h - side) // 2)
     return src.crop((left, top, left + side, top + side))
 
 
@@ -698,7 +663,7 @@ def composite_single(
             cover=cover,
             center_x=int(geometry["center_x"]),
             center_y=int(geometry["center_y"]),
-            punch_radius=opening_radius,
+            punch_radius=max(12, opening_radius - OVERLAY_PUNCH_INSET_PX),
         )
         composited_rgb = Image.alpha_composite(composited, overlay).convert("RGB")
         validation_region = Region(

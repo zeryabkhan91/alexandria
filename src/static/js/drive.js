@@ -47,6 +47,16 @@ window.Drive = {
 
   async syncCatalog(onProgress) {
     if (typeof onProgress === 'function') onProgress({ step: 'start' });
+    const resp = await fetch('/api/drive/catalog-sync?catalog=classics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: true, limit: 5000 }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(text || `Catalog sync failed (HTTP ${resp.status})`);
+    }
+    await resp.json();
     const books = await DB.loadBooks('classics');
     if (typeof onProgress === 'function') onProgress({ step: 'done', count: books.length });
     return books;

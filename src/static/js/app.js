@@ -109,8 +109,8 @@ window.CoverCache = {
 };
 
 window.JobQueue = {
-  MAX_CONCURRENT: 5,
-  GENERATION_TIMEOUT: 120000,
+  MAX_CONCURRENT: 2,
+  GENERATION_TIMEOUT: 480000,
   COVER_TIMEOUT: 20000,
   COMPOSITE_TIMEOUT: 15000,
   RETRY_THRESHOLD: 0.35,
@@ -317,8 +317,11 @@ window.JobQueue = {
               catalog: 'classics',
               prompt_source: 'custom',
               cover_source: 'drive',
+              selected_cover_id: String(job.selected_cover_id || '').trim(),
+              selected_cover_book_number: Number(job.selected_cover_book_number || job.book_id || 0),
               variant: Number(job.variant || 1),
               variants: 1,
+              max_attempts: 5,
               idempotency_key: `${job.id}-attempt-${attempts}`,
               onProgress: (backendJob) => {
                 const backendStatus = String(backendJob?.status || '').trim().toLowerCase();
@@ -359,9 +362,16 @@ window.JobQueue = {
             }
           );
         } catch (err) {
-          if (err.message === 'RATE_LIMITED') {
+          const message = String(err?.message || err || '');
+          if (message === 'RATE_LIMITED') {
             attempts -= 1;
             await new Promise((resolve) => setTimeout(resolve, Math.min((attempts + 1) * 5000, 30000)));
+            continue;
+          }
+          const transient = /timed out|timeout|missing image payload|polling failed: http 5\d\d|temporarily unavailable/i.test(message);
+          if (transient && attempts < this.MAX_RETRIES + 1) {
+            setStatus('retrying', `Transient error, retry ${attempts}/${this.MAX_RETRIES}`);
+            await new Promise((resolve) => setTimeout(resolve, Math.min((attempts + 1) * 4000, 30000)));
             continue;
           }
           throw err;
@@ -404,20 +414,19 @@ window.JobQueue = {
       setStatus('compositing');
       const rawBlob = await fetchImageBlob(rawSource, abortController.signal);
       const backendCompositedBlob = best.compositedPath
-        ? await fetchImageBlob(best.compositedPath, abortController.signal, { retries: 25, delayMs: 1000 })
+        ? await fetchImageBlob(best.compositedPath, abortController.signal, { retries: 60, delayMs: 1000 })
         : null;
+      if (!backendCompositedBlob && !best.compositedPath) {
+        throw new Error('Backend composite unavailable; refusing raw fallback to preserve medallion layering.');
+      }
       job.generated_image_blob = rawBlob || rawSource;
-      job.composited_image_blob = backendCompositedBlob || best.compositedPath || rawBlob || rawSource;
+      job.composited_image_blob = backendCompositedBlob || best.compositedPath || null;
       job._compositeFailed = false;
       job._compositeError = null;
       if (backendCompositedBlob) job._compositeSource = 'backend-blob';
       else if (best.compositedPath) job._compositeSource = 'backend-path';
-      else job._compositeSource = 'raw-fallback';
+      else job._compositeSource = 'missing';
       job.compositor_geometry = null;
-      if (!backendCompositedBlob && !best.compositedPath) {
-        job._compositeFailed = true;
-        job._compositeError = 'Backend composite unavailable, raw output fallback used.';
-      }
 
       setStatus('completed');
       job.completed_at = new Date().toISOString();

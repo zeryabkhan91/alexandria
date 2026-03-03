@@ -3430,10 +3430,38 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
     winners_payload = _load_winner_payload(_winner_path_for_runtime(runtime))
     winner_map = winners_payload.get("selections", {}) if isinstance(winners_payload, dict) else {}
 
+    prompt_rows = prompts.get("books", []) if isinstance(prompts, dict) else []
+    if not isinstance(prompt_rows, list):
+        prompt_rows = []
+    prompt_by_book: dict[int, dict[str, Any]] = {}
+    for row in prompt_rows:
+        if not isinstance(row, dict):
+            continue
+        number = _safe_int(row.get("number"), 0)
+        if number <= 0:
+            continue
+        prompt_by_book[number] = row
+
+    catalog_rows = _catalog_books_payload(runtime.book_catalog_path)
+    source_books = catalog_rows if catalog_rows else [row for row in prompt_rows if isinstance(row, dict)]
+
     books = []
-    for book in (prompts.get("books", []) if isinstance(prompts, dict) else []):
+    for book in source_books:
         number = int(book.get("number", 0))
-        default_prompt = book.get("variants", [{}])[0].get("prompt", "") if book.get("variants") else ""
+        if number <= 0:
+            continue
+        prompt_row = prompt_by_book.get(number, {})
+        prompt_variants = prompt_row.get("variants", []) if isinstance(prompt_row, dict) else []
+        default_prompt = (
+            prompt_variants[0].get("prompt", "")
+            if isinstance(prompt_variants, list) and prompt_variants and isinstance(prompt_variants[0], dict)
+            else ""
+        )
+        title = str(book.get("title", prompt_row.get("title", "")))
+        author = str(book.get("author", prompt_row.get("author", "")))
+        folder_name = str(book.get("folder_name", prompt_row.get("folder_name", "")))
+        cover_jpg_id = str(book.get("cover_jpg_id", book.get("drive_cover_id", ""))).strip()
+        cover_name = str(book.get("cover_name", book.get("drive_name", folder_name or title))).strip()
         smart_row = smart_by_book.get(number, {})
         smart_variants = smart_row.get("variants", []) if isinstance(smart_row, dict) else []
         winner_row = winner_map.get(str(number), {})
@@ -3442,15 +3470,15 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
             runtime=runtime,
             book={
                 "number": number,
-                "title": book.get("title", ""),
-                "author": book.get("author", ""),
-                "genre": book.get("genre", ""),
+                "title": title,
+                "author": author,
+                "genre": book.get("genre", prompt_row.get("genre", "")),
                 "enrichment": enriched_by_book.get(number, {}),
             },
             base_prompt=str(
                 default_prompt
                 or (
-                    f'Cinematic full-bleed narrative scene for "{book.get("title", "")}" by {book.get("author", "")}, '
+                    f'Cinematic full-bleed narrative scene for "{title}" by {author}, '
                     "single dominant focal subject, scene artwork only, no text, no logos, no borders or frames."
                 )
             ),
@@ -3459,8 +3487,13 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
         books.append(
             {
                 "number": number,
-                "title": book.get("title", ""),
-                "author": book.get("author", ""),
+                "title": title,
+                "author": author,
+                "folder_name": folder_name,
+                "file_base": str(book.get("file_base", prompt_row.get("file_base", f"{title} - {author}".strip(" - ")))),
+                "cover_jpg_id": cover_jpg_id,
+                "cover_name": cover_name,
+                "drive_kind": str(book.get("drive_kind", "")).strip(),
                 "default_prompt": default_prompt,
                 "default_template_id": default_template_id,
                 "genre": composed.get("genre", "literary_fiction"),
@@ -3476,7 +3509,7 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
                 },
                 "enrichment": enriched_by_book.get(number, {}),
                 "smart_prompts": smart_variants if isinstance(smart_variants, list) else [],
-                "local_cover_available": _local_cover_available(runtime=runtime, book_number=number),
+                "local_cover_available": _local_cover_available(runtime=runtime, book_number=number) or bool(cover_jpg_id),
                 "winner_variant": winner_variant,
                 "winner_selected": bool(winner_variant > 0),
             }
@@ -3520,6 +3553,169 @@ def _catalog_books_payload(path: Path) -> list[dict[str, Any]]:
     if not isinstance(payload, list):
         return []
     return [row for row in payload if isinstance(row, dict)]
+
+
+def _title_author_from_drive_name(name: str) -> tuple[str, str]:
+    token = Path(str(name or "").strip()).stem
+    token = re.sub(r"^\s*\d+\s*[\.\-:)]*\s*", "", token).strip()
+    token = token.replace("_", " ")
+    token = re.sub(r"\s+", " ", token).strip()
+    if not token:
+        return "Untitled", ""
+    if " - " in token:
+        left, right = token.rsplit(" - ", 1)
+        title = left.strip() or token
+        author = right.strip()
+        if 1 <= len(author.split()) <= 8:
+            return title, author
+    return token, ""
+
+
+def _build_catalog_rows_from_drive_covers(*, covers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    used_numbers: set[int] = set()
+    used_folders: set[str] = set()
+    next_number = 1
+
+    for entry in covers:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name", "")).strip()
+        if not name:
+            continue
+        title, author = _title_author_from_drive_name(name)
+        mapped_number = _safe_int(entry.get("book_number"), 0)
+        number = 0
+        if mapped_number > 0 and mapped_number not in used_numbers:
+            number = mapped_number
+        else:
+            while next_number in used_numbers:
+                next_number += 1
+            number = next_number
+        used_numbers.add(number)
+        next_number = max(next_number, number + 1)
+
+        folder_seed = f"{number}. {title}" + (f" - {author}" if author else "")
+        folder_name = f"{folder_seed} copy"
+        collision = 2
+        while folder_name in used_folders:
+            folder_name = f"{folder_seed} copy {collision}"
+            collision += 1
+        used_folders.add(folder_name)
+
+        file_base = f"{title} - {author}".strip(" -") or title or f"Book {number}"
+        rows.append(
+            {
+                "number": number,
+                "title": title or f"Book {number}",
+                "author": author,
+                "folder_name": folder_name,
+                "file_base": file_base,
+                "formats": ["ai", "jpg", "pdf"],
+                "cover_jpg_id": str(entry.get("id", "")).strip(),
+                "cover_name": name,
+                "drive_kind": str(entry.get("kind", "")).strip().lower(),
+            }
+        )
+
+    rows.sort(key=lambda item: _safe_int(item.get("number"), 0))
+    return rows
+
+
+def _sync_catalog_from_drive(*, runtime: config.Config, force: bool = False, limit: int = 5000) -> dict[str, Any]:
+    source_default = (
+        str(getattr(runtime, "gdrive_source_folder_id", "") or "").strip()
+        or str(getattr(runtime, "gdrive_input_folder_id", "") or "").strip()
+        or str(getattr(runtime, "gdrive_output_folder_id", "") or "").strip()
+    )
+    if not source_default:
+        raise RuntimeError("Google Drive source folder is not configured.")
+
+    input_folder_id = (
+        str(getattr(runtime, "gdrive_source_folder_id", "") or "").strip()
+        or str(getattr(runtime, "gdrive_input_folder_id", "") or "").strip()
+    )
+
+    credentials_path = _resolve_credentials_path(runtime)
+    if not credentials_path.is_absolute():
+        credentials_path = PROJECT_ROOT / credentials_path
+
+    if force:
+        try:
+            drive_manager.clear_drive_cover_cache()
+        except Exception:
+            pass
+
+    payload = drive_manager.list_input_covers(
+        drive_folder_id=source_default,
+        input_folder_id=input_folder_id,
+        credentials_path=credentials_path,
+        catalog_path=runtime.book_catalog_path,
+        limit=max(1, min(10000, int(limit or 5000))),
+    )
+    if not isinstance(payload, dict):
+        raise RuntimeError("Unexpected Drive sync response.")
+    error_text = str(payload.get("error", "")).strip()
+    if error_text:
+        raise RuntimeError(error_text)
+
+    covers = payload.get("covers", [])
+    if not isinstance(covers, list):
+        covers = []
+    rows = [row for row in covers if isinstance(row, dict)]
+    if not rows:
+        raise RuntimeError("No Drive titles found in source folder.")
+
+    catalog_rows = _build_catalog_rows_from_drive_covers(covers=rows)
+    if not catalog_rows:
+        raise RuntimeError("Unable to derive catalog rows from Drive entries.")
+
+    runtime.book_catalog_path.parent.mkdir(parents=True, exist_ok=True)
+    safe_json.atomic_write_json(runtime.book_catalog_path, catalog_rows)
+    write_iterate_data(runtime=runtime)
+    iterate_payload = _load_json(_iterate_data_path_for_runtime(runtime), {"books": []})
+    iterate_rows = iterate_payload.get("books", []) if isinstance(iterate_payload, dict) else []
+    cgi_books: list[dict[str, Any]] = []
+    for row in iterate_rows:
+        if not isinstance(row, dict):
+            continue
+        number = _safe_int(row.get("number"), 0)
+        if number <= 0:
+            continue
+        cgi_books.append(
+            {
+                "id": number,
+                "number": number,
+                "title": str(row.get("title", "")),
+                "author": str(row.get("author", "")),
+                "folder_name": str(row.get("folder_name", row.get("folder", ""))),
+                "cover_jpg_id": str(row.get("cover_jpg_id", "")),
+                "cover_name": str(row.get("cover_name", "")),
+                "synced_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    try:
+        CGI_CATALOG_CACHE_PATH.write_text(
+            json.dumps(
+                {
+                    "books": cgi_books,
+                    "count": len(cgi_books),
+                    "synced_at": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+    _invalidate_cache("/api/iterate-data", "/cgi-bin/catalog.py", "/cgi-bin/catalog.py/status")
+    return {
+        "ok": True,
+        "catalog": runtime.catalog_id,
+        "count": len(catalog_rows),
+        "drive_total": _safe_int(payload.get("total"), len(catalog_rows)),
+        "source_count": len(rows),
+    }
 
 
 def _template_rows_for_runtime(*, runtime: config.Config, genre: str = "") -> list[dict[str, Any]]:
@@ -6237,7 +6433,7 @@ def serve_review_webapp(
                     safe_json.atomic_write_json(review_data_path, persisted_payload)
                 return _cache_and_send(payload)
             if path == "/api/iterate-data":
-                limit, offset = _parse_pagination(query, default_limit=25, max_limit=500)
+                limit, offset = _parse_pagination(query, default_limit=25, max_limit=5000)
                 sort, order = _normalize_sort_order(query)
                 filters = _books_filters_from_query(query)
                 write_iterate_data(runtime=runtime_req)
@@ -6874,6 +7070,25 @@ def serve_review_webapp(
                 }
                 CGI_CATALOG_CACHE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
                 return self._send_json(payload)
+
+            if path == "/api/drive/catalog-sync":
+                force = bool(body.get("force", True))
+                limit = _safe_int(body.get("limit", query.get("limit", ["5000"])[0]), 5000)
+                try:
+                    summary = _sync_catalog_from_drive(
+                        runtime=runtime_req,
+                        force=force,
+                        limit=max(1, min(10000, limit)),
+                    )
+                except Exception as exc:
+                    return self._send_error(
+                        code="DRIVE_CATALOG_SYNC_FAILED",
+                        message=str(exc),
+                        details={"catalog": runtime_req.catalog_id},
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                return self._send_json(summary)
 
             if MUTATION_API_TOKEN:
                 supplied = str(self.headers.get("X-API-Token", "")).strip()

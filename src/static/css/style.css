@@ -582,6 +582,10 @@ tr:hover td {
   background: #f8fafc;
 }
 
+.thumb-front {
+  object-position: 82% 50%;
+}
+
 .thumb-fallback {
   display: flex;
   align-items: center;

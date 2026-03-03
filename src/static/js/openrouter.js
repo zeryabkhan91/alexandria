@@ -110,6 +110,13 @@ window.OpenRouter = {
       cover_source: options.cover_source || 'drive',
       async: true,
     };
+    if (options.selected_cover_id) payload.selected_cover_id = String(options.selected_cover_id).trim();
+    if (Number(options.selected_cover_book_number || 0) > 0) {
+      payload.selected_cover_book_number = Number(options.selected_cover_book_number);
+    }
+    if (options.drive_folder_id) payload.drive_folder_id = String(options.drive_folder_id).trim();
+    if (options.input_folder_id) payload.input_folder_id = String(options.input_folder_id).trim();
+    if (options.credentials_path) payload.credentials_path = String(options.credentials_path).trim();
     if (options.provider) payload.provider = String(options.provider).trim().toLowerCase();
     if (options.idempotency_key) payload.idempotency_key = String(options.idempotency_key).trim();
     if (options.max_attempts) payload.max_attempts = Math.max(1, Number(options.max_attempts || 1));
