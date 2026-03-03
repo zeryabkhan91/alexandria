@@ -1,6 +1,6 @@
-# PROMPT-07E — Fix Compositor: Art Too Small + Original Cover Visible
+# PROMPT-07E — Fix Compositor: Art Too Small + Not Centered + Original Cover Visible
 
-**Priority:** CRITICAL — Four rounds of fixes have failed (07B x2, 07C, 07D). This prompt takes the simplest possible approach.
+**Priority:** CRITICAL — Four rounds of fixes have failed (07B x2, 07C, 07D). This prompt takes the simplest possible approach with aggressive sizing.
 
 **Branch:** `master`
 
@@ -12,21 +12,23 @@ Only modify the specific files listed in this prompt. Do NOT touch `index.html`,
 
 ---
 
-## THE ACTUAL PROBLEM (From Visual Inspection)
+## THE ACTUAL PROBLEMS (From Visual Inspection of Screenshots)
 
-The generated art appears as a **small circle inside the medallion** with the **original cover's background image clearly visible** around it. The art is NOT filling the medallion opening, and the original cover artwork (from the input covers) is showing through in the gap.
+1. **Art is too small** — generated art appears as a small circle inside the medallion instead of filling it
+2. **Art appears off-center** — each generated image has different visual centering within the medallion
+3. **Original cover visible** — the original cover's background artwork shows through around and behind the ornaments
+4. **Different edge ratios** — each cover shows different gaps between the art edge and the frame
 
 **Root cause chain:**
-1. `config/compositing_mask.png` restricts the art to ~380px radius — FAR too small
-2. The cover overlay's punch radius is SMALLER than the art circle, so the original cover's pixels show between the art edge and the frame
-3. `OPENING_SAFETY_INSET_PX = 18` makes art 18px smaller than the opening
-4. `OVERLAY_PUNCH_INSET_PX = 20` makes the punch 20px smaller than the opening (2px smaller than the art!)
-
-**The 2px gap (punch=462 < art=464) is where the original cover's medallion artwork bleeds through.**
+1. `config/compositing_mask.png` restricts the art to ~380px radius — FAR too small for the ~460px frame opening
+2. `_smart_square_crop()` uses content-aware foreground detection that shifts the crop center based on image content — this makes each image appear differently positioned within the circle
+3. The cover overlay's punch radius (462) is SMALLER than the art clip radius (464), so 2px of original cover artwork shows through
+4. `OPENING_SAFETY_INSET_PX = 18` makes art 18px smaller than the opening
+5. `OVERLAY_PUNCH_INSET_PX = 20` makes the punch 20px smaller than the opening
 
 ---
 
-## THE FIX — THREE SIMPLE CHANGES
+## THE FIX — FOUR CHANGES
 
 ### 1. DISABLE the compositing mask
 
@@ -51,26 +53,51 @@ OPENING_SAFETY_INSET_PX = 18
 OVERLAY_PUNCH_INSET_PX = 20
 
 # NEW VALUES:
-DETECTION_OPENING_RATIO = 0.92
-OPENING_SAFETY_INSET_PX = 2
-OVERLAY_PUNCH_INSET_PX = -2
+DETECTION_OPENING_RATIO = 0.96
+OPENING_SAFETY_INSET_PX = 0
+OVERLAY_PUNCH_INSET_PX = -4
 ```
 
 **Why these values:**
-- `DETECTION_OPENING_RATIO = 0.92` → With outer_radius=500, `opening_radius = round(500 * 0.92) = 460`
-- `OPENING_SAFETY_INSET_PX = 2` → `clip_radius = 460 - 2 = 458` (art fills to 458px)
-- `OVERLAY_PUNCH_INSET_PX = -2` (NEGATIVE!) → `punch_radius = 460 + 2 = 462` (cover is transparent to 462px)
+- `DETECTION_OPENING_RATIO = 0.96` → With outer_radius=500, `opening_radius = round(500 * 0.96) = 480`
+- `OPENING_SAFETY_INSET_PX = 0` → `clip_radius = 480 - 0 = 480` (art fills to 480px — covers ALL ornamental scrollwork)
+- `OVERLAY_PUNCH_INSET_PX = -4` (NEGATIVE!) → `punch_radius = 480 + 4 = 484` (cover overlay is transparent to 484px)
 
-**The punch is now 4px BIGGER than the art circle.** This means:
-- Art fills from center to 458px
-- Cover overlay is transparent from center to 462px
-- The 4px gap (458-462) shows background fill color (navy) — invisible against the navy cover
-- Cover overlay is opaque beyond 462px (shows outer frame ring + navy background)
+**The punch is 4px BIGGER than the art circle.** This means:
+- Art fills from center to **480px** (was ~380px with mask — 26% larger)
+- Cover overlay is transparent from center to 484px
+- The 4px gap (480-484) shows background fill color (navy) — invisible against the navy cover
+- Cover overlay is opaque beyond 484px (shows outer frame ring)
 - **ZERO original cover artwork visible anywhere**
 
-**Frame preservation:** Ornaments from 462-500px (the outer ~38px ring) are preserved. This includes the thick outer decorative border. Inner scrollwork (380-462px) is replaced by art.
+**Frame preservation:** Only the outermost 16px ring (484-500px) shows the original cover — this is the thick outer gold border with beading. The inner ornamental scrollwork (380-480px) is replaced by art, which is an acceptable tradeoff for a clean result.
 
-### 3. Fix JavaScript frontend constants (`src/static/js/compositor.js`)
+### 3. Fix content-aware cropping to ALWAYS use image center (`src/cover_compositor.py`)
+
+The function `_smart_square_crop()` currently detects foreground subjects and shifts the crop center to follow them. This causes each AI-generated image to appear differently positioned within the medallion circle, making the art look off-center and giving different edge ratios per image.
+
+**Replace the entire `_smart_square_crop()` function** with a simple center crop:
+
+```python
+def _smart_square_crop(image: Image.Image) -> Image.Image:
+    """Crop image to a centered square.
+
+    Always crops from the exact center of the image to ensure consistent
+    visual centering when composited into the medallion frame.
+    """
+    src = image.convert("RGBA")
+    img_w, img_h = src.size
+    if img_w <= 1 or img_h <= 1:
+        return src
+    side = min(img_w, img_h)
+    left = (img_w - side) // 2
+    top = (img_h - side) // 2
+    return src.crop((left, top, left + side, top + side))
+```
+
+**Why:** The old version detected foreground bounding boxes and energy centers, shifting the crop to follow the subject. This meant every AI-generated image got cropped differently, appearing off-center in the medallion. A simple center crop ensures ALL images are consistently centered within the circle.
+
+### 4. Fix JavaScript frontend constants (`src/static/js/compositor.js`)
 
 Find and change these constants (near the top of the file, around lines 4-9):
 
@@ -81,12 +108,12 @@ const OPENING_MARGIN = 6;
 const OPENING_SAFETY_INSET = 18;
 
 // NEW VALUES:
-const OPENING_RATIO = 0.92;
+const OPENING_RATIO = 0.96;
 const OPENING_MARGIN = 6;
-const OPENING_SAFETY_INSET = 2;
+const OPENING_SAFETY_INSET = 0;
 ```
 
-**Also fix `buildCoverTemplate()`** (around line 523-534). Currently it punches at `geo.openingRadius` which is BIGGER than `clipRadius`, creating a gap where the original cover shows. Change it to punch at `geo.openingRadius + 4` to match the Python backend's approach:
+**Also fix `buildCoverTemplate()`** (around line 523-534). Currently it punches at `geo.openingRadius` which doesn't match the Python backend. Change it to punch at `geo.openingRadius + 4` to match:
 
 ```javascript
 async function buildCoverTemplate(coverImg, geo) {
@@ -97,7 +124,7 @@ async function buildCoverTemplate(coverImg, geo) {
   ctx.save();
   ctx.globalCompositeOperation = 'destination-out';
   ctx.beginPath();
-  // Punch slightly BIGGER than openingRadius to match clip behavior
+  // Punch slightly BIGGER than openingRadius to ensure no original cover shows
   const punchRadius = geo.openingRadius + 4;
   ctx.arc(geo.cx, geo.cy, punchRadius, 0, Math.PI * 2);
   ctx.fill();
@@ -105,6 +132,8 @@ async function buildCoverTemplate(coverImg, geo) {
   return canvas;
 }
 ```
+
+**Also fix `smartComposite()` content-aware crop in JS** — find the `_smartSquareCrop` or equivalent crop logic in `smartComposite()`. If it does content-aware cropping (energy center, foreground detection), simplify it to always crop from the image center, matching the Python change above.
 
 **Version bump:** Change the `[Compositor v10]` log strings to `[Compositor v12]`.
 
@@ -114,10 +143,12 @@ async function buildCoverTemplate(coverImg, geo) {
 
 | Before (broken) | After (fixed) |
 |---|---|
-| Art restricted to ~380px by compositing mask | Art fills to 458px (27% larger diameter) |
+| Art restricted to ~380px by compositing mask | Art fills to **480px** (53% larger diameter) |
+| Content-aware crop shifts visual center per image | Simple center crop — all images consistently centered |
 | 2px gap shows original cover artwork | 4px gap shows navy fill (invisible) |
+| Different edge ratios per generated image | Uniform edge ratios — same circle for all |
 | Original medallion art visible around edges | ZERO original cover visible |
-| Ornamental scrollwork partially visible but art behind it is original | Outer 38px frame ring preserved, clean border |
+| Outer ~38px frame ring preserved | Outer **16px** frame ring preserved (thick gold border with beading) |
 
 ---
 
@@ -167,30 +198,40 @@ ls config/compositing_mask.png 2>/dev/null && echo "ERROR: mask still active!" |
 ls config/compositing_mask.png.disabled 2>/dev/null && echo "OK: backup exists"
 ```
 
-### Step 2: Check Railway logs after deploy
+### Step 2: Confirm _smart_square_crop is simplified
 
-Look for compositor log lines. You should see opening_radius around 460, clip_radius around 458. You should NOT see any "compositing mask loaded" messages.
+Run a quick check:
 
-### Step 3: Generate test covers
+```bash
+grep -c "foreground\|energy_center\|_detect_foreground" src/cover_compositor.py
+```
+
+If the count is > 0, the old content-aware logic may still be present. The new `_smart_square_crop()` should have ZERO references to foreground detection.
+
+### Step 3: Check Railway logs after deploy
+
+Look for compositor log lines. You should see opening_radius around 480, clip_radius around 480. You should NOT see any "compositing mask loaded" messages.
+
+### Step 4: Generate test covers and LOOK AT THEM
 
 1. Select Book #1 (A Room with a View), any model, generate 1 variant.
-2. **LOOK AT THE OUTPUT HONESTLY:**
-   - Does the generated art **FILL** most of the medallion area? (Should fill to ~458px from center)
+2. **LOOK AT THE OUTPUT:**
+   - Does the generated art **FILL** most of the medallion area? (Should fill to ~480px from center)
    - Is there **ANY** visible original cover artwork showing around the generated art? (Should be NONE)
-   - Is there a **thin gold frame border** visible around the art? (Should be ~38px wide at 462-500px)
-   - Is the art **CENTERED** within the medallion? (Should be centered at cx=2864, cy=1620)
+   - Is there a **thin gold frame border** visible around the art? (Should be ~16px wide)
+   - Is the art **CENTERED** consistently within the medallion? (Should be perfectly centered at cx=2864, cy=1620)
 
-3. If the original cover's artwork (illustrations, scenery) is STILL visible around the generated art, the compositing_mask.png was NOT disabled. Check that the rename happened.
+3. Generate another variant for Book #9 and Book #25. All three should show:
+   - Same circle size
+   - Same centering
+   - Same edge ratios
+   - Only difference should be the art content itself
 
-4. Repeat with Book #9 and Book #25.
+4. If the art appears off-center or at different sizes, the `_smart_square_crop()` was not simplified correctly.
 
-### Step 4: Visual comparison
+### Step 5: Visual comparison across multiple covers
 
-Take a screenshot of the composited output. The result should show:
-- Generated art filling most of the circular medallion area
-- A thin gold ornamental border around the art (outer frame ring)
-- Navy background outside the frame
-- NO original cover artwork visible anywhere
+Generate variants for 3 different books. Compare the edge gaps. They should be **identical** (same distance from art edge to frame ring on all sides of all covers).
 
 ---
 
@@ -199,8 +240,9 @@ Take a screenshot of the composited output. The result should show:
 | File | Action | Description |
 |------|--------|-------------|
 | `config/compositing_mask.png` | **RENAME** to `.disabled` | Disable the over-restrictive mask |
-| `src/cover_compositor.py` | **MODIFY 3 constants** | DETECTION_OPENING_RATIO=0.92, OPENING_SAFETY_INSET_PX=2, OVERLAY_PUNCH_INSET_PX=-2 |
-| `src/static/js/compositor.js` | **MODIFY 2 constants + 1 function** | OPENING_RATIO=0.92, OPENING_SAFETY_INSET=2, fix buildCoverTemplate punch |
+| `src/cover_compositor.py` | **MODIFY 3 constants** | DETECTION_OPENING_RATIO=0.96, OPENING_SAFETY_INSET_PX=0, OVERLAY_PUNCH_INSET_PX=-4 |
+| `src/cover_compositor.py` | **REPLACE `_smart_square_crop()`** | Simple center crop instead of content-aware |
+| `src/static/js/compositor.js` | **MODIFY 2 constants + 1 function** | OPENING_RATIO=0.96, OPENING_SAFETY_INSET=0, fix buildCoverTemplate punch |
 | `src/static/css/style.css` | **ADD** | `.model-grid` card-style layout |
 | `src/static/js/pages/iterate.js` | **MODIFY** | Use `model-grid` class |
 
@@ -209,7 +251,8 @@ Take a screenshot of the composited output. The result should show:
 ## WHY THIS WILL WORK
 
 1. **No mask interference** — the compositing_mask was the primary cause of the "tiny art" problem
-2. **Matched circles** — art and punch are within 4px of each other (458 vs 462), with the punch being BIGGER. No original cover can show in the gap.
-3. **Conservative approach** — we're not trying to perfectly match an irregular frame shape. We accept that some inner ornamental detail is lost in exchange for a CLEAN result with no artifacts.
-4. **Outer frame preserved** — the outermost 38px of the ornamental frame (462-500px) provides a visible gold border around the art.
-5. **Simplest possible fix** — rename one file, change 5 constants, fix 1 function. Minimal risk of side effects.
+2. **Aggressive sizing** — art fills to 480px, covering ALL ornamental scrollwork. Only the outermost 16px thick gold border ring is preserved.
+3. **Consistent centering** — simple center crop means every image is positioned identically within the circle. No more content-aware shifting.
+4. **Matched circles** — art (480px) and punch (484px) are within 4px, with punch being BIGGER. No original cover can show through.
+5. **Uniform edge ratios** — without content-aware crop shifting, all covers will have identical edge distances.
+6. **Minimal code changes** — rename one file, change 5 constants, simplify 1 function, fix 1 function. Low risk.
