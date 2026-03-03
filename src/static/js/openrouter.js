@@ -62,16 +62,28 @@ window.OpenRouter = {
   },
 
   async generateImage(prompt, model, _apiKey, signal, timeoutMs = 120000, options = {}) {
+    const requestedVariants = Math.max(1, Number(options.variants || 1));
+    const requestedVariant = Math.max(1, Number(options.variant || 1));
+    const pickResult = (results) => {
+      const rows = Array.isArray(results) ? results : [];
+      if (!rows.length) return null;
+      const exact = rows.find((row) => Number(row?.variant || row?.variant_id || 0) === requestedVariant);
+      return exact || rows[requestedVariant - 1] || rows[0];
+    };
+
     const payload = {
       catalog: options.catalog || 'classics',
       book: Number(options.book_id || options.bookNumber || options.book || 0),
       models: [model],
-      variants: 1,
+      variants: requestedVariants,
       prompt_source: options.prompt_source || 'custom',
       prompt,
       cover_source: options.cover_source || 'drive',
       async: true,
     };
+    if (options.provider) payload.provider = String(options.provider).trim().toLowerCase();
+    if (options.idempotency_key) payload.idempotency_key = String(options.idempotency_key).trim();
+    if (options.max_attempts) payload.max_attempts = Math.max(1, Number(options.max_attempts || 1));
 
     const generateResp = await fetch('/api/generate', {
       method: 'POST',
@@ -95,7 +107,7 @@ window.OpenRouter = {
     const immediate = generateData.job || {};
     if (immediate.status === 'completed' && immediate.result) {
       const result = immediate.result;
-      const first = Array.isArray(result.results) ? result.results[0] : null;
+      const first = pickResult(result.results);
       return {
         status: 'completed',
         job: immediate,
@@ -108,7 +120,7 @@ window.OpenRouter = {
 
     const finalJob = await _pollJob(jobId, signal, timeoutMs);
     const finalResults = finalJob.result?.results || [];
-    const first = Array.isArray(finalResults) ? finalResults[0] : null;
+    const first = pickResult(finalResults);
 
     if (finalJob.status !== 'completed') {
       throw new Error(finalJob.error?.message || finalJob.error || 'Generation failed');

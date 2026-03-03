@@ -296,7 +296,15 @@ window.JobQueue = {
             DB.getSetting('openrouter_key'),
             abortController.signal,
             this.GENERATION_TIMEOUT,
-            { book_id: job.book_id, catalog: 'classics', prompt_source: 'custom', cover_source: 'drive' }
+            {
+              book_id: job.book_id,
+              catalog: 'classics',
+              prompt_source: 'custom',
+              cover_source: 'drive',
+              variant: Number(job.variant || 1),
+              variants: 1,
+              idempotency_key: `${job.id}-attempt-${attempts}`,
+            }
           );
         } catch (err) {
           if (err.message === 'RATE_LIMITED') {
@@ -310,6 +318,13 @@ window.JobQueue = {
         const row = result.result || {};
         const imagePath = row.image_path ? `/${String(row.image_path).replace(/^\/+/, '')}` : '';
         const compositedPath = row.composited_path ? `/${String(row.composited_path).replace(/^\/+/, '')}` : '';
+        const dryRun = Boolean(row.dry_run);
+        if (dryRun || (!imagePath && !compositedPath)) {
+          const reason = dryRun
+            ? 'Generation ran in dry-run mode (missing or blocked provider key).'
+            : 'Generation completed without an output image.';
+          throw new Error(reason);
+        }
         const score = Number(row.quality_score || row.distinctiveness_score || 0);
         if (score > bestScore) {
           bestScore = score;
@@ -328,31 +343,32 @@ window.JobQueue = {
       if (!best) throw new Error('No successful generation result');
 
       setStatus('scoring');
-      const img = await loadImage(best.imagePath || best.compositedPath);
+      const rawSource = best.imagePath || best.compositedPath;
+      const img = await loadImage(rawSource);
       const detailed = await Quality.getDetailedScores(img);
       job.quality_score = Number(detailed.overall || best.score || 0);
       job.results_json = JSON.stringify({ scores: detailed, result: best.row });
 
       setStatus('compositing');
-      job.generated_image_blob = best.imagePath || best.compositedPath;
-      job.composited_image_blob = best.compositedPath || best.imagePath;
+      const rawBlob = await fetchImageBlob(rawSource, abortController.signal);
+      const backendCompositedBlob = best.compositedPath
+        ? await fetchImageBlob(best.compositedPath, abortController.signal)
+        : null;
+      job.generated_image_blob = rawBlob || rawSource;
+      job.composited_image_blob = backendCompositedBlob || rawBlob || best.compositedPath || rawSource;
       job._compositeFailed = false;
       job._compositeError = null;
-      job._compositeSource = best.compositedPath ? 'backend' : 'raw';
+      job._compositeSource = backendCompositedBlob ? 'backend' : 'raw';
       job.compositor_geometry = null;
 
       try {
-        const generatedSource = best.imagePath || best.compositedPath;
-        if (window.Compositor && generatedSource) {
+        if (window.Compositor && img) {
           setStatus('compositing', 'browser smart composite');
-          const [coverEntry, generatedImg] = await Promise.all([
-            CoverCache.load(job.book_id),
-            loadImage(generatedSource),
-          ]);
-          if (coverEntry?.img && generatedImg) {
+          const coverEntry = await CoverCache.load(job.book_id);
+          if (coverEntry?.img) {
             const compositeCanvas = await window.Compositor.smartComposite({
               coverImg: coverEntry.img,
-              generatedImg,
+              generatedImg: img,
               cx: Number(coverEntry.cx),
               cy: Number(coverEntry.cy),
               radius: Number(coverEntry.radius),
@@ -439,6 +455,17 @@ async function loadImage(src) {
     img.onerror = () => reject(new Error(`Failed to load image: ${src}`));
     img.src = src;
   });
+}
+
+async function fetchImageBlob(src, signal) {
+  if (!src || typeof src !== 'string') return null;
+  try {
+    const response = await fetch(src, { cache: 'no-store', signal });
+    if (!response.ok) return null;
+    return await response.blob();
+  } catch {
+    return null;
+  }
 }
 
 async function canvasToBlob(canvas, type = 'image/jpeg', quality = 0.96) {

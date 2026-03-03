@@ -21,6 +21,17 @@ function qualityClass(score) {
   return 'low';
 }
 
+function fallbackCardText(status) {
+  if (status === 'queued') return 'Queued';
+  if (status === 'generating' || status === 'retrying') return 'Generating...';
+  if (status === 'downloading_cover') return 'Downloading cover...';
+  if (status === 'scoring') return 'Scoring...';
+  if (status === 'compositing') return 'Compositing...';
+  if (status === 'failed') return 'Generation failed';
+  if (status === 'cancelled') return 'Cancelled';
+  return 'No preview yet';
+}
+
 function applyPromptPlaceholders(promptText, book) {
   return String(promptText || '')
     .replaceAll('{title}', String(book?.title || ''))
@@ -249,13 +260,33 @@ window.Pages.iterate = {
       return;
     }
 
-    const active = allJobs.filter((job) => Number(job.book_id) === Number(_selectedBookId) && !['completed', 'failed', 'cancelled'].includes(job.status));
-    if (!active.length) {
-      area.innerHTML = '<div class="text-muted text-sm">No active jobs.</div>';
+    const scoped = allJobs
+      .filter((job) => Number(job.book_id) === Number(_selectedBookId))
+      .sort((a, b) => new Date(b.created_at || b.started_at || 0).getTime() - new Date(a.created_at || a.started_at || 0).getTime());
+
+    if (!scoped.length) {
+      area.innerHTML = '<div class="text-muted text-sm">No jobs yet.</div>';
       card?.classList.add('hidden');
       return;
     }
+
     card?.classList.remove('hidden');
+    const active = scoped.filter((job) => !['completed', 'failed', 'cancelled'].includes(job.status)).slice(0, 12);
+    const completed = scoped.filter((job) => job.status === 'completed').length;
+    const failed = scoped.filter((job) => job.status === 'failed').length;
+    const cancelled = scoped.filter((job) => job.status === 'cancelled').length;
+    const queuedOrRunning = Math.max(0, scoped.length - completed - failed - cancelled);
+    const totalCost = scoped.reduce((sum, job) => sum + Number(job.cost_usd || 0), 0);
+    const summary = `
+      <div class="pipeline-summary">
+        <strong>Run status:</strong> ${completed}/${scoped.length} completed · ${queuedOrRunning} active/queued · ${failed} failed · ${cancelled} cancelled · $${totalCost.toFixed(3)}
+      </div>
+    `;
+
+    if (!active.length) {
+      area.innerHTML = `${summary}<div class="text-muted text-sm">No active jobs.</div>`;
+      return;
+    }
 
     const mapStatusToStep = (status) => {
       if (status === 'downloading_cover') return 0;
@@ -265,7 +296,7 @@ window.Pages.iterate = {
       return -1;
     };
 
-    area.innerHTML = active.map((job) => {
+    area.innerHTML = summary + active.map((job) => {
       const step = mapStatusToStep(job.status);
       const steps = ['⬇ Cover', '⚡ Generate', '⭐ Score', '🎨 Composite'];
       const renderedSteps = steps.map((label, idx) => {
@@ -302,9 +333,8 @@ window.Pages.iterate = {
     }
 
     const jobs = DB.dbGetByIndex('jobs', 'book_id', _selectedBookId)
-      .filter((j) => ['completed', 'failed', 'cancelled'].includes(j.status))
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .slice(0, 20);
+      .slice(0, 30);
 
     if (!jobs.length) {
       grid.innerHTML = '<div class="text-muted">No results yet</div>';
@@ -312,25 +342,33 @@ window.Pages.iterate = {
       return;
     }
 
-    if (count) count.textContent = `${jobs.length} result${jobs.length === 1 ? '' : 's'}`;
+    const completed = jobs.filter((job) => job.status === 'completed').length;
+    if (count) count.textContent = `${completed} completed · ${jobs.length} total`;
     grid.innerHTML = jobs.map((job) => {
       const src = getBlobUrl(job.composited_image_blob || job.generated_image_blob, `${job.id}-display`);
+      const hasPreview = Boolean(src);
       const quality = Number(job.quality_score || 0);
+      const status = String(job.status || 'queued');
+      const showDownloads = hasPreview && status === 'completed';
+      const errorText = status === 'failed' ? String(job.error || '').trim() : '';
       return `
-        <div class="result-card" data-view="${job.id}">
-          <img class="thumb" src="${src}" alt="result" />
+        <div class="result-card ${hasPreview ? '' : 'result-card-empty'}" ${hasPreview ? `data-view="${job.id}"` : ''}>
+          ${hasPreview
+            ? `<img class="thumb" src="${src}" alt="result" />`
+            : `<div class="thumb thumb-fallback">${fallbackCardText(status)}</div>`}
           <div class="card-body">
             <div class="flex justify-between">
               <span class="tag tag-model">${modelIdToLabel(job.model)}</span>
-              <span class="tag ${statusTagClass(job.status)}">${job.status}</span>
+              <span class="tag ${statusTagClass(status)}">${status}</span>
             </div>
             <div class="quality-meter">
               <div class="quality-bar"><div class="quality-fill ${qualityClass(quality)}" style="width:${Math.round(quality * 100)}%"></div></div>
             </div>
             <div class="card-meta">$${Number(job.cost_usd || 0).toFixed(3)} · ${job.style_label || 'Default'}</div>
+            ${errorText ? `<div class="card-meta text-danger">${errorText}</div>` : ''}
             <div class="flex gap-4 mt-8">
-              <button class="btn btn-secondary btn-sm" data-dl-comp="${job.id}">⬇ Composite</button>
-              <button class="btn btn-secondary btn-sm" data-dl-raw="${job.id}">⬇ Raw</button>
+              <button class="btn btn-secondary btn-sm" data-dl-comp="${job.id}" ${showDownloads ? '' : 'disabled'}>⬇ Composite</button>
+              <button class="btn btn-secondary btn-sm" data-dl-raw="${job.id}" ${showDownloads ? '' : 'disabled'}>⬇ Raw</button>
               <button class="btn btn-secondary btn-sm" data-save-prompt="${job.id}">💾 Prompt</button>
             </div>
           </div>

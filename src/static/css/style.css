@@ -565,12 +565,33 @@ tr:hover td {
   box-shadow: 0 0 0 3px rgba(197, 165, 90, 0.2);
 }
 
+.result-card-empty {
+  cursor: default;
+}
+
+.result-card-empty:hover {
+  border-color: var(--border);
+  box-shadow: none;
+}
+
 .thumb {
   width: 100%;
   aspect-ratio: 3 / 4;
   object-fit: cover;
   display: block;
   background: #f8fafc;
+}
+
+.thumb-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: linear-gradient(180deg, #f8fafc 0%, #edf2f7 100%);
 }
 
 .card-body {
@@ -616,6 +637,16 @@ tr:hover td {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.pipeline-summary {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.pipeline-summary strong {
+  color: var(--text);
 }
 
 .pipeline-row {

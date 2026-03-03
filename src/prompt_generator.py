@@ -63,106 +63,26 @@ _REMOVAL_PATTERNS: tuple[str, ...] = (
 )
 
 STYLE_POOL: list[dict[str, str]] = [
-    {
-        "id": "sevastopol-conflict",
-        "label": "Sevastopol / Dramatic Conflict",
-        "modifier": "Sevastopol conflict panorama inspired by Vereshchagin and Crimean War field studies, with deep crimson, burnt sienna, cannon-smoke grey, imperial gold, and blood-orange sky saturation.",
-    },
-    {
-        "id": "cossack-epic",
-        "label": "Cossack / Epic Journey",
-        "modifier": "Cossack epic battle panorama inspired by Repin and Roubaud cavalry motion, with sunburnt ochre, Cossack-red, tarnished silver, deep indigo, and amber horizon light.",
-    },
-    {
-        "id": "golden-atmosphere",
-        "label": "Golden Atmosphere",
-        "modifier": "Barbizon golden-atmosphere storytelling with liquid gold haze, warm amber highlights, deep forest green depth, dusty rose glow, and muted olive transitions.",
-    },
-    {
-        "id": "venetian-renaissance",
-        "label": "Venetian Renaissance",
-        "modifier": "Venetian Renaissance opulence in the manner of Titian and Veronese, using venetian red, lapis lazuli blue, cloth-of-gold yellow, alabaster white, and deep bronze values.",
-    },
-    {
-        "id": "dutch-golden-age",
-        "label": "Dutch Golden Age",
-        "modifier": "Dutch Golden Age interior light and realism inspired by Vermeer and de Hooch, with candlelight amber, slate blue-grey, mahogany brown, cream linen, and Delft blue accents.",
-    },
-    {
-        "id": "dark-romantic-v2",
-        "label": "Dark Romantic v2",
-        "modifier": "Dark Romantic v2 atmosphere inspired by Friedrich and Dore, with midnight indigo shadows, icy blue-white highlights, charcoal depth, blood-red accents, and candle-amber glow.",
-    },
-    {
-        "id": "pre-raphaelite-v2",
-        "label": "Pre-Raphaelite v2",
-        "modifier": "Pre-Raphaelite v2 detail inspired by Waterhouse and Rossetti, with ruby reds, emerald greens, sapphire blues, golden highlights, and pearl skin tones.",
-    },
-    {
-        "id": "art-nouveau-v2",
-        "label": "Art Nouveau v2",
-        "modifier": "Art Nouveau v2 ornamental rhythm inspired by Mucha and Grasset, with sage green, dusty rose, antique gold, deep teal, and warm ivory harmonies.",
-    },
-    {
-        "id": "ukiyo-e-v2",
-        "label": "Ukiyo-e v2",
-        "modifier": "Ukiyo-e v2 print language inspired by Hokusai and Hiroshige, with deep indigo, vermillion, pale ochre, celadon green, and rice-paper white contrasts.",
-    },
-    {
-        "id": "noir-v2",
-        "label": "Noir v2",
-        "modifier": "Noir v2 cinematic tension from 1940s film language, with pure black, silver-white, gunmetal, wet-asphalt grey, and a bold accent in crimson, amber, or neon teal.",
-    },
-    {
-        "id": "botanical-v2",
-        "label": "Botanical v2",
-        "modifier": "Botanical v2 natural-history precision inspired by Merian and Redoute, with leaf green, petal pink, butterfly orange, lichen yellow, and parchment cream layering.",
-    },
-    {
-        "id": "stained-glass-v2",
-        "label": "Stained Glass v2",
-        "modifier": "Stained-glass v2 Gothic luminosity, with ruby red panes, cobalt blue panes, emerald green panes, amber gold highlights, and amethyst purple glow.",
-    },
-    {
-        "id": "impressionist-v2",
-        "label": "Impressionist v2",
-        "modifier": "Impressionist v2 broken-color brushwork inspired by Monet and Renoir, with lavender haze, rose-pink light, sky blue passages, warm peach skin light, and chartreuse spark.",
-    },
-    {
-        "id": "expressionist-v2",
-        "label": "Expressionist v2",
-        "modifier": "Expressionist v2 emotional distortion inspired by Munch and Kirchner, with acid yellow bursts, blood orange fields, electric blue strokes, toxic green contrasts, and burnt magenta accents.",
-    },
-    {
-        "id": "baroque-v2",
-        "label": "Baroque v2",
-        "modifier": "Baroque v2 theatrical chiaroscuro inspired by Rubens and Velazquez, with crimson silk, liquid gold, ivory highlights, umber shadows, and near-black depth.",
-    },
-    {
-        "id": "watercolour-v2",
-        "label": "Watercolour v2",
-        "modifier": "Watercolour v2 vintage illustration softness, with cerulean blue washes, sage green passages, warm grey atmosphere, burnt sienna forms, and violet edge tones.",
-    },
-    {
-        "id": "symbolist-v2",
-        "label": "Symbolist v2",
-        "modifier": "Symbolist v2 dream logic inspired by Moreau and Redon, with deep purple fields, tarnished gold halos, midnight blue depth, absinthe green veils, and iridescent cyan light.",
-    },
-    {
-        "id": "renaissance-fresco",
-        "label": "Renaissance Fresco",
-        "modifier": "Renaissance fresco monumentality inspired by Botticelli and Raphael, with terracotta, fresco blue, gold leaf highlights, ivory plaster tones, and sage olive transitions.",
-    },
-    {
-        "id": "russian-realist-v2",
-        "label": "Russian Realist v2",
-        "modifier": "Russian Realist v2 social drama inspired by the Peredvizhniki school, with ochre earth, raw umber shadows, slate grey weather, birch-white highlights, and blood-red accents.",
-    },
-    {
-        "id": "romantic-sublime",
-        "label": "Romantic Sublime",
-        "modifier": "Romantic sublime scale inspired by Turner and Church, with molten gold atmosphere, storm-purple clouds, electric white highlights, ocean teal depth, and lavender distance.",
-    },
+    {"id": "sevastopol-conflict", "label": "Sevastopol / Dramatic Conflict", "modifier": "Render as a sweeping military oil painting inspired by Vasily Vereshchagin and the Crimean War panoramas. Towering smoke columns against a blood-orange sky, shattered stone walls catching the last golden light. Palette: deep crimson, burnt sienna, cannon-smoke grey, flashes of imperial gold on epaulettes and bayonets. Thick impasto brushwork on uniforms and rubble, softer glazes for distant fires. Dramatic diagonal composition — figures surge from lower-left toward an explosive upper-right horizon. Every surface glistens with rain or sweat; the atmosphere is heavy, humid, and heroic."},
+    {"id": "cossack-epic", "label": "Cossack / Epic Journey", "modifier": "Paint as a kinetic oil painting in the tradition of Ilya Repin's \"Reply of the Zaporozhian Cossacks\" and Franz Roubaud's battle panoramas. Galloping horses kicking up ochre dust against an endless steppe under a violet-streaked twilight. Palette: sunburnt ochre, Cossack-red sashes, tarnished silver sabres, deep indigo sky fading to amber at the horizon. Thick, energetic brushstrokes convey speed and fury — manes flying, cloaks billowing. Warm firelight illuminates weathered faces. The composition spirals outward from the center like a cavalry charge, filling every inch with movement and color."},
+    {"id": "golden-atmosphere", "label": "Golden Atmosphere", "modifier": "Paint in the pastoral tradition of the Barbizon school — Corot, Millet, Theodore Rousseau. A scene bathed in honeyed afternoon light filtering through ancient oaks. Palette: liquid gold, warm amber, deep forest green, touches of dusty rose in the sky. Soft, feathered brushwork with visible canvas texture. Figures are small against the vast, luminous landscape. Every leaf and blade of grass catches light differently — the entire scene glows from within as if lit by a divine lamp behind the clouds."},
+    {"id": "venetian-renaissance", "label": "Venetian Renaissance", "modifier": "Render in the sumptuous Venetian style of Titian, Giorgione, and Veronese. Rich sfumato modeling with warm flesh tones against deep emerald and ultramarine drapery. Palette: venetian red, lapis lazuli blue, cloth-of-gold yellow, alabaster white, deep bronze shadow. Luminous glazed layers that give skin an inner glow. Classical architecture frames the scene — marble columns, brocade curtains, distant lagoon views. Every textile shimmers with painted thread detail. Compositions feel grand, balanced, and sensually alive."},
+    {"id": "dutch-golden-age", "label": "Dutch Golden Age", "modifier": "Paint in the intimate tradition of Vermeer, de Hooch, and Jan Steen. A single window casts a shaft of pearl-white light across the scene, illuminating every surface with photographic precision. Palette: warm candlelight amber, cool slate blue-grey, polished mahogany brown, cream linen, touches of lemon yellow and Delft blue in ceramics. Thick impasto on metallic highlights — pewter, brass, glass. Deep velvety shadows. The composition draws the eye through a doorway or window into layered depth. Every object tells a story."},
+    {"id": "dark-romantic-v2", "label": "Dark Romantic", "modifier": "Depict in the Dark Romantic tradition of Caspar David Friedrich and Gustave Dore. A moonlit or twilight scene with dramatic silvered edges. Palette: midnight indigo, icy blue-white, charcoal black, with sudden accents of blood-red berries or a single warm candle flame. Haunting, melancholic beauty. Mist curls around ancient trees and ruins. A solitary figure silhouetted against a vast, brooding sky with torn clouds revealing cold starlight. Deep atmosphere — you can almost feel the chill."},
+    {"id": "pre-raphaelite-v2", "label": "Pre-Raphaelite", "modifier": "Render in the lush, hyper-detailed Pre-Raphaelite style of Waterhouse, Rossetti, and Millais. Jewel-toned colors that sing: deep ruby garments, emerald moss-covered banks, sapphire water, and golden autumn leaves. Meticulous botanical detail — individual petals, veins on leaves, embroidery threads. Ethereal figures with flowing copper or raven hair, draped in medieval fabrics of damask and velvet. Rich symbolism: lilies for purity, roses for passion, willow for sorrow. Light enters from the upper left creating an otherworldly radiance."},
+    {"id": "art-nouveau-v2", "label": "Art Nouveau", "modifier": "Create in the decorative brilliance of Alphonse Mucha and Eugene Grasset. Flowing organic lines — sinuous vines, lily stems, hair that becomes botanical ornament. Palette: sage green, dusty rose, antique gold, deep teal, warm ivory. Flat color areas with fine black linework. The subject is framed by ornamental arches of flowers and peacock feathers. Muted metallic accents throughout — gold leaf, bronze patina, copper highlights. Typography-inspired composition where figure and frame merge into one harmonious design."},
+    {"id": "ukiyo-e-v2", "label": "Ukiyo-e Woodblock", "modifier": "Reimagine as a Japanese ukiyo-e woodblock print in the tradition of Hokusai and Hiroshige. Bold black outlines with flat areas of saturated color. Palette: deep indigo, vermillion red, pale ochre, celadon green, white rice-paper negative space. Fine parallel hatching for sky, waves, and rain. Dramatic spatial tension with exaggerated perspective. Stylized waves, windblown cherry blossoms, or towering mountains create dynamic movement. A striking interplay of pattern and void — every empty space is as deliberate as every filled one."},
+    {"id": "noir-v2", "label": "Film Noir", "modifier": "Depict as a high-contrast film noir composition straight from 1940s Hollywood. Palette: pure black, brilliant white, with ONE dramatic accent — a deep amber streetlight, a crimson lipstick, or a neon sign reflected in wet pavement. Hard-edged silhouettes, slashing Venetian blind shadows, extreme chiaroscuro. Figures caught in dramatic angles — shot from below or above. Rain-slicked streets reflect fragmented light. Cigarette smoke curls into geometric patterns. Moral ambiguity made visual."},
+    {"id": "botanical-v2", "label": "Botanical Engraving", "modifier": "Render as a vintage scientific illustration in the tradition of Maria Sibylla Merian and Pierre-Joseph Redoute. Exquisitely detailed: fine intaglio linework with hairline cross-hatching and stipple shading creating three-dimensional form. Hand-applied watercolor washes: soft leaf green, petal pink, butterfly-wing orange, lichen yellow. The subject is centered on a cream parchment ground with pencil construction lines faintly visible. Latin labels in copperplate script. Precision meets artistic beauty — every stamen, every wing scale rendered with love."},
+    {"id": "stained-glass-v2", "label": "Gothic Stained Glass", "modifier": "Create as a luminous Gothic cathedral window. Rich jewel-toned panels that seem to glow with inner light: ruby red, cobalt blue, emerald green, amber gold, amethyst purple. Thick dark leading lines separate each piece of glass. Light streams through creating prismatic color pools on stone surfaces. Intricate tracery frames the scene in pointed arches. Figures are stylized, iconic, with upraised hands and flowing robes. The overall effect is transcendent — sacred and awe-inspiring, like standing in Chartres Cathedral at sunrise."},
+    {"id": "impressionist-v2", "label": "Impressionist", "modifier": "Paint in the sun-drenched Impressionist style of Monet, Renoir, and Pissarro. Visible dappled brushstrokes that dissolve form into pure light and color. Palette: lavender shadow, rose-pink skin, sky blue reflected in water, warm peach sunlight, chartreuse new leaves. No hard edges — everything shimmers and vibrates. Emphasis on the play of natural light on water, foliage, or figures. A sense of a perfect afternoon frozen in time — warm, joyful, alive with color. Paint applied thickly so individual strokes catch their own light."},
+    {"id": "expressionist-v2", "label": "Expressionist", "modifier": "Render in the raw, emotionally charged style of Munch, Kirchner, and Emil Nolde. Colors are weapons: acid yellow, blood orange, electric blue, toxic green — applied in thick, agitated brushstrokes that seem to vibrate with anxiety. Warped perspectives and exaggerated proportions. Faces are masks of emotion. The sky may swirl, buildings may lean, shadows may reach like grasping hands. Everything is psychologically charged. The palette should feel almost violent in its intensity — beauty through discomfort."},
+    {"id": "baroque-v2", "label": "Baroque Drama", "modifier": "Depict as a grand Baroque composition worthy of Rubens, Velazquez, or Artemisia Gentileschi. A single dramatic light source (upper left) carves figures from deep velvet darkness. Palette: crimson silk, liquid gold, ivory flesh, deep shadow approaching black. Dynamic diagonal composition — bodies twist, arms reach, fabric billows in invisible wind. Extreme physicality and emotion. Thick impasto on highlights, transparent glazes in shadows. Figures caught at the peak of action — the most dramatic possible moment."},
+    {"id": "watercolour-v2", "label": "Delicate Watercolour", "modifier": "Paint as a refined watercolour illustration evoking beloved vintage book editions. Translucent washes where colors bloom and bleed softly into one another. The white paper ground glows through every stroke. Palette: muted cerulean blue, sage green, warm grey, burnt sienna, with accents of violet and rose. Soft, fluid edges with no hard lines — everything dissolves at the margins. Fine pen linework adds delicate structure. The mood is intimate, gentle, and nostalgic — like discovering a treasured illustration in a grandmother's bookshelf."},
+    {"id": "symbolist-v2", "label": "Symbolist Dream", "modifier": "Create in the mystical Symbolist tradition of Gustave Moreau, Odilon Redon, and Fernand Khnopff. A dreamlike, otherworldly scene shimmering between reality and vision. Palette: deep purple, tarnished gold, midnight blue, absinthe green, with iridescent highlights that shift like oil on water. Soft, hazy edges where forms dissolve into mist. Figures and elements feel archetypal — the Sphinx, the Angel, the Tower, the Rose. Eyes that see beyond the visible world. Rich mystical symbolism layered into every element."},
+    {"id": "persian-miniature", "label": "Persian Miniature", "modifier": "Render in the exquisite tradition of Persian miniature painting — Reza Abbasi, Kamal ud-Din Behzad. Bird's-eye perspective with no single vanishing point; the scene unfolds across multiple spatial planes simultaneously. Palette: lapis lazuli blue, vermillion, leaf gold, turquoise, saffron yellow, rose pink. Ultra-fine brushwork: individual leaves on trees, patterns on textiles, tiles on architecture. Figures are elegant with almond eyes and flowing garments. Borders of illuminated floral arabesques frame the central scene. Rich as a jeweled carpet."},
+    {"id": "russian-realist-v2", "label": "Russian Realist", "modifier": "Paint in the tradition of the Peredvizhniki — Ilya Repin, Ivan Kramskoi, Vasily Surikov, Isaac Levitan. Dense atmospheric detail with muted earth tones that suddenly catch fire with patches of vivid color. Palette: ochre, raw umber, slate grey, with flashes of birch-white, blood-red, and the golden glow of icon lamps. Thick expressive brushwork that captures raw human emotion and the vastness of the Russian landscape. Faces are unflinchingly honest — every wrinkle, every tear, every defiant glance tells a story. Deep, humane, and monumental."},
+    {"id": "romantic-sublime", "label": "Romantic Sublime", "modifier": "Paint in the awe-inspiring style of Turner, John Martin, and Frederic Edwin Church. VAST landscapes that dwarf human figures — towering mountains, raging seas, volcanic skies. Palette: molten gold and amber sunsets, storm-purple clouds, electric white lightning, deep ocean teal, misty lavender distances. The sky takes up two-thirds of the composition and is the real subject. Light breaks through clouds in god-rays. The feeling is of standing at the edge of creation — sublime terror and beauty combined. Thick, energetic brushwork in the sky, finer detail in the landscape below."},
 ]
 
 FIXED_VARIANT_STYLE_IDS: list[str] = [
@@ -287,14 +207,26 @@ def select_diverse_styles(count: int, *, seed_token: str = "") -> list[dict[str,
 
 def build_diversified_prompt(title: str, author: str, style: dict[str, str]) -> str:
     """Build a title-aware diversified prompt with strict scene-only output rules."""
-    label = str(style.get("label", "Classical Illustration")).strip()
+    label = str(style.get("label", "Classical Illustration")).strip() or "Classical Illustration"
     modifier = str(style.get("modifier", "")).strip()
-    base = (
-        f'Create a colorful, richly colored circular medallion illustration for the luxury leather-bound edition of "{title}" by {author}. '
-        "Identify the story's single most iconic scene, character, or symbolic turning point and depict it as dense, edge-to-edge narrative artwork. "
-        "Keep one dominant focal subject, dynamic depth, and layered detail with no empty space or plain background areas. "
-        f"Style direction: {label}. {modifier} "
-        "Output rules: no border, no frame, no text, no letters, no words, no logos, no labels, no banners, no plaques; circular vignette composition and scene artwork only."
+    style_modifier = (
+        modifier
+        or "Classical illustration using ruby red, emerald green, cobalt blue, amber gold, and ivory highlights."
+    )
+    base = " ".join(
+        [
+            f'Create a breathtaking, richly colored illustration for the classic book "{title}" by {author}. Style direction: {label}.',
+            "Identify the single most iconic, dramatic, and visually striking scene from this specific story — the moment readers remember most vividly.",
+            "Depict that scene as a luminous circular medallion illustration in a full-bleed narrative scene for a luxury leather-bound edition.",
+            "Fill the entire circular composition with rich detail and vivid color — no empty space, no plain backgrounds.",
+            "The artwork must feel like a museum-quality painting that captures the emotional heart of the story.",
+            style_modifier,
+            "CRITICAL COMPOSITION RULES: The image must be a perfect circular vignette, subject centered, filling the entire circle edge-to-edge.",
+            "Edges fade softly into transparency outside the circle.",
+            "NO text, NO letters, NO words anywhere in the image.",
+            "The scene must be COLORFUL and DETAILED — avoid monochrome, avoid sparse compositions.",
+            "Keep one dominant focal subject, layered depth, dense detail.",
+        ]
     )
     return _ensure_prompt_constraints(base)
 
@@ -397,21 +329,19 @@ def _ensure_prompt_constraints(prompt: str) -> str:
     prompt = _remove_conflicting_directions(prompt)
     prompt = re.sub(r"\s+", " ", prompt).strip().rstrip(",")
     low = prompt.lower()
-
+    required_prefix: list[str] = []
     if REQUIRED_PHRASE_COMPOSITION not in low:
-        prompt += f", {REQUIRED_PHRASE_COMPOSITION}"
-        low = prompt.lower()
+        required_prefix.append(REQUIRED_PHRASE_COMPOSITION)
     if REQUIRED_PHRASE_TEXT not in low:
-        prompt += f", {REQUIRED_PHRASE_TEXT}"
-        low = prompt.lower()
+        required_prefix.append(REQUIRED_PHRASE_TEXT)
     if "no border" not in low and "no frame" not in low:
-        prompt += f", {REQUIRED_PHRASE_NO_FRAME}"
-        low = prompt.lower()
+        required_prefix.append("no border, no frame")
     if REQUIRED_PHRASE_VIVID not in low:
-        prompt += f", {REQUIRED_PHRASE_VIVID}"
-        low = prompt.lower()
+        required_prefix.append(REQUIRED_PHRASE_VIVID)
     if REQUIRED_PHRASE_NO_EMPTY not in low:
-        prompt += f", {REQUIRED_PHRASE_NO_EMPTY}"
+        required_prefix.append(REQUIRED_PHRASE_NO_EMPTY)
+    if required_prefix:
+        prompt = f"{', '.join(required_prefix)}, {prompt}".strip(" ,")
 
     while _word_count(prompt) < 44:
         prompt += ", warm cinematic atmosphere, bold color contrast, intricate period detail"
