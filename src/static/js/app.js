@@ -196,10 +196,18 @@ window.JobQueue = {
   },
 
   _snapshot() {
+    const now = Date.now();
+    const allJobs = DB.dbGetAll('jobs');
+    const allById = new Map(allJobs.map((job) => [job.id, job]));
+    for (const [jobId, entry] of this.running.entries()) {
+      const base = allById.get(jobId) || {};
+      const elapsed = Number(entry.job?._elapsed || Math.floor((now - entry.startTime) / 1000));
+      allById.set(jobId, { ...base, ...entry.job, _elapsed: elapsed });
+    }
     return {
       queue: [...this.queue],
       running: [...this.running.values()].map((entry) => entry.job),
-      all: DB.dbGetAll('jobs'),
+      all: Array.from(allById.values()),
       paused: this.paused,
     };
   },
