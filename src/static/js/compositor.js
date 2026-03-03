@@ -1,12 +1,12 @@
 const ANALYSIS_W = 420;
 const COARSE_STEP = 4;
 const FINE_STEP = 1;
-const OPENING_RATIO = 0.965;
+const OPENING_RATIO = 0.96;
 const OPENING_MIN = 360;
 const OPENING_MAX = 530;
 const CONFIDENCE_MIN = 4.0;
 const OPENING_MARGIN = 6;
-const OPENING_SAFETY_INSET = 18;
+const OPENING_SAFETY_INSET = 0;
 const KNOWN_DEFAULT_CX = 2864;
 const KNOWN_DEFAULT_CY = 1620;
 const KNOWN_DEFAULT_RADIUS = 500;
@@ -472,51 +472,17 @@ function detectSparseContent(generatedImg) {
   };
 }
 
-function sourceCropForGenerated(generatedImg, sparseInfo) {
+function sourceCropForGenerated(generatedImg) {
   const { width, height } = normalizedImageSize(generatedImg);
-  const sideDefault = Math.min(width, height);
-  if (!sparseInfo?.bbox) {
-    return {
-      sx: Math.round((width - sideDefault) / 2),
-      sy: Math.round((height - sideDefault) / 2),
-      sw: sideDefault,
-      sh: sideDefault,
-    };
-  }
-
-  const box = sparseInfo.bbox;
-  const boxCx = (box.x + (box.w / 2)) * width;
-  const boxCy = (box.y + (box.h / 2)) * height;
-  const boxW = Math.max(1, box.w * width);
-  const boxH = Math.max(1, box.h * height);
-  const area = Number(box.area || 1);
-
-  let margin;
-  if (area < 0.08) margin = 0.08;
-  else if (area < 0.18) margin = 0.12;
-  else if (area < 0.40) margin = 0.18;
-  else if (area < 0.65) margin = 0.24;
-  else margin = 0.30;
-
-  const srcW = boxW * (1 + (margin * 2));
-  const srcH = boxH * (1 + (margin * 2));
-  let side = Math.max(srcW, srcH);
-
-  const maxCenteredX = Math.max(16, Math.min(width, 2 * Math.min(boxCx, width - boxCx)));
-  const maxCenteredY = Math.max(16, Math.min(height, 2 * Math.min(boxCy, height - boxCy)));
-  const centeredCap = Math.max(16, Math.min(maxCenteredX, maxCenteredY));
-  side = Math.min(Math.min(width, height), Math.max(16, side), centeredCap);
-
-  let sx = Math.round(boxCx - (side / 2));
-  let sy = Math.round(boxCy - (side / 2));
-  sx = clamp(sx, 0, width - Math.round(side));
-  sy = clamp(sy, 0, height - Math.round(side));
+  const side = Math.min(width, height);
+  const sx = Math.round((width - side) / 2);
+  const sy = Math.round((height - side) / 2);
 
   return {
     sx,
     sy,
-    sw: Math.round(side),
-    sh: Math.round(side),
+    sw: side,
+    sh: side,
   };
 }
 
@@ -528,7 +494,8 @@ async function buildCoverTemplate(coverImg, geo) {
   ctx.save();
   ctx.globalCompositeOperation = 'destination-out';
   ctx.beginPath();
-  ctx.arc(geo.cx, geo.cy, geo.openingRadius, 0, Math.PI * 2);
+  const punchRadius = geo.openingRadius + 4;
+  ctx.arc(geo.cx, geo.cy, punchRadius, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
   return canvas;
@@ -634,13 +601,12 @@ window.Compositor = {
     ctx.fillStyle = `rgb(${fill[0]}, ${fill[1]}, ${fill[2]})`;
     ctx.fillRect(0, 0, width, height);
 
-    const sparseInfo = this.detectSparseContent(generatedImg);
-    const crop = sourceCropForGenerated(generatedImg, sparseInfo);
+    const crop = sourceCropForGenerated(generatedImg);
     const clipRadius = Math.max(14, geo.openingRadius - OPENING_SAFETY_INSET);
     console.log(
-      `[Compositor v10] Using known geometry for book ${String(bookId || '?')}: cx=${geo.cx}, cy=${geo.cy}, outer=${geo.outerRadius}, opening=${geo.openingRadius}`,
+      `[Compositor v12] Using known geometry for book ${String(bookId || '?')}: cx=${geo.cx}, cy=${geo.cy}, outer=${geo.outerRadius}, opening=${geo.openingRadius}`,
     );
-    console.log(`[Compositor v10] Clip radius: ${clipRadius}`);
+    console.log(`[Compositor v12] Clip radius: ${clipRadius}`);
 
     ctx.save();
     ctx.beginPath();

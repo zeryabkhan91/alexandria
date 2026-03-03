@@ -27,16 +27,16 @@ DETECTION_ANALYSIS_W = 420
 DETECTION_COARSE_STEP = 4
 DETECTION_FINE_STEP = 1
 DETECTION_SEARCH_RATIO = 0.15
-DETECTION_OPENING_RATIO = 0.965
+DETECTION_OPENING_RATIO = 0.96
 DETECTION_OPENING_MIN = 360
 DETECTION_OPENING_MAX = 530
 DETECTION_CONFIDENCE_MIN = 4.0
-OPENING_SAFETY_INSET_PX = 18
-OVERLAY_PUNCH_INSET_PX = 20
+OPENING_SAFETY_INSET_PX = 0
+OVERLAY_PUNCH_INSET_PX = -4
 INNER_FEATHER_PX = 8
 RING_WIDTH_PX = 14
 RING_BEADS = 72
-MIN_OPENING_MARGIN_PX = 24
+MIN_OPENING_MARGIN_PX = 20
 FALLBACK_COVER_WIDTH = 3784
 FALLBACK_COVER_HEIGHT = 2777
 FALLBACK_CENTER_X = 2864
@@ -420,116 +420,16 @@ def _geometry_from_strict_mask(mask: Image.Image | None) -> dict[str, int] | Non
     }
 
 
-def _find_energy_center(image: Image.Image) -> tuple[float, float]:
-    gray = np.array(image.convert("L"), dtype=np.float32)
-    if gray.size == 0:
-        return 0.5, 0.5
-    gx = np.abs(np.diff(gray, axis=1))
-    gy = np.abs(np.diff(gray, axis=0))
-    energy = np.pad(gx, ((0, 0), (0, 1)), mode="constant") + np.pad(gy, ((0, 1), (0, 0)), mode="constant")
-    kernel = np.array([[1, 2, 1], [2, 4, 2], [1, 2, 1]], dtype=np.float32) / 16.0
-    padded = np.pad(energy, 1, mode="edge")
-    blurred = (
-        padded[:-2, :-2] * kernel[0, 0]
-        + padded[:-2, 1:-1] * kernel[0, 1]
-        + padded[:-2, 2:] * kernel[0, 2]
-        + padded[1:-1, :-2] * kernel[1, 0]
-        + padded[1:-1, 1:-1] * kernel[1, 1]
-        + padded[1:-1, 2:] * kernel[1, 2]
-        + padded[2:, :-2] * kernel[2, 0]
-        + padded[2:, 1:-1] * kernel[2, 1]
-        + padded[2:, 2:] * kernel[2, 2]
-    )
-    total = float(blurred.sum())
-    if total <= 1e-6:
-        return 0.5, 0.5
-    h, w = blurred.shape[:2]
-    ys = np.arange(h, dtype=np.float32)
-    xs = np.arange(w, dtype=np.float32)
-    cx = float((blurred.sum(axis=0) * xs).sum() / total) / max(1.0, float(w))
-    cy = float((blurred.sum(axis=1) * ys).sum() / total) / max(1.0, float(h))
-    return float(np.clip(cx, 0.0, 1.0)), float(np.clip(cy, 0.0, 1.0))
-
-
-def _detect_foreground_bbox_norm(image: Image.Image) -> dict[str, float] | None:
-    rgba = np.array(image.convert("RGBA"), dtype=np.uint8)
-    h, w = rgba.shape[:2]
-    if h <= 0 or w <= 0:
-        return None
-
-    alpha = rgba[..., 3]
-    if int(alpha.min()) < 20:
-        fg = alpha > 32
-    else:
-        border = max(4, int(min(h, w) * 0.03))
-        border_pixels = np.concatenate(
-            [
-                rgba[:border, :, :3].reshape(-1, 3),
-                rgba[h - border :, :, :3].reshape(-1, 3),
-                rgba[:, :border, :3].reshape(-1, 3),
-                rgba[:, w - border :, :3].reshape(-1, 3),
-            ],
-            axis=0,
-        ).astype(np.float32)
-        bg = border_pixels.mean(axis=0)
-        rgb = rgba[..., :3].astype(np.float32)
-        diff = np.abs(rgb[..., 0] - bg[0]) + np.abs(rgb[..., 1] - bg[1]) + np.abs(rgb[..., 2] - bg[2])
-        sat = rgb.max(axis=2) - rgb.min(axis=2)
-        fg = (diff > 54.0) | ((sat > 30.0) & (diff > 32.0))
-
-    ys, xs = np.where(fg)
-    if ys.size <= 0 or xs.size <= 0:
-        return None
-    min_x, max_x = int(xs.min()), int(xs.max())
-    min_y, max_y = int(ys.min()), int(ys.max())
-    box_w = max_x - min_x + 1
-    box_h = max_y - min_y + 1
-    area = float(box_w * box_h) / float(max(1, w * h))
-    if area >= 0.78:
-        return None
-    return {
-        "x": float(min_x) / float(w),
-        "y": float(min_y) / float(h),
-        "w": float(box_w) / float(w),
-        "h": float(box_h) / float(h),
-        "box_area": area,
-    }
-
-
 def _smart_square_crop(image: Image.Image) -> Image.Image:
+    """Crop image to a centered square for deterministic medallion placement."""
     src = image.convert("RGBA")
     img_w, img_h = src.size
     if img_w <= 1 or img_h <= 1:
         return src
     side = min(img_w, img_h)
-    center_x = float(img_w) * 0.5
-    center_y = float(img_h) * 0.5
-    crop_side = int(side)
-
-    bbox = _detect_foreground_bbox_norm(src)
-    if bbox:
-        center_x = float((bbox["x"] + (bbox["w"] * 0.5)) * img_w)
-        center_y = float((bbox["y"] + (bbox["h"] * 0.5)) * img_h)
-        span = float(max(bbox["w"], bbox["h"]))
-        if float(bbox.get("box_area", 1.0)) <= 0.60 and span <= 0.82:
-            zoom = float(np.clip(span * 1.75, 0.58, 0.96))
-            crop_side = int(max(64, min(side, round(side * zoom))))
-        edge_limited_side = int(round(2.0 * min(center_x, float(img_w) - center_x, center_y, float(img_h) - center_y)))
-        if edge_limited_side >= 64:
-            crop_side = int(min(crop_side, edge_limited_side))
-    else:
-        energy_x, energy_y = _find_energy_center(src)
-        center_x = float(energy_x * img_w)
-        center_y = float(energy_y * img_h)
-
-    half = crop_side / 2.0
-    left = int(round(center_x - half))
-    top = int(round(center_y - half))
-    max_left = max(0, img_w - crop_side)
-    max_top = max(0, img_h - crop_side)
-    left = int(np.clip(left, 0, max_left))
-    top = int(np.clip(top, 0, max_top))
-    return src.crop((left, top, left + crop_side, top + crop_side))
+    left = (img_w - side) // 2
+    top = (img_h - side) // 2
+    return src.crop((left, top, left + side, top + side))
 
 
 def _prepare_circle_illustration(*, illustration: Image.Image, target_diameter: int, fill_rgb: tuple[int, int, int]) -> Image.Image:

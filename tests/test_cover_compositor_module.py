@@ -300,8 +300,7 @@ def test_validate_composite_output_detects_alignment_and_bleed(tmp_path: Path):
 def test_global_compositing_mask_is_used_only_for_canonical_size():
     assert cc._load_global_compositing_mask((700, 500)) is None
     mask = cc._load_global_compositing_mask((3784, 2777))
-    assert mask is not None
-    assert mask.size == (3784, 2777)
+    assert mask is None
 
 
 def test_combine_masks_uses_stricter_alpha():
@@ -429,18 +428,17 @@ def test_resolve_medallion_geometry_keeps_opening_inside_outer_ring(tmp_path: Pa
     assert int(resolved["opening_radius"]) <= int(resolved["outer_radius"]) - cc.MIN_OPENING_MARGIN_PX
 
 
-def test_smart_square_crop_reframes_sparse_foreground():
-    image = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image, "RGBA")
-    draw.rectangle((28, 44, 138, 184), fill=(242, 198, 116, 255))
+def test_smart_square_crop_uses_deterministic_center_crop():
+    image = Image.new("RGBA", (640, 480), (10, 20, 30, 255))
+    arr = np.array(image, dtype=np.uint8)
+    arr[240, 320] = np.array([250, 120, 10, 255], dtype=np.uint8)  # center marker
+    image = Image.fromarray(arr, mode="RGBA")
+
     cropped = cc._smart_square_crop(image)
-    assert cropped.size[0] == cropped.size[1]
-    assert cropped.size[0] < 512
-    arr = np.array(cropped.convert("RGBA"), dtype=np.uint8)
-    alpha = arr[..., 3]
-    ys, xs = np.where(alpha > 10)
-    assert xs.size > 0 and ys.size > 0
-    center_x = (float(xs.min()) + float(xs.max())) / 2.0
-    center_y = (float(ys.min()) + float(ys.max())) / 2.0
-    assert abs(center_x - (cropped.size[0] / 2.0)) <= cropped.size[0] * 0.18
-    assert abs(center_y - (cropped.size[1] / 2.0)) <= cropped.size[1] * 0.18
+    assert cropped.size == (480, 480)
+    cropped_arr = np.array(cropped, dtype=np.uint8)
+    # The marker from original center should land at the cropped center.
+    center_px = cropped_arr[240, 240]
+    assert int(center_px[0]) == 250
+    assert int(center_px[1]) == 120
+    assert int(center_px[2]) == 10

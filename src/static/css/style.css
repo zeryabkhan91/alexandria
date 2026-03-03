@@ -388,30 +388,32 @@ a {
 
 .model-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  padding: 8px 0;
 }
 
 .model-grid .checkbox-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 13px;
   cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  transition: border-color 0.15s;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  background: #fff;
+  transition: border-color 0.15s, background 0.15s;
 }
 
 .model-grid .checkbox-item:hover {
-  border-color: var(--gold);
+  border-color: #888;
+  background: #f9f9f9;
 }
 
 .model-grid .checkbox-item:has(input:checked) {
   border-color: var(--gold);
-  background: rgba(196, 164, 105, 0.08);
+  background: rgba(196, 164, 105, 0.1);
 }
 
 .checkbox-item {
