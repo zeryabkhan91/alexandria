@@ -40,22 +40,25 @@ Serving layer:
 - `src/static/shared.css` contains a design-lock block with `!important` sidebar/layout rules so legacy page CSS cannot revert to the old top-nav layout.
 
 ### 3.2 Medallion Safety (Art Behind Ornaments)
+PROMPT-07E is now implemented (2026-03-03).
 
-**STATUS: BROKEN — PROMPT-07E pending implementation.**
+Current compositor behavior:
+1. Global restrictive mask is disabled:
+   - `config/compositing_mask.png` renamed to `config/compositing_mask.png.disabled`
+2. Known medallion geometry remains authoritative (from `cover_regions.json`).
+3. Center crop is deterministic (content-aware recentering removed):
+   - backend `_smart_square_crop()` now always crops centered square
+   - frontend source crop now always crops centered square
+4. Aggressive fill constants are active:
+   - backend: `DETECTION_OPENING_RATIO=0.96`, `OPENING_SAFETY_INSET_PX=0`, `OVERLAY_PUNCH_INSET_PX=-4`
+   - frontend: `OPENING_RATIO=0.96`, `OPENING_SAFETY_INSET=0`, template punch radius = `openingRadius + 4`
+5. Frontend logging/version:
+   - compositor logs are now `[Compositor v12] ...`
 
-Four rounds of fixes have failed:
-- 07B (x2): Parameter tuning on detection — wrong coordinates
-- 07C: Known geometry from cover_regions.json — clip radius too large for irregular frame
-- 07D: Pixel-perfect mask — mask was TOO RESTRICTIVE (15px erosion + 0.74 ratio = art at ~380px, way too small). Original cover artwork visible everywhere.
-
-**PROMPT-07E approach (updated 2026-03-03):** Aggressive fix with centering:
-1. Disable compositing_mask.png (rename to .disabled) — it restricts art to ~380px
-2. Replace content-aware `_smart_square_crop()` with simple center crop — fixes visual off-centering and inconsistent edge ratios per image
-3. DETECTION_OPENING_RATIO = 0.96 → opening_radius = 480
-4. OPENING_SAFETY_INSET_PX = 0 → clip_radius = 480 (art fills to 480px — covers ALL ornamental scrollwork)
-5. OVERLAY_PUNCH_INSET_PX = -4 → punch_radius = 484 (cover transparent well BEYOND art edge)
-6. Result: art at 480px, punch at 484px, no gap, no original cover visible, uniform centering
-7. Outer 16px frame ring preserved (484-500px = thick gold border with beading), inner scrollwork replaced by art
+Resulting geometry intent:
+- art fills close to opening radius (~480px on canonical covers),
+- punch is slightly larger than art circle, avoiding original-cover bleed at the edge,
+- centered placement is consistent across books/variants.
 
 Known consensus defaults:
 - `cx = 2864`
@@ -173,16 +176,19 @@ Completed in this workspace session:
    - known geometry values confirmed for books `1`, `9`, `25`,
    - deployed bundle contains `KNOWN_DEFAULT_CY = 1620` and `[Compositor v10]` log strings,
    - stale `[Compositor v9] Detection:` log string absent from deployed bundle.
+14. PROMPT-07E compositor fix verified:
+   - `config/compositing_mask.png` disabled (renamed to `.disabled`),
+   - deployed bundle contains `OPENING_RATIO = 0.96`, `OPENING_SAFETY_INSET = 0`, `punchRadius = geo.openingRadius + 4`, and `[Compositor v12]`,
+   - backend runtime logs show known geometry + `opening=480` on canonical covers.
 
 ## 7. Known Constraints / Honest Caveats
 - In production, direct Google provider is currently failing key validation (`Your API key was reported as leaked`); these models are disabled in UI connectivity state until key replacement.
 - Provider-side image models can still occasionally emit pseudo-typography; current guardrails and retry hardening reduce this risk but cannot mathematically guarantee zero artifact probability from upstream model outputs.
 
 ## 8. Next Recommended Work
-1. **CRITICAL:** Implement PROMPT-07E (simple matching circles compositor fix). Paste `Codex Prompts/CODEX-MESSAGE-PROMPT-07E.md` into a new Codex conversation.
-2. Run a live canary (10-book sample) with active provider keys and capture fresh composited proofs.
-3. Add a dedicated visual regression check for ornament-overdraw using the composited output set.
-4. Keep the revision token centralized in one constant to avoid accidental per-page drift.
+1. Run a live canary (10-book sample) with active provider keys and capture fresh composited proofs.
+2. Add a dedicated visual regression check for medallion edge consistency (books 1/9/25 baseline triptych).
+3. Keep the revision token centralized in one constant to avoid accidental per-page drift.
 
 ## 9. Mandatory Delivery Protocol
 For every user-facing completion message:

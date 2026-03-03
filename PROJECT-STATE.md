@@ -13,7 +13,7 @@ Quick status snapshot:
 - In-memory DB + CGI-compatible persistence layer is active (`src/static/js/db.js`, `/cgi-bin/settings.py`, `/cgi-bin/catalog.py` route handlers).
 - UI shell is locked to the new sidebar design with anti-stale controls (`Cache-Control: no-store` + `?v=20260302-designlock`).
 - CSP now allows required frontend dependencies (`fonts.googleapis.com`, `fonts.gstatic.com`, `cdn.jsdelivr.net`, `cdnjs.cloudflare.com`) so Chart.js/JSZip/Inter load correctly.
-- **Medallion compositor BROKEN (PROMPT-07A→D all failed).** PROMPT-07E ready for Codex: disable mask, aggressive art sizing (480px), center crop, matching circles. See `Codex Prompts/PROMPT-07E-COMPOSITOR-FIX.md`.
+- PROMPT-07E compositor fix is now active: compositing mask disabled (`compositing_mask.png.disabled`), aggressive medallion fill sizing (`0.96` ratio, zero safety inset), deterministic center crop, and frontend `v12` compositor logs.
 - Prompt assembly is hardened against malformed constraints and duplicated provider/model signatures.
 - Dashboard recent cards are prompt-aware/style-tag-aware and backfill from filesystem when persisted rows are sparse.
 - Required model inventory is force-enforced at runtime (15 OpenRouter production models + Gemini direct IDs), even when `ALL_MODELS` env is stale.

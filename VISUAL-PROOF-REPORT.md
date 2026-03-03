@@ -2,7 +2,7 @@
 
 Last updated: `2026-03-03`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `650e309f-8ed0-42b0-963a-0f35051fa5e4`
+Deployment ID: `3c46a363-8aa6-4316-abd3-0eb62b229c15`
 
 ## 0. PROMPT-07B Hotfix Snapshot (2026-03-03)
 - Deployed with compositor detection window widened (15%), safety inset `14px`, expanded radius scan bounds, and relaxed offset guard.
@@ -40,6 +40,24 @@ Deployment ID: `650e309f-8ed0-42b0-963a-0f35051fa5e4`
   - known geometry for books `1`, `9`, `25` matches registry.
   - deployed `compositor.js` contains `[Compositor v10] Using known geometry...`.
   - deployed `compositor.js` does not contain `[Compositor v9] Detection:`.
+
+## 0.3 PROMPT-07E Compositor Fix (2026-03-03)
+- Disabled restrictive global mask by renaming:
+  - `config/compositing_mask.png` -> `config/compositing_mask.png.disabled`
+- Backend compositor updates:
+  - `DETECTION_OPENING_RATIO = 0.96`
+  - `OPENING_SAFETY_INSET_PX = 0`
+  - `OVERLAY_PUNCH_INSET_PX = -4`
+  - deterministic center crop in `_smart_square_crop()` (content-aware shifting removed)
+- Frontend compositor updates:
+  - `OPENING_RATIO = 0.96`
+  - `OPENING_SAFETY_INSET = 0`
+  - template punch radius uses `geo.openingRadius + 4`
+  - deterministic center crop for generated source image
+  - logs bumped to `[Compositor v12] ...`
+- Live verification:
+  - deployed `compositor.js` includes `OPENING_RATIO = 0.96`, `OPENING_SAFETY_INSET = 0`, `punchRadius = geo.openingRadius + 4`, and `[Compositor v12]`
+  - region registry still loads correctly for known geometry (`book 1/9 -> 2864|2862,1620,500`)
 
 ## 1. Test Proof
 - Full suite run: `pytest -q`.
@@ -121,6 +139,17 @@ Deployment ID: `650e309f-8ed0-42b0-963a-0f35051fa5e4`
 - `/Users/timzengerink/proofs/proof-07c-book25-composite-full.png`
 - `/Users/timzengerink/proofs/proof-07c-book25-medallion.png`
 - `/Users/timzengerink/proofs/proof-07c-summary.json`
+
+### 3.0.3 PROMPT-07E Inline-Proof Assets (bigger centered art + mask disabled)
+- `/Users/timzengerink/proofs/proof-07e-live-iterate.png`
+- `/Users/timzengerink/proofs/proof-07e-book1-composite-full.png`
+- `/Users/timzengerink/proofs/proof-07e-book1-medallion.png`
+- `/Users/timzengerink/proofs/proof-07e-book9-composite-full.png`
+- `/Users/timzengerink/proofs/proof-07e-book9-medallion.png`
+- `/Users/timzengerink/proofs/proof-07e-book25-composite-full.png`
+- `/Users/timzengerink/proofs/proof-07e-book25-medallion.png`
+- `/Users/timzengerink/proofs/proof-07e-medallion-triptych.png`
+- `/Users/timzengerink/proofs/proof-07e-summary.json`
 
 ### 3.1 Live UI Screenshots
 - `tmp/proof-live-iterate-20260302-prompt06.png`
