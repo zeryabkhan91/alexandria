@@ -2,7 +2,7 @@
 
 Last updated: `2026-03-03`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `90071cb7-9f2d-4941-935f-efc9089164d1`
+Deployment ID: `145a15cc-0eb6-4422-94f0-f9a23f3cfc97`
 
 ## 0. PROMPT-07B Hotfix Snapshot (2026-03-03)
 - Deployed with compositor detection window widened (15%), safety inset `14px`, expanded radius scan bounds, and relaxed offset guard.
@@ -95,6 +95,27 @@ Deployment ID: `90071cb7-9f2d-4941-935f-efc9089164d1`
   - deployed page loads new tokened assets;
   - model cards render with `Nano Banana Pro` selected and shown first;
   - top header shows `999 books`, and catalog sync status text remains visible in Iterate form.
+
+## 0.6 PROMPT-07H Bundle (2026-03-03)
+- Implemented 07H, 07H-B, 07H-C, 07H-D in code and deployed.
+- Compositor medallion bleed guard:
+  - `ART_BLEED_PX = 60`
+  - medallion art diameter is now `punch_radius * 2 + (ART_BLEED_PX * 2)` (1050px at default radius).
+- Catalog default fix:
+  - `config/catalogs.json` default switched to `classics`.
+  - Runtime override fixed in Railway env: `CATALOG_ID=classics` (was `test-catalog`).
+- Variant diversity anchors:
+  - fixed first two style IDs now `pre-raphaelite-v2`, `baroque-v2`.
+  - curated pool backfilled with `sevastopol-conflict`.
+- Download/export overhaul:
+  - card button label changed from `⬇ Composite` to `⬇ Download`.
+  - download now packages ZIP with composite + raw illustration using book naming.
+  - app-side composite source resolution now rejects thumbnail paths and warns on suspiciously small blobs.
+- Live checks passed:
+  - `/api/health` reports `books_cataloged: 99`, `budget.catalog: classics`.
+  - `/api/iterate-data` defaults to `catalog: classics`.
+  - `/cgi-bin/catalog.py` returns `count: 99`.
+  - generated composite verifies as `3784x2777` at `300 DPI`.
 
 ## 1. Test Proof
 - Full suite run: `pytest -q`.
@@ -198,6 +219,11 @@ Deployment ID: `90071cb7-9f2d-4941-935f-efc9089164d1`
 - `/Users/timzengerink/proofs/proof-07f-book25-medallion.png`
 - `/Users/timzengerink/proofs/proof-07f-medallion-triptych.png`
 - `/Users/timzengerink/proofs/proof-07f-summary.json`
+
+### 3.0.5 PROMPT-07H Inline-Proof Assets (latest live deploy)
+- `/Users/timzengerink/proofs/07h-live-iterate-overview.png`
+- `/Users/timzengerink/proofs/07h-live-recent-result-card.png`
+- `/Users/timzengerink/proofs/07h-live-composite-fullres.jpg`
 
 ### 3.1 Live UI Screenshots
 - `tmp/proof-live-iterate-20260302-prompt06.png`
