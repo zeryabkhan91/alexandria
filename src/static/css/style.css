@@ -438,7 +438,7 @@ a {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border: 1px solid var(--border);
+  border: 1px solid #d7e0ec;
   border-radius: 12px;
   background: #fff;
   padding: 12px 12px 10px;
@@ -447,14 +447,14 @@ a {
 }
 
 .model-card:hover {
-  border-color: #a7b2c2;
-  background: #fafcff;
+  border-color: #bcc7d9;
+  background: #fff;
 }
 
 .model-card.selected {
   border-color: var(--gold);
-  box-shadow: 0 0 0 1px rgba(197, 165, 90, 0.22);
-  background: rgba(197, 165, 90, 0.06);
+  box-shadow: 0 0 0 1px rgba(197, 165, 90, 0.28);
+  background: #fff;
 }
 
 .model-card-head {
