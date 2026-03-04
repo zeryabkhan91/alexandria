@@ -46,6 +46,7 @@ FALLBACK_RADIUS = 500
 TEMPLATE_PUNCH_RADIUS = 465
 TEMPLATE_SUPERSAMPLE_FACTOR = 4
 ART_BLEED_PX = 60  # Extra px on each side beyond punch radius to cover AA transition
+FRAME_MASK_PATH = Path(__file__).resolve().parent.parent / "config" / "frame_mask.png"
 
 _GEOMETRY_CACHE: dict[str, dict[str, int]] = {}
 
@@ -754,19 +755,24 @@ def composite_single(
         center_y = FALLBACK_CENTER_Y   # 1620
         punch_radius = TEMPLATE_PUNCH_RADIUS  # 465
 
-        # ── 1. Build the template in memory ──
-        # Take the original cover, punch a transparent circle at the
-        # medallion center. This becomes the topmost layer.
+        # ── 1. Build the template using frame mask or fallback circle ──
         cover_rgba = cover.convert("RGBA")
         tmpl_w, tmpl_h = cover_rgba.size
 
-        # 4x supersampled anti-aliased circle mask
-        scale = 4
-        mask_large = Image.new("L", (tmpl_w * scale, tmpl_h * scale), 255)
-        draw_mask = ImageDraw.Draw(mask_large)
-        cx_s, cy_s, r_s = center_x * scale, center_y * scale, punch_radius * scale
-        draw_mask.ellipse((cx_s - r_s, cy_s - r_s, cx_s + r_s, cy_s + r_s), fill=0)
-        mask = mask_large.resize((tmpl_w, tmpl_h), Image.LANCZOS)
+        frame_mask = _load_frame_mask((tmpl_w, tmpl_h))
+        if frame_mask is not None:
+            # frame_mask: 255=keep (frame), 0=replace (art hole)
+            mask = frame_mask
+            logger.info("Using pixel-perfect frame mask from %s", FRAME_MASK_PATH)
+        else:
+            # Fallback: 4x supersampled anti-aliased circle mask
+            logger.warning("frame_mask.png unavailable, falling back to circle punch r=%d", punch_radius)
+            scale = 4
+            mask_large = Image.new("L", (tmpl_w * scale, tmpl_h * scale), 255)
+            draw_mask = ImageDraw.Draw(mask_large)
+            cx_s, cy_s, r_s = center_x * scale, center_y * scale, punch_radius * scale
+            draw_mask.ellipse((cx_s - r_s, cy_s - r_s, cx_s + r_s, cy_s + r_s), fill=0)
+            mask = mask_large.resize((tmpl_w, tmpl_h), Image.LANCZOS)
 
         template = cover_rgba.copy()
         template.putalpha(mask)
@@ -783,7 +789,10 @@ def composite_single(
         canvas = Image.new("RGBA", (cover_w, cover_h), (*fill_rgb, 255))
 
         # ── 4. Prepare AI art: simple center crop, scale to fill ──
-        art_diameter = punch_radius * 2 + (ART_BLEED_PX * 2)  # 465*2 + 120 = 1050px
+        if frame_mask is not None:
+            art_diameter = FALLBACK_RADIUS * 2 + (ART_BLEED_PX * 2)  # 500*2+120 = 1120px
+        else:
+            art_diameter = punch_radius * 2 + (ART_BLEED_PX * 2)  # 465*2+120 = 1050px
         art = _simple_center_crop(illustration)
         art = art.resize((art_diameter, art_diameter), Image.LANCZOS)
 
@@ -1332,6 +1341,29 @@ def _load_global_compositing_mask(size: tuple[int, int]) -> Image.Image | None:
     if int(arr.max()) <= 1 or int(arr.min()) >= 254:
         return None
     return alpha
+
+
+def _load_frame_mask(size: tuple[int, int]) -> Image.Image | None:
+    """Load config/frame_mask.png as a grayscale alpha mask.
+
+    Returns an 'L' mode image where 255 = frame (opaque) and
+    0 = art area (transparent punch). Returns None if unavailable.
+    """
+    if not FRAME_MASK_PATH.exists():
+        logger.warning("frame_mask.png not found at %s", FRAME_MASK_PATH)
+        return None
+    try:
+        mask = Image.open(FRAME_MASK_PATH).convert("L")
+    except Exception:
+        logger.warning("Failed to load frame mask at %s", FRAME_MASK_PATH)
+        return None
+    if mask.size != size:
+        mask = mask.resize(size, Image.LANCZOS)
+    arr = np.array(mask, dtype=np.uint8)
+    if int(arr.min()) >= 250 or int(arr.max()) <= 5:
+        logger.warning("frame_mask.png appears trivially uniform — ignoring")
+        return None
+    return mask
 
 
 def _combine_masks(primary: Image.Image, secondary: Image.Image) -> Image.Image:

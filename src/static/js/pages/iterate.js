@@ -163,7 +163,11 @@ function resolveBookMetadataForJob(job) {
   const title = sanitizeDownloadName(book?.title || `Book ${bookId || 'Unknown'}`);
   const author = sanitizeDownloadName(book?.author || 'Unknown');
   const number = sanitizeDownloadName(book?.number || job?.book_id || 'Unknown');
-  const baseName = sanitizeDownloadName(`${title} — ${author}`);
+  // Use catalog file_base when present to mirror source cover file names exactly.
+  const catalogBase = String(book?.file_base || '').trim();
+  const baseName = catalogBase
+    ? sanitizeDownloadName(catalogBase)
+    : sanitizeDownloadName(`${title} — ${author}`);
   return { title, author, number, baseName };
 }
 
@@ -849,7 +853,9 @@ window.Pages.iterate = {
     const job = DB.dbGet('jobs', jobId);
     if (!job) return;
     const { number, baseName } = resolveBookMetadataForJob(job);
-    const zipName = `${number}. ${baseName}.zip`;
+    // Mirror source cover folder naming: "{number}. {file_base}"
+    const folderName = `${number}. ${baseName}`;
+    const zipName = `${folderName}.zip`;
     const compositeHref = pickFullResolutionSource(job, 'download-composite', false);
     const rawHref = pickFullResolutionSource(job, 'download-raw', true);
 
@@ -862,14 +868,14 @@ window.Pages.iterate = {
       if (compositeHref) {
         const compositeBlob = await fetchDownloadBlob(compositeHref);
         if (compositeBlob) {
-          zip.file(`${baseName}.jpg`, compositeBlob);
+          zip.file(`${folderName}/${baseName}.jpg`, compositeBlob);
         }
       }
 
       if (rawHref) {
         const rawBlob = await fetchDownloadBlob(rawHref);
         if (rawBlob) {
-          zip.file(`${baseName} (illustration).jpg`, rawBlob);
+          zip.file(`${folderName}/${baseName} (illustration).jpg`, rawBlob);
         }
       }
 
@@ -895,10 +901,10 @@ window.Pages.iterate = {
     if (!job) return;
     const href = pickFullResolutionSource(job, 'download-raw-single', true);
     if (!href) return;
-    const { baseName } = resolveBookMetadataForJob(job);
+    const { number, baseName } = resolveBookMetadataForJob(job);
     const a = document.createElement('a');
     a.href = href;
-    a.download = `${baseName} (illustration).jpg`;
+    a.download = `${number}. ${baseName} (illustration).jpg`;
     a.click();
   },
 
