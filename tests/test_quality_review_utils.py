@@ -128,7 +128,7 @@ def test_generation_idempotency_key_changes_with_cover_source_and_selected_cover
     assert drive != drive_selected
 
 
-def test_validate_drive_cover_request_uses_hint_and_rejects_mismatch(monkeypatch: pytest.MonkeyPatch):
+def test_validate_drive_cover_request_uses_hint_and_ignores_stale_selection(monkeypatch: pytest.MonkeyPatch):
     runtime = SimpleNamespace(
         gdrive_source_folder_id="source-folder",
         gdrive_input_folder_id="",
@@ -141,10 +141,10 @@ def test_validate_drive_cover_request_uses_hint_and_rejects_mismatch(monkeypatch
 
     def _fake_list_input_covers(**_kwargs):  # type: ignore[no-untyped-def]
         called["list"] += 1
-        return {"covers": []}
+        return {"covers": [{"id": "cover-1", "book_number": 1}]}
 
     monkeypatch.setattr(qr.drive_manager, "list_input_covers", _fake_list_input_covers)
-    ok, error = qr._validate_drive_cover_request(
+    ok, error, selected_id = qr._validate_drive_cover_request(
         runtime=runtime,
         book=1,
         cover_source="drive",
@@ -155,14 +155,15 @@ def test_validate_drive_cover_request_uses_hint_and_rejects_mismatch(monkeypatch
         input_folder_id="",
         credentials_path_token="",
     )
-    assert ok is False
-    assert "maps to book 2" in error
+    assert ok is True
+    assert error == ""
+    assert selected_id == ""
     assert called["list"] == 0
 
 
 def test_validate_drive_cover_request_allows_auto_resolution_without_selected_cover():
     runtime = SimpleNamespace()
-    ok, error = qr._validate_drive_cover_request(
+    ok, error, selected_id = qr._validate_drive_cover_request(
         runtime=runtime,  # type: ignore[arg-type]
         book=1,
         cover_source="drive",
@@ -175,6 +176,7 @@ def test_validate_drive_cover_request_allows_auto_resolution_without_selected_co
     )
     assert ok is True
     assert error == ""
+    assert selected_id == ""
 
 
 def test_validate_catalog_cover_request_rejects_missing_local_cover(monkeypatch: pytest.MonkeyPatch):
@@ -295,7 +297,7 @@ def test_validate_drive_cover_request_lookup_success_and_missing(monkeypatch: py
         },
     )
 
-    ok_good, error_good = qr._validate_drive_cover_request(
+    ok_good, error_good, selected_id_good = qr._validate_drive_cover_request(
         runtime=runtime,
         book=1,
         cover_source="drive",
@@ -308,8 +310,9 @@ def test_validate_drive_cover_request_lookup_success_and_missing(monkeypatch: py
     )
     assert ok_good is True
     assert error_good == ""
+    assert selected_id_good == "cover-1"
 
-    ok_missing, error_missing = qr._validate_drive_cover_request(
+    ok_missing, error_missing, selected_id_missing = qr._validate_drive_cover_request(
         runtime=runtime,
         book=1,
         cover_source="drive",
@@ -320,8 +323,9 @@ def test_validate_drive_cover_request_lookup_success_and_missing(monkeypatch: py
         input_folder_id="",
         credentials_path_token="",
     )
-    assert ok_missing is False
-    assert "not found" in error_missing.lower()
+    assert ok_missing is True
+    assert error_missing == ""
+    assert selected_id_missing == "cover-1"
 
 
 def test_validate_drive_cover_request_does_not_trust_spoofed_book_hint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -345,7 +349,7 @@ def test_validate_drive_cover_request_does_not_trust_spoofed_book_hint(monkeypat
         },
     )
 
-    ok, error = qr._validate_drive_cover_request(
+    ok, error, selected_id = qr._validate_drive_cover_request(
         runtime=runtime,
         book=1,
         cover_source="drive",
@@ -357,7 +361,8 @@ def test_validate_drive_cover_request_does_not_trust_spoofed_book_hint(monkeypat
         credentials_path_token="",
     )
     assert ok is False
-    assert "maps to book 2" in error
+    assert "no cover found in google drive for book #1" in error.lower()
+    assert selected_id == ""
 
 
 def test_job_worker_enqueue_normalizes_payload():

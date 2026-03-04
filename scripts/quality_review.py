@@ -7790,7 +7790,7 @@ def serve_review_webapp(
                 drive_folder_id = str(body.get("drive_folder_id", "")).strip()
                 input_folder_id = str(body.get("input_folder_id", "")).strip()
                 credentials_path = str(body.get("credentials_path", "")).strip()
-                valid_drive_selection, drive_selection_error = _validate_drive_cover_request(
+                valid_drive_selection, drive_selection_error, resolved_selected_cover_id = _validate_drive_cover_request(
                     runtime=runtime_req,
                     book=book,
                     cover_source=cover_source,
@@ -7808,6 +7808,7 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
+                selected_cover_id = str(resolved_selected_cover_id or "").strip()
                 composed_prompt_payload: dict[str, Any] = {}
                 if compose_prompt:
                     book_row = _book_row_for_number(runtime=runtime_req, book_number=book)
@@ -9428,7 +9429,7 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                valid_drive_selection, drive_selection_error = _validate_drive_cover_request(
+                valid_drive_selection, drive_selection_error, resolved_selected_cover_id = _validate_drive_cover_request(
                     runtime=runtime_req,
                     book=book,
                     cover_source=cover_source,
@@ -9446,6 +9447,7 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
+                selected_cover_id = str(resolved_selected_cover_id or "").strip()
                 composed_prompt_payload: dict[str, Any] = {}
                 if compose_prompt:
                     book_row = _book_row_for_number(runtime=runtime_req, book_number=book)
@@ -10782,24 +10784,25 @@ def _validate_drive_cover_request(
     drive_folder_id: str,
     input_folder_id: str,
     credentials_path_token: str,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, str]:
     source = str(cover_source or "catalog").strip().lower() or "catalog"
     if source != "drive":
-        return True, ""
+        return True, "", ""
 
     selected_id = str(selected_cover_id or "").strip()
     if not selected_id and isinstance(selected_cover, dict):
         selected_id = str(selected_cover.get("id", "")).strip()
-    if not selected_id:
-        # Drive-first mode auto-resolves the source cover in the execution pipeline.
-        return True, ""
 
     mapped_book = int(selected_cover_book_number or 0)
     if mapped_book <= 0 and isinstance(selected_cover, dict):
         mapped_book = _safe_int(selected_cover.get("book_number"), 0)
-    if mapped_book > 0:
-        if mapped_book != int(book):
-            return False, f"Selected Drive cover maps to book {mapped_book}, but requested book is {book}"
+    if mapped_book > 0 and mapped_book != int(book):
+        # Treat stale UI hints as non-fatal and fall back to book-based resolution.
+        selected_id = ""
+
+    if not selected_id:
+        # Drive-first mode auto-resolves the source cover in the execution pipeline.
+        return True, "", ""
 
     effective_drive_folder_id = (
         str(drive_folder_id or "").strip()
@@ -10813,7 +10816,7 @@ def _validate_drive_cover_request(
         or runtime.gdrive_input_folder_id
     )
     if not effective_drive_folder_id:
-        return False, "Google Drive source folder is not configured."
+        return False, "Google Drive source folder is not configured.", ""
 
     credentials_path = Path(credentials_path_token) if str(credentials_path_token or "").strip() else _resolve_credentials_path(runtime)
     if not credentials_path.is_absolute():
@@ -10827,10 +10830,10 @@ def _validate_drive_cover_request(
         limit=2000,
     )
     if not isinstance(payload, dict):
-        return False, "Unable to validate selected Drive cover."
+        return False, "Unable to validate selected Drive cover.", ""
     error_text = str(payload.get("error", "")).strip()
     if error_text:
-        return False, f"Drive cover validation failed: {error_text}"
+        return False, f"Drive cover validation failed: {error_text}", ""
 
     rows = payload.get("covers", [])
     if not isinstance(rows, list):
@@ -10842,15 +10845,22 @@ def _validate_drive_cover_request(
         ),
         None,
     )
-    if not isinstance(candidate, dict):
-        return False, f"Selected Drive cover '{selected_id}' was not found"
+    if isinstance(candidate, dict):
+        resolved_book = _safe_int(candidate.get("book_number"), 0)
+        if resolved_book == int(book):
+            return True, "", str(candidate.get("id", "")).strip()
 
-    resolved_book = _safe_int(candidate.get("book_number"), 0)
-    if resolved_book <= 0:
-        return False, "Selected Drive cover is not mapped to a catalog book number."
-    if resolved_book != int(book):
-        return False, f"Selected Drive cover maps to book {resolved_book}, but requested book is {book}"
-    return True, ""
+    fallback = next(
+        (
+            row for row in rows
+            if isinstance(row, dict) and _safe_int(row.get("book_number"), 0) == int(book)
+        ),
+        None,
+    )
+    if isinstance(fallback, dict):
+        return True, "", str(fallback.get("id", "")).strip()
+
+    return False, f"No cover found in Google Drive for book #{int(book)}.", ""
 
 
 def _validate_catalog_cover_request(

@@ -303,6 +303,15 @@ window.JobQueue = {
         const retryPrompt = attempts > 1
           ? `${job.prompt} IMPORTANT: This must be a circular vignette illustration centered and fully contained.`
           : job.prompt;
+        const currentBookRow = DB.dbGet('books', Number(job.book_id || 0))
+          || DB.dbGetAll('books').find((row) => Number(row?.id || 0) === Number(job.book_id || 0))
+          || null;
+        const resolvedBookNumber = Number(
+          currentBookRow?.number || job.selected_cover_book_number || job.book_id || 0
+        ) || 0;
+        const canonicalCoverId = String(currentBookRow?.cover_jpg_id || currentBookRow?.drive_cover_id || '').trim();
+        const requestedCoverId = String(job.selected_cover_id || '').trim();
+        const resolvedSelectedCoverId = canonicalCoverId || requestedCoverId;
 
         let result;
         try {
@@ -317,8 +326,8 @@ window.JobQueue = {
               catalog: 'classics',
               prompt_source: 'custom',
               cover_source: 'drive',
-              selected_cover_id: String(job.selected_cover_id || '').trim(),
-              selected_cover_book_number: Number(job.selected_cover_book_number || job.book_id || 0),
+              selected_cover_id: resolvedSelectedCoverId,
+              selected_cover_book_number: resolvedBookNumber,
               variant: Number(job.variant || 1),
               variants: 1,
               max_attempts: 5,

@@ -844,22 +844,11 @@ def ensure_local_input_cover(
     candidate_entry: dict[str, Any] | None = None
     if selected_id:
         candidate_entry = next((row for row in entries if str(row.get("id", "")).strip() == selected_id), None)
-        if candidate_entry is None:
-            return {
-                "ok": False,
-                "downloaded": False,
-                "error": f"Selected Drive cover '{selected_id}' was not found",
-            }
-        mapped_book = int(candidate_entry.get("book_number", 0) or 0)
-        if mapped_book != int(book_number):
-            return {
-                "ok": False,
-                "downloaded": False,
-                "error": (
-                    f"Selected Drive cover maps to book {mapped_book or 'unknown'}, "
-                    f"but requested book is {book_number}"
-                ),
-            }
+        if candidate_entry is not None:
+            mapped_book = int(candidate_entry.get("book_number", 0) or 0)
+            if mapped_book != int(book_number):
+                # Selected cover hints can be stale; fall back to the requested book mapping.
+                candidate_entry = None
     if candidate_entry is None:
         candidate_entry = next((row for row in entries if int(row.get("book_number", 0) or 0) == int(book_number)), None)
     if candidate_entry is None:

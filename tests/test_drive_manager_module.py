@@ -644,7 +644,7 @@ def test_resolve_book_mapping_uses_fuzzy_title_fallback():
     assert title == "Moby Dick"
 
 
-def test_ensure_local_input_cover_selected_drive_cover_mismatch_fails(monkeypatch, tmp_path: Path):
+def test_ensure_local_input_cover_selected_drive_cover_mismatch_falls_back_to_requested_book(monkeypatch, tmp_path: Path):
     catalog_path = tmp_path / "book_catalog.json"
     catalog_path.write_text(
         '[{"number": 1, "folder_name": "1. Book", "title": "Book One"}, {"number": 2, "folder_name": "2. Book", "title": "Book Two"}]',
@@ -664,6 +664,13 @@ def test_ensure_local_input_cover_selected_drive_cover_mismatch_fails(monkeypatc
             "input-folder-id",
         ),
     )
+    monkeypatch.setattr(
+        drive_manager,
+        "_pick_drive_image_from_folder",
+        lambda **_kwargs: {"id": "image-1", "name": "cover.jpg"},
+    )
+    monkeypatch.setattr(drive_manager, "_pick_drive_pdf_from_folder", lambda **_kwargs: None)
+    monkeypatch.setattr(drive_manager, "_download_drive_file_bytes", lambda **_kwargs: b"image")
 
     payload = drive_manager.ensure_local_input_cover(
         drive_folder_id="drive-root-id",
@@ -674,8 +681,9 @@ def test_ensure_local_input_cover_selected_drive_cover_mismatch_fails(monkeypatc
         book_number=1,
         selected_cover_id="cover-2",
     )
-    assert payload["ok"] is False
-    assert "maps to book 2" in str(payload.get("error", "")).lower()
+    assert payload["ok"] is True
+    assert payload["downloaded"] is True
+    assert str(payload.get("path", "")).endswith("cover_from_drive.jpg")
 
 
 def test_ensure_local_input_cover_missing_drive_book_includes_title(monkeypatch, tmp_path: Path):
@@ -705,7 +713,7 @@ def test_ensure_local_input_cover_missing_drive_book_includes_title(monkeypatch,
     assert "book #1 'book one'" in str(payload.get("error", "")).lower()
 
 
-def test_ensure_local_input_cover_selected_drive_cover_missing_fails(monkeypatch, tmp_path: Path):
+def test_ensure_local_input_cover_selected_drive_cover_missing_falls_back(monkeypatch, tmp_path: Path):
     catalog_path = tmp_path / "book_catalog.json"
     catalog_path.write_text(
         '[{"number": 1, "folder_name": "1. Book", "title": "Book One"}]',
@@ -722,6 +730,13 @@ def test_ensure_local_input_cover_selected_drive_cover_missing_fails(monkeypatch
             "input-folder-id",
         ),
     )
+    monkeypatch.setattr(
+        drive_manager,
+        "_pick_drive_image_from_folder",
+        lambda **_kwargs: {"id": "image-1", "name": "cover.jpg"},
+    )
+    monkeypatch.setattr(drive_manager, "_pick_drive_pdf_from_folder", lambda **_kwargs: None)
+    monkeypatch.setattr(drive_manager, "_download_drive_file_bytes", lambda **_kwargs: b"image")
 
     payload = drive_manager.ensure_local_input_cover(
         drive_folder_id="drive-root-id",
@@ -732,8 +747,8 @@ def test_ensure_local_input_cover_selected_drive_cover_missing_fails(monkeypatch
         book_number=1,
         selected_cover_id="missing-cover-id",
     )
-    assert payload["ok"] is False
-    assert "not found" in str(payload.get("error", "")).lower()
+    assert payload["ok"] is True
+    assert payload["downloaded"] is True
 
 
 def test_ensure_local_input_cover_selected_drive_cover_ignores_existing_local_when_selected(monkeypatch, tmp_path: Path):
@@ -765,4 +780,4 @@ def test_ensure_local_input_cover_selected_drive_cover_ignores_existing_local_wh
         selected_cover_id="cover-2",
     )
     assert payload["ok"] is False
-    assert "maps to book 2" in str(payload.get("error", "")).lower()
+    assert "no cover found in google drive for book #1" in str(payload.get("error", "")).lower()
