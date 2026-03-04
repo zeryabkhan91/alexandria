@@ -2,7 +2,39 @@
 
 Last updated: `2026-03-04`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `73d32fc1-50a5-4fab-ab9c-ef771ccb1efb`
+Deployment ID: `dba78a91-2bbe-4122-b38c-3d566715a04a`
+
+## 1.1 PROMPT-09C ZIP + Sync/Dropdown + Cache Rollout (2026-03-04)
+- Git commits (master):
+  - `97e3314` — sync title parsing fix (`Untitled` regression removed)
+  - `7bdc4d4` — include cover JPG + raw assets in iterate ZIP
+  - `51f1f43` — use in-memory blobs for stable ZIP asset inclusion
+  - `f62e258` — SPA JS cache-bust token bump (`20260304-zipfix09c-uiux09`)
+- Railway deploy:
+  - deployment `dba78a91-2bbe-4122-b38c-3d566715a04a` (`SUCCESS`)
+- Live health post-rollout:
+  - `status: ok`
+  - `healthy: true`
+  - `uptime_seconds: 81`
+- Dropdown verification (before + after Sync on live Iterate page):
+  - before: `loaded=999`, `untitled=0`, status `999 books loaded (catalog).`
+  - after clicking Sync: `loaded=999`, `untitled=0`, status `999 books loaded (catalog).`
+- Active frontend token verification:
+  - deployed script URL: `/static/js/pages/iterate.js?v=20260304-zipfix09c-uiux09`
+- UI ZIP verification from live page (`downloadComposite`):
+  - ZIP name: `1. A Room with a View - E. M. Forster.zip`
+  - files included:
+    - `A Room with a View - E. M. Forster.jpg`
+    - `A Room with a View - E. M. Forster (generated raw).png`
+    - `A Room with a View - E. M. Forster (source raw).png`
+    - `A Room with a View - E. M. Forster.pdf`
+    - `A Room with a View - E. M. Forster.ai`
+- Visual proof artifacts:
+  - iterate page (layout/no dead sidebar space): `/Users/timzengerink/proofs/2026-03-04-zipfix/proof-live-iterate-layout-20260304-zipfix.png`
+  - iterate page (dropdown/sync context): `/Users/timzengerink/proofs/2026-03-04-zipfix/proof-live-iterate-dropdown-20260304-zipfix.png`
+  - real composited cover image: `/Users/timzengerink/proofs/2026-03-04-zipfix/proof-live-cover-composite-20260304.jpg`
+  - real source raw image: `/Users/timzengerink/proofs/2026-03-04-zipfix/proof-live-cover-source-20260304.png`
+  - UI ZIP content proof JSON: `/Users/timzengerink/proofs/2026-03-04-zipfix/proof-live-ui-zip-contents-20260304.json`
 
 ## 1.0 Sidebar Gap Fix + Live Redeploy (2026-03-04)
 - Git commits:
