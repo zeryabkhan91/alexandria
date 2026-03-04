@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,10 +48,14 @@ FALLBACK_RADIUS = 500
 TEMPLATE_PUNCH_RADIUS = 465
 TEMPLATE_FALLBACK_PUNCH_RADIUS = 420
 TEMPLATE_SUPERSAMPLE_FACTOR = 4
-ART_BLEED_PX = 140  # Extra px on each side beyond punch radius; must absorb center-crop + border-strip.
+ART_BLEED_PX = 60
 FRAME_MASK_PATH = Path(__file__).resolve().parent.parent / "config" / "frame_mask.png"
+FRAME_OVERLAY_DIR = Path(__file__).resolve().parent.parent / "config" / "frame_overlays"
+FRAME_OVERLAY_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "extract_frame_overlays.py"
+VERIFY_COMPOSITE_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "verify_composite.py"
 
 _GEOMETRY_CACHE: dict[str, dict[str, int]] = {}
+_FRAME_OVERLAY_EXTRACTION_ATTEMPTED = False
 
 
 def _clip(value: float) -> float:
@@ -742,49 +748,20 @@ def composite_single(
         full_overlay.putalpha(mask)
         composited_rgb = Image.alpha_composite(cover.convert("RGBA"), full_overlay).convert("RGB")
     else:
-        # ── In-memory PNG-template compositing pipeline ──────────────
-        # Builds the frame template in RAM from the already-loaded cover.
-        # Three layers: solid canvas -> AI art -> cover-with-transparent-hole.
-        # The frame is ALWAYS the topmost layer, making bleed-through
-        # structurally impossible. No disk I/O, no fallback needed.
+        # ── RGBA Frame-Overlay Compositing ─────────────────────────
+        # Three layers: canvas -> art -> RGBA overlay (frame painted LAST).
+        center_x = FALLBACK_CENTER_X
+        center_y = FALLBACK_CENTER_Y
 
-        # Use FIXED center coordinates that match all 99 covers.
-        # Do NOT use _resolve_medallion_geometry() — it uses dynamic
-        # detection that can return slightly different centers, causing
-        # misalignment between the art and the template hole.
-        center_x = FALLBACK_CENTER_X   # 2864
-        center_y = FALLBACK_CENTER_Y   # 1620
-        punch_radius = TEMPLATE_PUNCH_RADIUS  # 465
-        fallback_punch_radius = TEMPLATE_FALLBACK_PUNCH_RADIUS  # 420
-
-        # ── 1. Build the template using frame mask or fallback circle ──
-        cover_rgba = cover.convert("RGBA")
-        tmpl_w, tmpl_h = cover_rgba.size
-
-        frame_mask = _load_frame_mask((tmpl_w, tmpl_h))
-        active_punch_radius = punch_radius
-        if frame_mask is not None:
-            # frame_mask: 255=keep (frame), 0=replace (art hole)
-            mask = frame_mask
-            logger.info("Using pixel-perfect frame mask from %s", FRAME_MASK_PATH)
-        else:
-            # Fallback: 4x supersampled anti-aliased circle mask
-            active_punch_radius = fallback_punch_radius
-            logger.warning(
-                "frame_mask.png unavailable, falling back to conservative circle punch r=%d",
-                active_punch_radius,
+        frame_overlay = _load_frame_overlay(cover_path, cover.size)
+        if frame_overlay is None:
+            frame_overlay = _build_fallback_frame_overlay(
+                cover=cover,
+                center_x=center_x,
+                center_y=center_y,
+                punch_radius=TEMPLATE_PUNCH_RADIUS,
             )
-            scale = 4
-            mask_large = Image.new("L", (tmpl_w * scale, tmpl_h * scale), 255)
-            draw_mask = ImageDraw.Draw(mask_large)
-            cx_s, cy_s, r_s = center_x * scale, center_y * scale, active_punch_radius * scale
-            draw_mask.ellipse((cx_s - r_s, cy_s - r_s, cx_s + r_s, cy_s + r_s), fill=0)
-            mask = mask_large.resize((tmpl_w, tmpl_h), Image.LANCZOS)
 
-        template = cover_rgba.copy()
-        template.putalpha(mask)
-
-        # ── 2. Sample background color from cover ──
         fill_rgb = _sample_cover_background(
             cover=cover,
             center_x=center_x,
@@ -792,36 +769,57 @@ def composite_single(
             outer_radius=FALLBACK_RADIUS,
         )
 
-        # ── 3. Solid canvas with sampled background color ──
         canvas = Image.new("RGBA", (cover_w, cover_h), (*fill_rgb, 255))
 
-        # ── 4. Prepare AI art: simple center crop, scale to fill ──
-        # ALWAYS use FALLBACK_RADIUS for art sizing to fully cover the visible medallion opening.
-        art_diameter = FALLBACK_RADIUS * 2 + (ART_BLEED_PX * 2)  # 500*2+280 = 1280px
+        art_diameter = FALLBACK_RADIUS * 2 + (ART_BLEED_PX * 2)
         art = _simple_center_crop(illustration)
         art = art.resize((art_diameter, art_diameter), Image.LANCZOS)
+        art = _color_match_illustration(cover=cover, illustration=art, region=region_obj)
 
-        # Flatten any transparency in AI art against background color
-        # (prevents checkerboard artifacts from semi-transparent pixels)
         art_bg = Image.new("RGBA", (art_diameter, art_diameter), (*fill_rgb, 255))
         art_bg.alpha_composite(art)
         art = art_bg
 
-        # ── 5. Paste art centered on medallion ──
         art_layer = Image.new("RGBA", (cover_w, cover_h), (0, 0, 0, 0))
-        paste_x = center_x - art_diameter // 2
-        paste_y = center_y - art_diameter // 2
-        art_layer.paste(art, (paste_x, paste_y))
+        art_layer.paste(art, (center_x - art_diameter // 2, center_y - art_diameter // 2))
 
-        # ── 6. Three-layer composite: canvas + art + template ──
         result = Image.alpha_composite(canvas, art_layer)
-        result = Image.alpha_composite(result, template)
+        result = Image.alpha_composite(result, frame_overlay)
         composited_rgb = result.convert("RGB")
+
+        _orig_arr = np.array(cover, dtype=np.float32)
+        _comp_arr = np.array(composited_rgb, dtype=np.float32)
+        _h, _w = _orig_arr.shape[:2]
+        _yy, _xx = np.ogrid[:_h, :_w]
+        _dist = np.sqrt((_xx - center_x) ** 2 + (_yy - center_y) ** 2)
+        _ring = (_dist >= 420) & (_dist <= 520)
+        _diff = np.abs(_orig_arr - _comp_arr).max(axis=2)
+        _ring_diff = _diff[_ring]
+        _changed_pct = 100.0 * float(np.sum(_ring_diff > 15)) / max(1, int(_ring_diff.size))
+        _mean_delta = float(_ring_diff.mean()) if _ring_diff.size else 0.0
+
+        if _changed_pct > 5.0 or _mean_delta > 10.0:
+            logger.error(
+                "FRAME DAMAGE DETECTED for %s: changed=%.1f%%, mean_delta=%.1f. Composite REJECTED.",
+                cover_path.name,
+                _changed_pct,
+                _mean_delta,
+            )
+            raise ValueError(
+                f"Frame integrity check failed for {cover_path.name}: "
+                f"ring_changed={_changed_pct:.1f}%, mean_delta={_mean_delta:.1f}"
+            )
+        logger.info(
+            "Frame integrity OK for %s: changed=%.1f%%, mean_delta=%.1f",
+            cover_path.name,
+            _changed_pct,
+            _mean_delta,
+        )
 
         validation_region = Region(
             center_x=center_x,
             center_y=center_y,
-            radius=max(20, active_punch_radius),
+            radius=max(20, TEMPLATE_PUNCH_RADIUS),
             frame_bbox=region_obj.frame_bbox,
             region_type="circle",
         )
@@ -894,6 +892,7 @@ def composite_all_variants(
     catalog_path: Path = config.BOOK_CATALOG_PATH,
 ) -> list[Path]:
     """Composite all available generated variants for one book."""
+    ensure_frame_overlays_exist(input_dir=input_dir, catalog_path=catalog_path)
     cover_path = _find_cover_jpg(input_dir, book_number, catalog_path=catalog_path)
     region = _region_for_book(regions, book_number)
 
@@ -1128,6 +1127,7 @@ def batch_composite(
     catalog_path: Path = config.BOOK_CATALOG_PATH,
 ) -> dict[str, Any]:
     """Composite all generated books with error isolation."""
+    ensure_frame_overlays_exist(input_dir=input_dir, catalog_path=catalog_path)
     regions = safe_json.load_json(regions_path, {})
     generated_books = sorted(
         [int(path.name) for path in generated_dir.iterdir() if path.is_dir() and path.name.isdigit()]
@@ -1163,6 +1163,12 @@ def batch_composite(
             summary["failed_books"] += 1
             summary["errors"].append({"book_number": book_number, "error": str(exc)})
             logger.error("Compositing failed for book %s: %s", book_number, exc)
+
+    try:
+        if VERIFY_COMPOSITE_SCRIPT.exists():
+            subprocess.run([sys.executable, str(VERIFY_COMPOSITE_SCRIPT)], check=False, timeout=300)
+    except Exception:
+        pass
 
     return summary
 
@@ -1347,6 +1353,140 @@ def _load_global_compositing_mask(size: tuple[int, int]) -> Image.Image | None:
     if int(arr.max()) <= 1 or int(arr.min()) >= 254:
         return None
     return alpha
+
+
+def _load_frame_overlay(cover_path: Path, size: tuple[int, int]) -> Image.Image | None:
+    """Load pre-extracted RGBA frame overlay for a specific source cover."""
+    overlay_dir = FRAME_OVERLAY_DIR
+    stem = cover_path.stem
+    candidate = overlay_dir / f"{stem}_frame.png"
+
+    if not candidate.exists():
+        nums = re.findall(r"\d+", stem)
+        if nums:
+            wanted = nums[-1]
+            for fp in sorted(overlay_dir.glob("*_frame.png")):
+                fp_nums = re.findall(r"\d+", fp.stem)
+                if fp_nums and fp_nums[-1] == wanted:
+                    candidate = fp
+                    break
+
+    if not candidate.exists():
+        return None
+
+    try:
+        overlay = Image.open(candidate).convert("RGBA")
+    except Exception:
+        logger.warning("Failed to load frame overlay %s", candidate)
+        return None
+    if overlay.size != size:
+        overlay = overlay.resize(size, Image.LANCZOS)
+
+    alpha = np.array(overlay.split()[-1], dtype=np.uint8)
+    if int(alpha.max()) <= 5 or int(alpha.min()) >= 250:
+        logger.warning("Frame overlay alpha is trivial, ignoring %s", candidate)
+        return None
+    return _enforce_frame_guard_alpha(overlay)
+
+
+def _build_fallback_frame_overlay(
+    *,
+    cover: Image.Image,
+    center_x: int,
+    center_y: int,
+    punch_radius: int,
+) -> Image.Image:
+    """Build RGBA overlay from cover + frame_mask.png (fallback path)."""
+    cover_rgba = cover.convert("RGBA")
+    w, h = cover_rgba.size
+
+    frame_mask = _load_frame_mask((w, h))
+    if frame_mask is not None:
+        cover_rgba.putalpha(frame_mask)
+        return _enforce_frame_guard_alpha(cover_rgba)
+
+    scale = 4
+    mask_large = Image.new("L", (w * scale, h * scale), 255)
+    draw = ImageDraw.Draw(mask_large)
+    cx_s, cy_s, r_s = center_x * scale, center_y * scale, punch_radius * scale
+    draw.ellipse((cx_s - r_s, cy_s - r_s, cx_s + r_s, cy_s + r_s), fill=0)
+    cover_rgba.putalpha(mask_large.resize((w, h), Image.LANCZOS))
+    return _enforce_frame_guard_alpha(cover_rgba)
+
+
+def _enforce_frame_guard_alpha(overlay: Image.Image) -> Image.Image:
+    """Hard-protect the frame annulus and outer frame from art bleed."""
+    arr = np.array(overlay.convert("RGBA"), dtype=np.uint8)
+    h, w = arr.shape[:2]
+    yy, xx = np.ogrid[:h, :w]
+    dist = np.sqrt((xx - FALLBACK_CENTER_X) ** 2 + (yy - FALLBACK_CENTER_Y) ** 2)
+    arr[..., 3][dist >= 420] = 255
+    return Image.fromarray(arr, mode="RGBA")
+
+
+def ensure_frame_overlays_exist(*, input_dir: Path, catalog_path: Path) -> None:
+    """Lazy extraction gate for frame overlays; runs once per process if needed."""
+    global _FRAME_OVERLAY_EXTRACTION_ATTEMPTED
+    if _FRAME_OVERLAY_EXTRACTION_ATTEMPTED:
+        return
+    _FRAME_OVERLAY_EXTRACTION_ATTEMPTED = True
+
+    FRAME_OVERLAY_DIR.mkdir(parents=True, exist_ok=True)
+
+    catalog = _load_catalog(catalog_path)
+    missing = 0
+    expected = 0
+    for entry in catalog:
+        folder_name = str(entry.get("folder_name", "")).strip()
+        if not folder_name:
+            continue
+        folder = input_dir / folder_name
+        jpgs = sorted([p for p in folder.glob("*") if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}])
+        if not jpgs:
+            continue
+        expected += 1
+        overlay_path = FRAME_OVERLAY_DIR / f"{jpgs[0].stem}_frame.png"
+        if not overlay_path.exists():
+            missing += 1
+
+    if expected == 0:
+        logger.warning("No catalog source JPGs found for frame overlay extraction")
+        return
+    if missing == 0:
+        logger.info("Frame overlays already present for all %d covers", expected)
+        return
+    if not FRAME_OVERLAY_SCRIPT.exists():
+        logger.warning("Frame overlay extraction script missing: %s", FRAME_OVERLAY_SCRIPT)
+        return
+
+    logger.info("Frame overlays missing for %d/%d covers; running extraction", missing, expected)
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(FRAME_OVERLAY_SCRIPT),
+                "--input-dir",
+                str(input_dir),
+                "--catalog-path",
+                str(catalog_path),
+                "--overlay-dir",
+                str(FRAME_OVERLAY_DIR),
+                "--frame-mask",
+                str(FRAME_MASK_PATH),
+            ],
+            check=False,
+            timeout=1200,
+            capture_output=True,
+            text=True,
+        )
+        if proc.stdout.strip():
+            logger.info(proc.stdout.strip())
+        if proc.returncode != 0:
+            logger.warning("Frame overlay extraction exited with code %s", proc.returncode)
+            if proc.stderr.strip():
+                logger.warning(proc.stderr.strip())
+    except Exception as exc:
+        logger.warning("Failed to run frame overlay extraction: %s", exc)
 
 
 def _load_frame_mask(size: tuple[int, int]) -> Image.Image | None:

@@ -84,6 +84,192 @@ AI_BORDER_SOBEL_MAGNITUDE_THRESHOLD = 30
 # Check 9 thresholds (visual rendered frame comparison)
 VISUAL_FRAME_MEAN_DIFF_THRESHOLD = 5.0
 
+# -- Prompt-12 batch verification thresholds --
+RING_INNER_R = 420
+RING_OUTER_R = 520
+THRESHOLD_CHANGED_PCT = 2.0
+THRESHOLD_MEAN_DELTA = 5.0
+THRESHOLD_MAX_DELTA = 10.0
+PIXEL_CHANGE_THRESHOLD = 15
+
+
+def _import_runtime_modules():
+    """Import runtime config/safe_json from src with fallback when script is run directly."""
+    root = Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    try:
+        from src import config as runtime_config  # type: ignore
+        from src import safe_json as runtime_safe_json  # type: ignore
+    except ModuleNotFoundError:  # pragma: no cover
+        import config as runtime_config  # type: ignore
+        import safe_json as runtime_safe_json  # type: ignore
+    return runtime_config, runtime_safe_json
+
+
+def _first_file_with_suffix(folder: Path, suffixes: set[str]) -> Path | None:
+    if not folder.exists() or not folder.is_dir():
+        return None
+    files = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in suffixes]
+    return sorted(files)[0] if files else None
+
+
+def _first_composite_for_book(output_dir: Path, book_number: int) -> Path | None:
+    book_dir = output_dir / str(book_number)
+    if not book_dir.exists() or not book_dir.is_dir():
+        return None
+    jpgs = sorted(book_dir.rglob("*.jpg"))
+    return jpgs[0] if jpgs else None
+
+
+def verify_single_ring(original_path: Path, composited_path: Path, output_dir: Path | None = None) -> dict:
+    """Prompt-12 annulus check for one original/composited cover pair."""
+    orig = np.array(Image.open(original_path).convert("RGB"), dtype=np.float32)
+    comp_img = Image.open(composited_path).convert("RGB")
+    if comp_img.size != (orig.shape[1], orig.shape[0]):
+        comp_img = comp_img.resize((orig.shape[1], orig.shape[0]), Image.LANCZOS)
+    comp = np.array(comp_img, dtype=np.float32)
+
+    h, w = orig.shape[:2]
+    yy, xx = np.ogrid[:h, :w]
+    dist = np.sqrt((xx - CENTER_X) ** 2 + (yy - CENTER_Y) ** 2)
+    ring = (dist >= RING_INNER_R) & (dist <= RING_OUTER_R)
+
+    diff = np.abs(orig - comp)
+    channel_diff = diff.max(axis=2)
+    ring_pixels = channel_diff[ring]
+    changed = ring_pixels > PIXEL_CHANGE_THRESHOLD
+    changed_pct = 100.0 * float(np.sum(changed)) / max(1, int(ring_pixels.size))
+    mean_delta = float(ring_pixels.mean()) if ring_pixels.size else 0.0
+    max_delta = float(ring_pixels.max()) if ring_pixels.size else 0.0
+
+    passed = (
+        changed_pct < THRESHOLD_CHANGED_PCT
+        and mean_delta < THRESHOLD_MEAN_DELTA
+        and max_delta < THRESHOLD_MAX_DELTA
+    )
+
+    result = {
+        "original": str(original_path),
+        "composited": str(composited_path),
+        "ring_changed_pct": round(changed_pct, 3),
+        "ring_mean_delta": round(mean_delta, 3),
+        "ring_max_delta": round(max_delta, 3),
+        "passed": bool(passed),
+        "verdict": "PASS" if passed else "FAIL",
+    }
+
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        diff_vis = np.clip(diff * 3.0, 0, 255).astype(np.uint8)
+        ring_border = ((dist >= RING_INNER_R - 2) & (dist <= RING_INNER_R + 2)) | (
+            (dist >= RING_OUTER_R - 2) & (dist <= RING_OUTER_R + 2)
+        )
+        diff_vis[ring_border] = [255, 0, 0]
+        comparison = np.concatenate([orig.astype(np.uint8), comp.astype(np.uint8), diff_vis], axis=1)
+        stem = original_path.stem
+        Image.fromarray(comparison).save(output_dir / f"{stem}_verify.jpg", quality=85)
+
+    return result
+
+
+def verify_catalog_batch(
+    *,
+    input_dir: Path | None = None,
+    output_dir: Path | None = None,
+    catalog_path: Path | None = None,
+    verify_dir: Path = Path("tmp/verification"),
+    report_path: Path = Path("tmp/verification_report.json"),
+) -> int:
+    """Prompt-12 batch verification across all catalog books."""
+    runtime_config, runtime_safe_json = _import_runtime_modules()
+    input_dir = input_dir or runtime_config.INPUT_DIR
+    output_dir = output_dir or Path("Output Covers")
+    catalog_path = catalog_path or runtime_config.BOOK_CATALOG_PATH
+
+    catalog = runtime_safe_json.load_json(catalog_path, [])
+    if not isinstance(catalog, list):
+        print(f"ERROR: invalid catalog payload at {catalog_path}", file=sys.stderr)
+        return 2
+
+    verify_dir.mkdir(parents=True, exist_ok=True)
+    results: list[dict] = []
+    passes = 0
+    fails = 0
+
+    for entry in catalog:
+        if not isinstance(entry, dict):
+            continue
+        book_number = int(entry.get("number", 0) or 0)
+        folder_name = str(entry.get("folder_name", "")).strip()
+        if book_number <= 0 or not folder_name:
+            continue
+
+        source_folder = input_dir / folder_name
+        source_jpg = _first_file_with_suffix(source_folder, {".jpg", ".jpeg", ".png", ".webp"})
+        composited_jpg = _first_composite_for_book(output_dir, book_number)
+        if source_jpg is None or composited_jpg is None:
+            continue
+
+        result = verify_single_ring(source_jpg, composited_jpg, verify_dir)
+        result["book_number"] = book_number
+        result["folder_name"] = folder_name
+        results.append(result)
+        if result["passed"]:
+            passes += 1
+        else:
+            fails += 1
+            print(
+                f"FAIL {book_number:>3}: changed={result['ring_changed_pct']}% "
+                f"mean={result['ring_mean_delta']} max={result['ring_max_delta']} "
+                f"({Path(result['composited']).name})"
+            )
+
+    avg_changed = float(np.mean([float(r["ring_changed_pct"]) for r in results])) if results else 0.0
+    avg_mean_delta = float(np.mean([float(r["ring_mean_delta"]) for r in results])) if results else 0.0
+    avg_max_delta = float(np.mean([float(r["ring_max_delta"]) for r in results])) if results else 0.0
+    report = {
+        "total": len(results),
+        "passed": passes,
+        "failed": fails,
+        "pass_rate": f"{100.0 * passes / max(1, len(results)):.1f}%",
+        "averages": {
+            "ring_changed_pct": round(avg_changed, 3),
+            "ring_mean_delta": round(avg_mean_delta, 3),
+            "ring_max_delta": round(avg_max_delta, 3),
+        },
+        "thresholds": {
+            "ring_changed_pct_lt": THRESHOLD_CHANGED_PCT,
+            "ring_mean_delta_lt": THRESHOLD_MEAN_DELTA,
+            "ring_max_delta_lt": THRESHOLD_MAX_DELTA,
+            "pixel_change_threshold": PIXEL_CHANGE_THRESHOLD,
+        },
+        "verify_dir": str(verify_dir),
+        "results": results,
+    }
+    runtime_safe_json.atomic_write_json(report_path, report)
+
+    print("\n" + ("=" * 60))
+    print("PROMPT-12 VERIFICATION REPORT")
+    print("=" * 60)
+    print(f"Input covers:      {input_dir}")
+    print(f"Composited covers: {output_dir}")
+    print(f"Compared covers:   {len(results)}")
+    print(f"PASSED:            {passes}")
+    print(f"FAILED:            {fails}")
+    print(f"Avg changed %:     {avg_changed:.3f} (threshold < {THRESHOLD_CHANGED_PCT})")
+    print(f"Avg mean delta:    {avg_mean_delta:.3f} (threshold < {THRESHOLD_MEAN_DELTA})")
+    print(f"Avg max delta:     {avg_max_delta:.3f} (threshold < {THRESHOLD_MAX_DELTA})")
+    print(f"Report JSON:       {report_path}")
+    print(f"Comparison images: {verify_dir}")
+    print("=" * 60 + "\n")
+
+    if fails > 0:
+        print("*** VERIFICATION FAILED - DO NOT COMMIT ***")
+        return 1
+    print("All covers passed verification.")
+    return 0
+
 
 def load_image_array(path: Path) -> np.ndarray:
     """Load image as RGB numpy array."""
@@ -778,8 +964,8 @@ def verify_composite(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Verify composited cover output (PDF or JPG mode).")
-    parser.add_argument("composite", type=Path, help="Path to composited output JPG")
+    parser = argparse.ArgumentParser(description="Verify composited cover output (single-file or Prompt-12 batch mode).")
+    parser.add_argument("composite", type=Path, nargs="?", default=None, help="Path to composited output JPG")
     parser.add_argument("source_jpg", type=Path, nargs="?", default=None, help="Path to source cover JPG (JPG mode)")
     parser.add_argument("--source-pdf", type=Path, default=None, help="Path to source cover PDF (enables PDF mode)")
     parser.add_argument("--output-pdf", type=Path, default=None, help="Path to output PDF (for SMask integrity check)")
@@ -794,7 +980,42 @@ def main():
     )
     parser.add_argument("--strict", action="store_true", help="Stricter thresholds")
     parser.add_argument("--json", action="store_true", help="JSON output")
+    parser.add_argument(
+        "--batch",
+        action="store_true",
+        help="Run Prompt-12 catalog verification (no positional args required).",
+    )
+    parser.add_argument("--input-dir", type=Path, default=None, help="Input covers directory for --batch mode")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("Output Covers"),
+        help="Composited covers directory for --batch mode",
+    )
+    parser.add_argument("--catalog-path", type=Path, default=None, help="Book catalog path for --batch mode")
+    parser.add_argument(
+        "--verify-dir",
+        type=Path,
+        default=Path("tmp/verification"),
+        help="Output directory for per-cover comparison images in --batch mode",
+    )
+    parser.add_argument(
+        "--report-path",
+        type=Path,
+        default=Path("tmp/verification_report.json"),
+        help="JSON report path for --batch mode",
+    )
     args = parser.parse_args()
+
+    if args.batch or args.composite is None:
+        code = verify_catalog_batch(
+            input_dir=args.input_dir,
+            output_dir=args.output_dir,
+            catalog_path=args.catalog_path,
+            verify_dir=args.verify_dir,
+            report_path=args.report_path,
+        )
+        sys.exit(code)
 
     if not args.composite.exists():
         print(f"ERROR: Composite not found: {args.composite}", file=sys.stderr)
