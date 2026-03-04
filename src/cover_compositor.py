@@ -55,7 +55,7 @@ FRAME_OVERLAY_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "ext
 VERIFY_COMPOSITE_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "verify_composite.py"
 # Bump this version when the overlay extraction logic changes.
 # This triggers automatic re-extraction of all cached frame overlays.
-FRAME_OVERLAY_VERSION = 2  # v1 = with guard ring (broken), v2 = natural SMask (PROMPT-15)
+FRAME_OVERLAY_VERSION = 3  # v1 guard ring, v2 natural SMask, v3 opening-only frame preservation
 
 _GEOMETRY_CACHE: dict[str, dict[str, int]] = {}
 _FRAME_OVERLAY_EXTRACTION_ATTEMPTED = False

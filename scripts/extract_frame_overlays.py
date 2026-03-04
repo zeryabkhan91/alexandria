@@ -151,6 +151,7 @@ def _compose_overlay_with_smask(
     *,
     cover_path: Path,
     smask: Image.Image,
+    frame_mask_path: Path,
     sx: float,
     sy: float,
     tx: float,
@@ -192,16 +193,20 @@ def _compose_overlay_with_smask(
     if np.any(feather_zone):
         feather_values = (240.0 - smask_canvas[feather_zone].astype(np.float32)) / 15.0 * 255.0
         alpha[feather_zone] = np.clip(feather_values, 0, 255).astype(np.uint8)
-    # No guard ring override — the SMask naturally handles the frame boundary.
-    # Outside the Im0 bounding box, smask_canvas is 0 so alpha remains 255.
-    # Inside the Im0 box, SMask values control the opening/ornamental detail.
+    # Preserve original medallion/frame exactly: only the inner opening may be transparent.
+    # The frame mask encodes this contract (0 = opening, 255 = preserved frame/ring).
+    frame_mask = Image.open(frame_mask_path).convert("L")
+    if frame_mask.size != (target_w, target_h):
+        frame_mask = frame_mask.resize((target_w, target_h), Image.LANCZOS)
+    frame_mask_arr = np.array(frame_mask, dtype=np.uint8)
+    alpha = np.maximum(alpha, frame_mask_arr)
 
     rgba = np.dstack([cover_rgb, alpha])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(rgba, mode="RGBA").save(output_path, format="PNG", optimize=True)
 
 
-def extract_overlay_from_pdf(pdf_path: Path, cover_jpg_path: Path, output_path: Path) -> None:
+def extract_overlay_from_pdf(pdf_path: Path, cover_jpg_path: Path, output_path: Path, frame_mask_path: Path) -> None:
     page = None
     pdf = None
     try:
@@ -227,6 +232,7 @@ def extract_overlay_from_pdf(pdf_path: Path, cover_jpg_path: Path, output_path: 
         _compose_overlay_with_smask(
             cover_path=cover_jpg_path,
             smask=smask,
+            frame_mask_path=frame_mask_path,
             sx=sx,
             sy=sy,
             tx=tx,
@@ -292,7 +298,7 @@ def run_extraction(
         source_pdf = _first_pdf_file(cover_folder)
         if source_pdf is not None:
             try:
-                extract_overlay_from_pdf(source_pdf, cover_jpg, output_path)
+                extract_overlay_from_pdf(source_pdf, cover_jpg, output_path, frame_mask_path)
                 stats.pdf_extracted += 1
                 logger.info("PDF-based overlay: %s -> %s", source_pdf.name, output_path.name)
                 continue
