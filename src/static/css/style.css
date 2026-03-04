@@ -38,7 +38,7 @@ a {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: auto 1fr;
   height: 100vh;
   overflow: hidden;
 }
@@ -52,6 +52,7 @@ a {
 .content {
   flex: 1;
   overflow-y: auto;
+  margin: 0;
   padding: 24px;
   background: var(--bg);
 }
