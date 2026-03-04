@@ -2,7 +2,20 @@
 
 Last updated: `2026-03-04`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `8f13004d-97e3-42fc-b672-2a8a43a23918`
+Deployment ID: `a3d30f1b-74f0-4fbd-8087-bdc4834604c9`
+
+## 0.9 PROMPT-09 Redeploy + Inline-Proof Render Fix (2026-03-04)
+- Forced GitHub push check:
+  - `git push origin master` -> `Everything up-to-date`
+- Forced Railway deploy:
+  - deployment: `a3d30f1b-74f0-4fbd-8087-bdc4834604c9` (`SUCCESS`)
+- Live health immediately after rollout:
+  - `status: ok`
+  - `healthy: true`
+  - `uptime_seconds: 1`
+  - `books_cataloged: 999`
+- Inline-proof compatibility fix:
+  - proof files exported to absolute paths without spaces under `/Users/timzengerink/proofs/` for reliable in-chat rendering.
 
 ## 0. PROMPT-07B Hotfix Snapshot (2026-03-03)
 - Deployed with compositor detection window widened (15%), safety inset `14px`, expanded radius scan bounds, and relaxed offset guard.
@@ -278,6 +291,9 @@ Deployment ID: `8f13004d-97e3-42fc-b672-2a8a43a23918`
 - `/Users/timzengerink/proofs/book_9-medallion-proof.jpg`
 - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/tmp/test_composites/book_1/test_output.jpg`
 - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/tmp/test_composites/book_9/test_output.jpg`
+- `/Users/timzengerink/proofs/prompt09-live-iterate-20260304-final.png`
+- `/Users/timzengerink/proofs/prompt09-book1-proof-20260304.jpg`
+- `/Users/timzengerink/proofs/prompt09-book9-proof-20260304.jpg`
 
 ### 3.1 Live UI Screenshots
 - `tmp/proof-live-iterate-20260302-prompt06.png`
