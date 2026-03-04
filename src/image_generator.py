@@ -121,6 +121,10 @@ VIVID_COLOR_GUARDRAIL = (
 )
 GENERATION_GUARDRAIL = f"{STRICT_SCENE_GUARDRAIL} {VIVID_COLOR_GUARDRAIL}"
 MAX_CONTENT_VIOLATION_SCORE = 0.24
+TEXT_ARTIFACT_HARD_SCORE_FLOOR = 0.20
+TEXT_ARTIFACT_HARD_TEXT_PENALTY = 0.62
+TEXT_ARTIFACT_HARD_BAND_RATIO = 0.165
+TEXT_ARTIFACT_HARD_TINY_EFFECTIVE = 0.030
 ARTIFACT_RETRY_LIMIT = 2
 ARTIFACT_RETRY_APPEND = (
     "Retry instruction: scene artwork only. Absolutely no words, letters, numbers, logos, labels, ribbons, "
@@ -206,6 +210,28 @@ def _artifact_retry_prompt(*, prompt: str, retry_index: int) -> str:
         f"Retry #{int(retry_index)}: increase color contrast and keep only one clear focal subject."
     ).strip()
     return _guardrailed_prompt(hardened)
+
+
+def _is_high_confidence_text_artifact(*, content_score: float, metrics: dict[str, float]) -> bool:
+    def _metric(name: str, default: float = 0.0) -> float:
+        try:
+            return float(metrics.get(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    text_penalty = _metric("text_penalty")
+    if text_penalty >= TEXT_ARTIFACT_HARD_TEXT_PENALTY:
+        return True
+
+    if float(content_score) < TEXT_ARTIFACT_HARD_SCORE_FLOOR:
+        return False
+
+    text_band_ratio = _metric("text_band_ratio")
+    tiny_effective = _metric("tiny_effective")
+    return (
+        text_band_ratio >= TEXT_ARTIFACT_HARD_BAND_RATIO
+        or tiny_effective >= TEXT_ARTIFACT_HARD_TINY_EFFECTIVE
+    )
 
 
 @dataclass(slots=True)
@@ -1170,12 +1196,24 @@ def generate_image(
     # Synthetic fallback exists for key-less demo/testing environments; keep guardrails strict for real providers.
     provider_name = str(getattr(provider_instance, "name", "")).strip().lower()
     if provider_name != "synthetic":
-        content_score, content_issues, _metrics = _content_guardrail_score(processed)
-        hard_text_artifact = "text_or_banner_artifact" in content_issues
+        content_score, content_issues, metrics = _content_guardrail_score(processed)
+        has_text_artifact = "text_or_banner_artifact" in content_issues
+        hard_text_artifact = has_text_artifact and _is_high_confidence_text_artifact(
+            content_score=content_score,
+            metrics=metrics,
+        )
         hard_frame_artifact = (
             ("inner_frame_or_ring_artifact" in content_issues or "rectangular_frame_artifact" in content_issues)
             and content_score >= 0.22
         )
+        if has_text_artifact and not hard_text_artifact:
+            logger.info(
+                "Soft-passing low-confidence text artifact: score=%.3f text_penalty=%.3f band=%.3f tiny=%.3f",
+                content_score,
+                float(metrics.get("text_penalty", 0.0) or 0.0),
+                float(metrics.get("text_band_ratio", 0.0) or 0.0),
+                float(metrics.get("tiny_effective", 0.0) or 0.0),
+            )
         if content_score > MAX_CONTENT_VIOLATION_SCORE or hard_text_artifact or hard_frame_artifact:
             issue_blob = ", ".join(content_issues[:3]) if content_issues else "content_artifacts"
             raise GenerationError(

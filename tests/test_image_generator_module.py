@@ -487,6 +487,72 @@ def test_generate_image_skips_hard_content_reject_for_synthetic_fallback(tmp_pat
     assert output
 
 
+def test_generate_image_soft_text_artifact_does_not_hard_fail(tmp_path: Path, monkeypatch):
+    runtime = _Runtime(tmp_path)
+    monkeypatch.setattr(ig.config, "get_config", lambda: runtime)
+    monkeypatch.setattr(ig._RATE_LIMITER, "wait", lambda *args, **kwargs: None)
+
+    class _Provider:
+        name = "openai"
+
+        def __init__(self, image):
+            self._image = image
+
+        def generate(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return self._image
+
+    monkeypatch.setattr(
+        ig,
+        "_create_provider_instance",
+        lambda **_kwargs: _Provider(Image.open(io.BytesIO(_image_bytes((64, 64), gradient=True)))),
+    )
+    monkeypatch.setattr(
+        ig,
+        "_content_guardrail_score",
+        lambda _image: (
+            0.212,
+            ["text_or_banner_artifact"],
+            {"text_penalty": 0.41, "text_band_ratio": 0.11, "tiny_effective": 0.018},
+        ),
+    )
+
+    output = ig.generate_image("prompt", "negative", "openai/gpt-image-1", {"provider": "openai", "width": 64, "height": 64})
+    assert output
+
+
+def test_generate_image_high_confidence_text_artifact_rejects(tmp_path: Path, monkeypatch):
+    runtime = _Runtime(tmp_path)
+    monkeypatch.setattr(ig.config, "get_config", lambda: runtime)
+    monkeypatch.setattr(ig._RATE_LIMITER, "wait", lambda *args, **kwargs: None)
+
+    class _Provider:
+        name = "openai"
+
+        def __init__(self, image):
+            self._image = image
+
+        def generate(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return self._image
+
+    monkeypatch.setattr(
+        ig,
+        "_create_provider_instance",
+        lambda **_kwargs: _Provider(Image.open(io.BytesIO(_image_bytes((64, 64), gradient=True)))),
+    )
+    monkeypatch.setattr(
+        ig,
+        "_content_guardrail_score",
+        lambda _image: (
+            0.221,
+            ["text_or_banner_artifact"],
+            {"text_penalty": 0.49, "text_band_ratio": 0.19, "tiny_effective": 0.018},
+        ),
+    )
+
+    with pytest.raises(ig.GenerationError, match="text_or_banner_artifact"):
+        ig.generate_image("prompt", "negative", "openai/gpt-image-1", {"provider": "openai", "width": 64, "height": 64})
+
+
 def test_generate_image_provider_circuit_breaker(tmp_path: Path, monkeypatch):
     runtime = _Runtime(tmp_path)
     runtime.provider_circuit_failure_threshold = 2
