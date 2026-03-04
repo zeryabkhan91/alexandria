@@ -2,7 +2,26 @@
 
 Last updated: `2026-03-04`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `a3d30f1b-74f0-4fbd-8087-bdc4834604c9`
+Deployment ID: `73d32fc1-50a5-4fab-ab9c-ef771ccb1efb`
+
+## 1.0 Sidebar Gap Fix + Live Redeploy (2026-03-04)
+- Git commits:
+  - `9c4ba94` — layout fix (`.app-shell` tracks sidebar width + `.content` margin reset)
+  - `fafb1da` — cache-bust style asset URL in SPA shell
+- GitHub push:
+  - `master` updated to `fafb1da`
+- Railway deploy:
+  - deployment `73d32fc1-50a5-4fab-ab9c-ef771ccb1efb` (`SUCCESS`)
+- Live health after rollout:
+  - `status: ok`
+  - `healthy: true`
+  - `uptime_seconds: 1`
+- Geometry proof (live, collapsed sidebar):
+  - expanded: `contentX=240`
+  - collapsed: `contentX=56`, `sidebarW=56` (no dead gutter remains)
+- Visual proof artifacts:
+  - live iterate gap fix: `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/tmp/proof-live-iterate-gapfix-20260304.png`
+  - cover proof (latest generated covers): `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/tmp/proof-local-dashboard-covers-gapfix-20260304.png`
 
 ## 0.9 PROMPT-09 Redeploy + Inline-Proof Render Fix (2026-03-04)
 - Forced GitHub push check:
