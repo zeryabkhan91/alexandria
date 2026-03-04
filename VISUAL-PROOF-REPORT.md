@@ -358,6 +358,28 @@ Deployment ID: `c4c2133e-adaa-4cfc-a430-02c5e7f921c6`
   - `/Users/timzengerink/proofs/proof-live-iterate-dropdown-expanded-fixed-20260304.png`
   - `/Users/timzengerink/proofs/proof-live-iterate-dropdown-fixed-20260304.png`
 
+### 3.0.9 PROMPT-09E/09D Live Proof (2026-03-04)
+- Deployment: `2d7852fa-b2fd-4bd1-801e-7a546584fb25`
+- Live URL: `https://web-production-900a7.up.railway.app`
+- Health/API checks:
+  - `GET /api/health` -> `status=ok`
+  - `GET /api/iterate-data?catalog=classics&limit=9999` -> `books=999`, `untitled=0`
+  - Live generate canary: `job_id=3affefb5-00a5-4315-84de-0ac60843d225` completed (`book=1`, `model=openrouter/google/gemini-2.5-flash-image`, `variant=1`)
+  - `GET /api/variant-download?book=1&variant=1&model=openrouter/google/gemini-2.5-flash-image` ZIP contains:
+    - `composites/...cover_v1.jpg`
+    - `composites/...cover_v1.pdf`
+    - `source_images/...generated_raw_v1.png`
+    - `source_files/...source_raw_v1.jpg`
+    - `manifest.csv`, `metadata.json`
+- Proof artifacts (chat-safe absolute paths):
+  - `/Users/timzengerink/proofs/proof-live-iterate-no-gap-dropdown-20260304.png`
+  - `/Users/timzengerink/proofs/proof-live-review-covers-loaded-20260304-b.png`
+  - `/Users/timzengerink/proofs/proof-live-generated-composite-book1-v1-20260304.jpg`
+  - `/Users/timzengerink/proofs/proof-live-generated-raw-book1-v1-20260304.png`
+  - `/Users/timzengerink/proofs/proof-live-source-raw-book1-v1-20260304.jpg`
+  - `/Users/timzengerink/proofs/proof-local-iterate-no-left-gap-20260304.png`
+  - `/Users/timzengerink/proofs/proof-local-review-covers-loaded-20260304.png`
+
 ### 3.1 Live UI Screenshots
 - `tmp/proof-live-iterate-20260302-prompt06.png`
 - `tmp/proof-live-dashboard-20260302-prompt06.png`

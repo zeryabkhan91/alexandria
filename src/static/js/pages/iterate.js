@@ -232,12 +232,18 @@ async function _extractVariantArchiveAssets({ bookId, variant, model }) {
     const pick = (predicate) => files.find(predicate) || null;
     const imagePattern = /\.(png|jpe?g|webp)$/i;
     const compositeFile = pick((file) => /composites\//i.test(file.name) && /\.jpe?g$/i.test(file.name));
-    const sourceFile = pick((file) => /source_images\//i.test(file.name) && imagePattern.test(file.name));
+    const generatedRawFile = pick((file) => /source_images\//i.test(file.name) && imagePattern.test(file.name));
+    const sourceRawFile = pick((file) => /source_files\//i.test(file.name) && imagePattern.test(file.name));
     const pdfFile = pick((file) => /composites\//i.test(file.name) && /\.pdf$/i.test(file.name));
+    const aiFile = pick((file) => /composites\//i.test(file.name) && /\.ai$/i.test(file.name));
     const out = {};
     if (compositeFile) out.compositeBlob = await compositeFile.async('blob');
-    if (sourceFile) out.sourceBlob = await sourceFile.async('blob');
+    if (generatedRawFile) out.rawBlob = await generatedRawFile.async('blob');
+    if (sourceRawFile) out.sourceBlob = await sourceRawFile.async('blob');
+    if (!out.sourceBlob && generatedRawFile) out.sourceBlob = await generatedRawFile.async('blob');
+    if (!out.rawBlob && sourceRawFile) out.rawBlob = await sourceRawFile.async('blob');
     if (pdfFile) out.pdfBlob = await pdfFile.async('blob');
+    if (aiFile) out.aiBlob = await aiFile.async('blob');
     return out;
   } catch {
     return {};
@@ -943,7 +949,7 @@ window.Pages.iterate = {
       if (!rawBlob) rawBlob = await fetchDownloadBlob(rawHref);
       let sourceBlob = await fetchDownloadBlob(sourceHref);
       let pdfBlob = await fetchDownloadBlob(pdfHref);
-      const aiBlob = await fetchDownloadBlob(aiHref);
+      let aiBlob = await fetchDownloadBlob(aiHref);
 
       if (!compositeBlob || !sourceBlob || !pdfBlob) {
         const fallback = await _extractVariantArchiveAssets({
@@ -952,8 +958,10 @@ window.Pages.iterate = {
           model: String(job.model || ''),
         });
         if (!compositeBlob && fallback.compositeBlob) compositeBlob = fallback.compositeBlob;
+        if (!rawBlob && fallback.rawBlob) rawBlob = fallback.rawBlob;
         if (!sourceBlob && fallback.sourceBlob) sourceBlob = fallback.sourceBlob;
         if (!pdfBlob && fallback.pdfBlob) pdfBlob = fallback.pdfBlob;
+        if (!aiBlob && fallback.aiBlob) aiBlob = fallback.aiBlob;
       }
 
       if (!rawBlob && sourceBlob) rawBlob = sourceBlob;

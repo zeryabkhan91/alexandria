@@ -2,12 +2,19 @@ window.Pages = window.Pages || {};
 
 let _filter = 'all';
 
+function _fallbackCoverPreview(book) {
+  const number = Number(book?.number || book?.id || 0);
+  if (!Number.isFinite(number) || number <= 0) return '';
+  const source = (book?.local_cover_available || book?.cover_jpg_id) ? 'catalog' : 'drive';
+  return `/api/books/${encodeURIComponent(String(number))}/cover-preview?source=${source}`;
+}
+
 function getBookThumb(book, winner) {
   if (winner) {
     const job = DB.dbGet('jobs', winner.job_id);
     if (job) return getBlobUrl(job.composited_image_blob || job.generated_image_blob, `${job.id}-winner-thumb`);
   }
-  return book.original || '';
+  return book.original || _fallbackCoverPreview(book);
 }
 
 window.Pages.review = {

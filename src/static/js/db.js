@@ -32,14 +32,19 @@ function _nextId(storeName) {
 function _normalizeBook(raw) {
   if (!raw) return null;
   const id = raw.id ?? raw.number ?? raw.book_number;
+  const resolvedNumber = raw.number ?? raw.book_number ?? id;
+  const fallbackSource = Boolean(raw.local_cover_available || raw.cover_jpg_id) ? 'catalog' : 'drive';
+  const fallbackOriginal = resolvedNumber !== undefined && resolvedNumber !== null
+    ? `/api/books/${encodeURIComponent(String(resolvedNumber))}/cover-preview?source=${fallbackSource}`
+    : '';
   return {
     id,
-    number: raw.number ?? raw.book_number ?? id,
+    number: resolvedNumber,
     title: raw.title || `Book ${id}`,
     author: raw.author || '',
     folder_name: raw.folder || raw.folder_name || '',
     cover_jpg_id: raw.cover_jpg_id || '',
-    original: raw.original || '',
+    original: raw.original || raw.thumbnail_url || fallbackOriginal,
     winner_selected: Boolean(raw.winner_selected || raw.winner_variant),
     winner_variant: raw.winner_variant || null,
     synced_at: raw.synced_at || new Date().toISOString(),

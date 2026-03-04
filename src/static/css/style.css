@@ -57,6 +57,11 @@ a {
   background: var(--bg);
 }
 
+/* Guard against legacy shared.css `main { margin-left:252px; }` bleed-through. */
+main.content {
+  margin-left: 0 !important;
+}
+
 .sidebar {
   width: 240px;
   background: var(--navy);

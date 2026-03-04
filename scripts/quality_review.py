@@ -3695,6 +3695,76 @@ def _build_catalog_rows_from_drive_covers(*, covers: list[dict[str, Any]]) -> li
     return rows
 
 
+def _normalized_catalog_title_token(value: str) -> str:
+    token = str(value or "").strip().lower()
+    token = re.sub(r"[^a-z0-9\s]+", " ", token)
+    token = re.sub(r"\s+", " ", token).strip()
+    return token
+
+
+def _merge_catalog_rows_with_drive(
+    *,
+    existing_rows: list[dict[str, Any]],
+    covers: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Preserve canonical catalog metadata while refreshing Drive cover ids/names."""
+    rows_by_number: dict[int, dict[str, Any]] = {}
+    title_to_number: dict[str, int] = {}
+    for row in existing_rows:
+        if not isinstance(row, dict):
+            continue
+        number = _safe_int(row.get("number"), 0)
+        if number <= 0:
+            continue
+        copied = dict(row)
+        rows_by_number[number] = copied
+        title_key = _normalized_catalog_title_token(str(copied.get("title", "")))
+        if title_key and title_key not in title_to_number:
+            title_to_number[title_key] = number
+
+    matched = 0
+    unmatched = 0
+    for entry in covers:
+        if not isinstance(entry, dict):
+            continue
+        cover_id = str(entry.get("id", "")).strip()
+        cover_name = str(entry.get("name", "")).strip()
+        drive_kind = str(entry.get("kind", "")).strip().lower()
+        number = _safe_int(entry.get("book_number"), 0)
+        if number <= 0 or number not in rows_by_number:
+            number = 0
+            if cover_name:
+                prefix = re.match(r"^\s*(\d+)\b", cover_name)
+                if prefix:
+                    pref_number = _safe_int(prefix.group(1), 0)
+                    if pref_number in rows_by_number:
+                        number = pref_number
+            if number <= 0 and cover_name:
+                parsed_title, _parsed_author = _title_author_from_drive_name(cover_name)
+                title_key = _normalized_catalog_title_token(parsed_title)
+                number = _safe_int(title_to_number.get(title_key), 0)
+        if number <= 0 or number not in rows_by_number:
+            unmatched += 1
+            continue
+
+        row = rows_by_number[number]
+        if cover_id:
+            row["cover_jpg_id"] = cover_id
+            row["drive_cover_id"] = cover_id
+        if cover_name:
+            row["cover_name"] = cover_name
+        if drive_kind:
+            row["drive_kind"] = drive_kind
+        matched += 1
+
+    ordered_rows = [rows_by_number[key] for key in sorted(rows_by_number.keys())]
+    return ordered_rows, {
+        "matched": int(matched),
+        "unmatched": int(unmatched),
+        "existing": int(len(rows_by_number)),
+    }
+
+
 def _sync_catalog_from_drive(*, runtime: config.Config, force: bool = False, limit: int = 5000) -> dict[str, Any]:
     source_default = (
         str(getattr(runtime, "gdrive_source_folder_id", "") or "").strip()
@@ -3739,9 +3809,23 @@ def _sync_catalog_from_drive(*, runtime: config.Config, force: bool = False, lim
     if not rows:
         raise RuntimeError("No Drive titles found in source folder.")
 
-    catalog_rows = _build_catalog_rows_from_drive_covers(covers=rows)
-    if not catalog_rows:
-        raise RuntimeError("Unable to derive catalog rows from Drive entries.")
+    existing_catalog_rows = _catalog_books_payload(runtime.book_catalog_path)
+    if existing_catalog_rows:
+        catalog_rows, merge_stats = _merge_catalog_rows_with_drive(
+            existing_rows=existing_catalog_rows,
+            covers=rows,
+        )
+        if not catalog_rows:
+            raise RuntimeError("Existing catalog is empty after merge.")
+    else:
+        catalog_rows = _build_catalog_rows_from_drive_covers(covers=rows)
+        merge_stats = {
+            "matched": int(len(catalog_rows)),
+            "unmatched": max(0, int(len(rows) - len(catalog_rows))),
+            "existing": int(len(catalog_rows)),
+        }
+        if not catalog_rows:
+            raise RuntimeError("Unable to derive catalog rows from Drive entries.")
 
     runtime.book_catalog_path.parent.mkdir(parents=True, exist_ok=True)
     safe_json.atomic_write_json(runtime.book_catalog_path, catalog_rows)
@@ -3788,6 +3872,8 @@ def _sync_catalog_from_drive(*, runtime: config.Config, force: bool = False, lim
         "count": len(catalog_rows),
         "drive_total": _safe_int(payload.get("total"), len(catalog_rows)),
         "source_count": len(rows),
+        "matched_drive_entries": int(merge_stats.get("matched", 0)),
+        "unmatched_drive_entries": int(merge_stats.get("unmatched", 0)),
     }
 
 
@@ -11780,13 +11866,17 @@ def _build_variant_download_zip(
 
     cover_jpg: Path | None = None
     cover_pdf: Path | None = None
-    medallion_png: Path | None = None
+    cover_ai: Path | None = None
+    generated_raw_image: Path | None = None
+    source_raw_image: Path | None = _first_local_cover_path(runtime=runtime, book_number=book_number)
 
     if variant_dir is not None:
         jpg_rows = sorted(variant_dir.glob("*.jpg"))
         pdf_rows = sorted(variant_dir.glob("*.pdf"))
+        ai_rows = sorted(variant_dir.glob("*.ai"))
         cover_jpg = jpg_rows[0] if jpg_rows else None
         cover_pdf = pdf_rows[0] if pdf_rows else None
+        cover_ai = ai_rows[0] if ai_rows else None
 
     if cover_jpg is None and isinstance(record, dict):
         cover_jpg = _project_path_if_exists(record.get("composited_path"))
@@ -11799,16 +11889,27 @@ def _build_variant_download_zip(
     if cover_jpg is None:
         raise FileNotFoundError(f"Missing composited JPG for book {book_number} variant {variant}")
 
-    medallion_png = _source_image_for_variant(
+    generated_raw_image = _source_image_for_variant(
         runtime=runtime,
         book_number=book_number,
         variant=variant,
         model=model,
         record=record,
     )
-    if medallion_png is None:
-        # Keep ZIP structure stable even if medallion image is absent.
-        logger.warning("Variant download missing medallion PNG for book %s variant %s", book_number, variant)
+    if generated_raw_image is None and isinstance(record, dict):
+        generated_raw_image = _project_path_if_exists(record.get("image_path"))
+
+    if cover_ai is None and isinstance(record, dict):
+        for key in ("composited_ai_path", "composite_ai_url", "ai_path"):
+            candidate = _project_path_if_exists(record.get(key))
+            if candidate is not None and candidate.exists():
+                cover_ai = candidate
+                break
+
+    if generated_raw_image is None and source_raw_image is not None:
+        generated_raw_image = source_raw_image
+    if source_raw_image is None and generated_raw_image is not None:
+        source_raw_image = generated_raw_image
 
     _, folder_by_book = _catalog_maps(catalog_path=runtime.book_catalog_path)
     folder_name = folder_by_book.get(int(book_number), "")
@@ -11832,15 +11933,40 @@ def _build_variant_download_zip(
         ext="pdf",
         source=False,
     )
-    source_png_name = _descriptive_download_filename(
+    cover_ai_name = _descriptive_download_filename(
         book_number=book_number,
         title=book_title,
         edition=edition,
         model=model_name,
         variant=variant,
-        ext="png",
-        source=True,
+        ext="ai",
+        source=False,
     )
+    generated_raw_name = _descriptive_download_filename(
+        book_number=book_number,
+        title=book_title,
+        edition=edition,
+        model=model_name,
+        variant=variant,
+        ext=(generated_raw_image.suffix.lstrip(".") if generated_raw_image is not None else "png"),
+        source=True,
+    ).replace("_source_", "_generated_raw_")
+    source_raw_name = _descriptive_download_filename(
+        book_number=book_number,
+        title=book_title,
+        edition=edition,
+        model=model_name,
+        variant=variant,
+        ext=(source_raw_image.suffix.lstrip(".") if source_raw_image is not None else "png"),
+        source=True,
+    ).replace("_source_", "_source_raw_")
+
+    composite_jpg_arc = f"composites/{cover_jpg_name}"
+    composite_pdf_arc = f"composites/{cover_pdf_name}"
+    composite_ai_arc = f"composites/{cover_ai_name}" if cover_ai is not None else ""
+    generated_raw_arc = f"source_images/{generated_raw_name}" if generated_raw_image is not None else ""
+    source_raw_arc = f"source_files/{source_raw_name}" if source_raw_image is not None else ""
+
     metadata = {
         "book_number": int(book_number),
         "book_title": book_title,
@@ -11851,6 +11977,11 @@ def _build_variant_download_zip(
         "generation_timestamp": str((record or {}).get("timestamp", "")),
         "catalog": runtime.catalog_id,
         "folder_name": folder_name,
+        "composite_jpg": composite_jpg_arc,
+        "composite_pdf": composite_pdf_arc,
+        "composite_ai": composite_ai_arc,
+        "generated_raw_image": generated_raw_arc,
+        "source_raw_image": source_raw_arc,
     }
 
     downloads_dir = runtime.tmp_dir / "downloads"
@@ -11859,16 +11990,20 @@ def _build_variant_download_zip(
         zip_path = Path(handle.name)
 
     with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.write(cover_jpg, arcname=f"composites/{cover_jpg_name}")
+        archive.write(cover_jpg, arcname=composite_jpg_arc)
         if cover_pdf is not None and cover_pdf.exists():
-            archive.write(cover_pdf, arcname=f"composites/{cover_pdf_name}")
+            archive.write(cover_pdf, arcname=composite_pdf_arc)
         else:
-            archive.writestr(f"composites/{cover_pdf_name}", _jpg_to_pdf_bytes(cover_jpg))
-        if medallion_png is not None and medallion_png.exists():
-            archive.write(medallion_png, arcname=f"source_images/{source_png_name}")
+            archive.writestr(composite_pdf_arc, _jpg_to_pdf_bytes(cover_jpg))
+        if cover_ai is not None and cover_ai.exists():
+            archive.write(cover_ai, arcname=composite_ai_arc)
+        if generated_raw_image is not None and generated_raw_image.exists():
+            archive.write(generated_raw_image, arcname=generated_raw_arc)
+        if source_raw_image is not None and source_raw_image.exists():
+            archive.write(source_raw_image, arcname=source_raw_arc)
         manifest_csv = (
-            "book_number,title,edition,model,variant,composite_jpg,composite_pdf,source_image,quality_score\n"
-            f"{int(book_number)},\"{book_title}\",\"{edition}\",\"{model_name}\",{int(variant)},\"composites/{cover_jpg_name}\",\"composites/{cover_pdf_name}\",\"source_images/{source_png_name}\",{_safe_float((record or {}).get('quality_score'), 0.0):.4f}\n"
+            "book_number,title,edition,model,variant,composite_jpg,composite_pdf,composite_ai,generated_raw_image,source_raw_image,quality_score\n"
+            f"{int(book_number)},\"{book_title}\",\"{edition}\",\"{model_name}\",{int(variant)},\"{composite_jpg_arc}\",\"{composite_pdf_arc}\",\"{composite_ai_arc}\",\"{generated_raw_arc}\",\"{source_raw_arc}\",{_safe_float((record or {}).get('quality_score'), 0.0):.4f}\n"
         )
         archive.writestr("manifest.csv", manifest_csv)
         archive.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
