@@ -53,6 +53,9 @@ FRAME_MASK_PATH = Path(__file__).resolve().parent.parent / "config" / "frame_mas
 FRAME_OVERLAY_DIR = Path(__file__).resolve().parent.parent / "config" / "frame_overlays"
 FRAME_OVERLAY_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "extract_frame_overlays.py"
 VERIFY_COMPOSITE_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "verify_composite.py"
+# Bump this version when the overlay extraction logic changes.
+# This triggers automatic re-extraction of all cached frame overlays.
+FRAME_OVERLAY_VERSION = 2  # v1 = with guard ring (broken), v2 = natural SMask (PROMPT-15)
 
 _GEOMETRY_CACHE: dict[str, dict[str, int]] = {}
 _FRAME_OVERLAY_EXTRACTION_ATTEMPTED = False
@@ -1436,6 +1439,27 @@ def ensure_frame_overlays_exist(*, input_dir: Path, catalog_path: Path) -> None:
 
     FRAME_OVERLAY_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Check version stamp — if outdated, delete all cached overlays to force re-extraction.
+    version_file = FRAME_OVERLAY_DIR / ".overlay_version"
+    current_version = 0
+    if version_file.exists():
+        try:
+            current_version = int(version_file.read_text().strip())
+        except (ValueError, OSError):
+            current_version = 0
+
+    if current_version < FRAME_OVERLAY_VERSION:
+        logger.info(
+            "Frame overlay version changed (%d -> %d); purging cached overlays",
+            current_version,
+            FRAME_OVERLAY_VERSION,
+        )
+        for old_overlay in FRAME_OVERLAY_DIR.glob("*_frame.png"):
+            try:
+                old_overlay.unlink()
+            except OSError:
+                pass
+
     catalog = _load_catalog(catalog_path)
     missing = 0
     expected = 0
@@ -1457,6 +1481,11 @@ def ensure_frame_overlays_exist(*, input_dir: Path, catalog_path: Path) -> None:
         return
     if missing == 0:
         logger.info("Frame overlays already present for all %d covers", expected)
+        # Write version stamp even if nothing was missing (first run after upgrade)
+        try:
+            version_file.write_text(str(FRAME_OVERLAY_VERSION))
+        except OSError:
+            pass
         return
     if not FRAME_OVERLAY_SCRIPT.exists():
         logger.warning("Frame overlay extraction script missing: %s", FRAME_OVERLAY_SCRIPT)
@@ -1477,19 +1506,22 @@ def ensure_frame_overlays_exist(*, input_dir: Path, catalog_path: Path) -> None:
                 "--frame-mask",
                 str(FRAME_MASK_PATH),
             ],
-            check=False,
-            timeout=1200,
             capture_output=True,
             text=True,
+            timeout=600,
         )
-        if proc.stdout.strip():
-            logger.info(proc.stdout.strip())
-        if proc.returncode != 0:
-            logger.warning("Frame overlay extraction exited with code %s", proc.returncode)
-            if proc.stderr.strip():
-                logger.warning(proc.stderr.strip())
+        if proc.returncode == 0:
+            logger.info("Frame overlay extraction succeeded: %s", proc.stdout.strip())
+        else:
+            logger.warning("Frame overlay extraction exited %d: %s", proc.returncode, proc.stderr.strip())
     except Exception as exc:
-        logger.warning("Failed to run frame overlay extraction: %s", exc)
+        logger.warning("Frame overlay extraction failed: %s", exc)
+
+    # Write version stamp after successful extraction
+    try:
+        version_file.write_text(str(FRAME_OVERLAY_VERSION))
+    except OSError:
+        pass
 
 
 def _load_frame_mask(size: tuple[int, int]) -> Image.Image | None:
