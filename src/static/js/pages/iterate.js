@@ -403,16 +403,17 @@ function renderModelCards({ models, selectedIds, activeFilter, searchText }) {
 window.Pages.iterate = {
   async render() {
     const content = document.getElementById('content');
+    const catalogId = 'classics';
     let books = DB.dbGetAll('books');
-    if (!books.length) books = await DB.loadBooks('classics');
+    if (!books.length) books = await DB.loadBooks(catalogId);
     if (!books.length) {
       try {
-        books = await Drive.syncCatalog();
+        books = await Drive.syncCatalog({ catalog: catalogId, force: true, limit: 20000 });
       } catch {
         // no-op
       }
     }
-    await DB.loadPrompts('classics');
+    await DB.loadPrompts(catalogId);
 
     const prompts = DB.dbGetAll('prompts');
     const options = books
@@ -534,8 +535,11 @@ window.Pages.iterate = {
       syncBtn.disabled = true;
       syncBtn.textContent = 'Syncing...';
       try {
-        const synced = await Drive.syncCatalog();
-        const sorted = [...(Array.isArray(synced) ? synced : [])]
+        const synced = await Drive.syncCatalog({ catalog: catalogId, force: true, limit: 20000 });
+        const refreshed = await DB.loadBooks(catalogId);
+        const summary = Drive.getLastCatalogSyncSummary();
+        const rows = Array.isArray(refreshed) && refreshed.length ? refreshed : synced;
+        const sorted = [...(Array.isArray(rows) ? rows : [])]
           .sort((a, b) => Number(a.number || 0) - Number(b.number || 0));
         const current = Number(selectEl?.value || 0);
         if (selectEl) {
@@ -544,11 +548,24 @@ window.Pages.iterate = {
             .join('');
           if (current > 0 && sorted.some((book) => Number(book.id) === current)) {
             selectEl.value = String(current);
+          } else if (current > 0) {
+            selectEl.value = '';
+            _selectedBookId = null;
           }
         }
-        if (syncStatus) syncStatus.textContent = `${sorted.length} books loaded (catalog).`;
+        const driveTotalRaw = Number(summary.drive_total || summary.source_count || 0);
+        const driveTotal = Number.isFinite(driveTotalRaw) && driveTotalRaw > 0 ? Math.round(driveTotalRaw) : 0;
+        if (syncStatus) {
+          syncStatus.textContent = driveTotal > 0
+            ? `${sorted.length} books loaded (catalog). Drive found: ${driveTotal}.`
+            : `${sorted.length} books loaded (catalog).`;
+        }
         updateHeader();
-        Toast.success(`Catalog synced: ${sorted.length} books`);
+        if (driveTotal > 0) {
+          Toast.success(`Catalog synced: ${sorted.length} books (Drive found ${driveTotal})`);
+        } else {
+          Toast.success(`Catalog synced: ${sorted.length} books`);
+        }
       } catch (err) {
         if (syncStatus) syncStatus.textContent = 'Sync failed';
         Toast.error(`Sync failed: ${err.message || err}`);

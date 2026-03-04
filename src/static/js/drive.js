@@ -1,4 +1,6 @@
 window.Drive = {
+  _lastCatalogSyncSummary: {},
+
   async catalogCacheStatus() {
     try {
       const resp = await fetch('/cgi-bin/catalog.py/status', { cache: 'no-store' });
@@ -45,21 +47,45 @@ window.Drive = {
     return DB.loadBooks('classics');
   },
 
-  async syncCatalog(onProgress) {
-    if (typeof onProgress === 'function') onProgress({ step: 'start' });
-    const resp = await fetch('/api/drive/catalog-sync?catalog=classics', {
+  async syncCatalog(onProgress, options = {}) {
+    let progressCb = onProgress;
+    let opts = options;
+    if (onProgress && typeof onProgress === 'object' && !Array.isArray(onProgress)) {
+      progressCb = null;
+      opts = onProgress;
+    }
+    const catalog = String(opts.catalog || 'classics').trim() || 'classics';
+    const rawLimit = Number(opts.limit || 20000);
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(50000, Math.round(rawLimit))) : 20000;
+    const force = opts.force === undefined ? true : Boolean(opts.force);
+    if (typeof progressCb === 'function') progressCb({ step: 'start', catalog });
+    const resp = await fetch(`/api/drive/catalog-sync?catalog=${encodeURIComponent(catalog)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ force: true, limit: 5000 }),
+      body: JSON.stringify({ force, limit }),
     });
     if (!resp.ok) {
       const text = await resp.text();
       throw new Error(text || `Catalog sync failed (HTTP ${resp.status})`);
     }
-    await resp.json();
-    const books = await DB.loadBooks('classics');
-    if (typeof onProgress === 'function') onProgress({ step: 'done', count: books.length });
+    const summary = await resp.json();
+    this._lastCatalogSyncSummary = (summary && typeof summary === 'object') ? summary : {};
+    const books = await DB.loadBooks(catalog);
+    if (typeof progressCb === 'function') {
+      progressCb({
+        step: 'done',
+        count: books.length,
+        catalog,
+        summary: this.getLastCatalogSyncSummary(),
+      });
+    }
     return books;
+  },
+
+  getLastCatalogSyncSummary() {
+    const summary = this._lastCatalogSyncSummary;
+    if (!summary || typeof summary !== 'object') return {};
+    return { ...summary };
   },
 
   getDriveThumbnailUrl(fileId, _apiKey, size = 280) {

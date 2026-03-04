@@ -3707,9 +3707,11 @@ def _merge_catalog_rows_with_drive(
     existing_rows: list[dict[str, Any]],
     covers: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Preserve canonical catalog metadata while refreshing Drive cover ids/names."""
+    """Preserve catalog metadata, refresh Drive ids, and append newly discovered books."""
     rows_by_number: dict[int, dict[str, Any]] = {}
     title_to_number: dict[str, int] = {}
+    used_folders: set[str] = set()
+    existing_count = 0
     for row in existing_rows:
         if not isinstance(row, dict):
             continue
@@ -3718,36 +3720,15 @@ def _merge_catalog_rows_with_drive(
             continue
         copied = dict(row)
         rows_by_number[number] = copied
+        existing_count += 1
+        folder_name = str(copied.get("folder_name", "")).strip()
+        if folder_name:
+            used_folders.add(folder_name)
         title_key = _normalized_catalog_title_token(str(copied.get("title", "")))
         if title_key and title_key not in title_to_number:
             title_to_number[title_key] = number
 
-    matched = 0
-    unmatched = 0
-    for entry in covers:
-        if not isinstance(entry, dict):
-            continue
-        cover_id = str(entry.get("id", "")).strip()
-        cover_name = str(entry.get("name", "")).strip()
-        drive_kind = str(entry.get("kind", "")).strip().lower()
-        number = _safe_int(entry.get("book_number"), 0)
-        if number <= 0 or number not in rows_by_number:
-            number = 0
-            if cover_name:
-                prefix = re.match(r"^\s*(\d+)\b", cover_name)
-                if prefix:
-                    pref_number = _safe_int(prefix.group(1), 0)
-                    if pref_number in rows_by_number:
-                        number = pref_number
-            if number <= 0 and cover_name:
-                parsed_title, _parsed_author = _title_author_from_drive_name(cover_name)
-                title_key = _normalized_catalog_title_token(parsed_title)
-                number = _safe_int(title_to_number.get(title_key), 0)
-        if number <= 0 or number not in rows_by_number:
-            unmatched += 1
-            continue
-
-        row = rows_by_number[number]
+    def _apply_drive_metadata(row: dict[str, Any], *, cover_id: str, cover_name: str, drive_kind: str) -> None:
         if cover_id:
             row["cover_jpg_id"] = cover_id
             row["drive_cover_id"] = cover_id
@@ -3755,13 +3736,97 @@ def _merge_catalog_rows_with_drive(
             row["cover_name"] = cover_name
         if drive_kind:
             row["drive_kind"] = drive_kind
-        matched += 1
+
+    matched = 0
+    unmatched = 0
+    added = 0
+    next_number = max(rows_by_number.keys(), default=0) + 1
+    for entry in covers:
+        if not isinstance(entry, dict):
+            unmatched += 1
+            continue
+        cover_id = str(entry.get("id", "")).strip()
+        cover_name = str(entry.get("name", "")).strip()
+        drive_kind = str(entry.get("kind", "")).strip().lower()
+        if not cover_name and not cover_id:
+            unmatched += 1
+            continue
+        mapped_title = str(entry.get("title", "")).strip()
+        mapped_author = str(entry.get("author", "")).strip()
+
+        number = _safe_int(entry.get("book_number"), 0)
+        parsed_title = ""
+        parsed_author = ""
+        if number <= 0 or number not in rows_by_number:
+            number = 0
+            if cover_name:
+                prefix = re.match(r"^\s*(\d+)\b", cover_name)
+                if prefix:
+                    pref_number = _safe_int(prefix.group(1), 0)
+                    if pref_number > 0:
+                        number = pref_number
+            if number <= 0 and cover_name:
+                parsed_title, parsed_author = _title_author_from_drive_name(cover_name)
+                title_key = _normalized_catalog_title_token(parsed_title)
+                number = _safe_int(title_to_number.get(title_key), 0)
+        if not parsed_title and cover_name:
+            parsed_title, parsed_author = _title_author_from_drive_name(cover_name)
+        title_key = _normalized_catalog_title_token(parsed_title)
+
+        if number > 0 and number in rows_by_number:
+            _apply_drive_metadata(rows_by_number[number], cover_id=cover_id, cover_name=cover_name, drive_kind=drive_kind)
+            matched += 1
+            continue
+
+        # Add a new row for a newly discovered Drive item.
+        normalized_parsed = parsed_title.strip().lower()
+        normalized_mapped = mapped_title.strip().lower()
+        title = parsed_title
+        if not title or normalized_parsed == "untitled":
+            title = mapped_title or title
+        elif re.fullmatch(r"book\s+\d+", normalized_parsed) and mapped_title and normalized_mapped != "untitled":
+            title = mapped_title
+        title = (title or "").strip() or "Untitled"
+        author = (parsed_author or mapped_author or "").strip()
+
+        if number <= 0:
+            while next_number in rows_by_number:
+                next_number += 1
+            number = next_number
+        while number in rows_by_number:
+            # If a numeric collision happens, keep rows unique and stable.
+            number += 1
+        next_number = max(next_number, number + 1)
+
+        folder_seed = f"{number}. {title}" + (f" - {author}" if author else "")
+        folder_name = f"{folder_seed} copy"
+        suffix = 2
+        while folder_name in used_folders:
+            folder_name = f"{folder_seed} copy {suffix}"
+            suffix += 1
+        used_folders.add(folder_name)
+
+        file_base = f"{title} - {author}".strip(" -") or title or f"Book {number}"
+        row = {
+            "number": number,
+            "title": title or f"Book {number}",
+            "author": author,
+            "folder_name": folder_name,
+            "file_base": file_base,
+            "formats": ["ai", "jpg", "pdf"],
+        }
+        _apply_drive_metadata(row, cover_id=cover_id, cover_name=cover_name, drive_kind=drive_kind)
+        rows_by_number[number] = row
+        if title_key and title_key not in title_to_number:
+            title_to_number[title_key] = number
+        added += 1
 
     ordered_rows = [rows_by_number[key] for key in sorted(rows_by_number.keys())]
     return ordered_rows, {
         "matched": int(matched),
         "unmatched": int(unmatched),
-        "existing": int(len(rows_by_number)),
+        "existing": int(existing_count),
+        "added": int(added),
     }
 
 
@@ -3794,7 +3859,7 @@ def _sync_catalog_from_drive(*, runtime: config.Config, force: bool = False, lim
         input_folder_id=input_folder_id,
         credentials_path=credentials_path,
         catalog_path=runtime.book_catalog_path,
-        limit=max(1, min(10000, int(limit or 5000))),
+        limit=max(1, min(50000, int(limit or 5000))),
     )
     if not isinstance(payload, dict):
         raise RuntimeError("Unexpected Drive sync response.")
@@ -3874,6 +3939,7 @@ def _sync_catalog_from_drive(*, runtime: config.Config, force: bool = False, lim
         "source_count": len(rows),
         "matched_drive_entries": int(merge_stats.get("matched", 0)),
         "unmatched_drive_entries": int(merge_stats.get("unmatched", 0)),
+        "added_drive_entries": int(merge_stats.get("added", 0)),
     }
 
 
@@ -6592,7 +6658,7 @@ def serve_review_webapp(
                     safe_json.atomic_write_json(review_data_path, persisted_payload)
                 return _cache_and_send(payload)
             if path == "/api/iterate-data":
-                limit, offset = _parse_pagination(query, default_limit=25, max_limit=5000)
+                limit, offset = _parse_pagination(query, default_limit=25, max_limit=50000)
                 sort, order = _normalize_sort_order(query)
                 filters = _books_filters_from_query(query)
                 write_iterate_data(runtime=runtime_req)
@@ -7261,7 +7327,7 @@ def serve_review_webapp(
                     summary = _sync_catalog_from_drive(
                         runtime=runtime_req,
                         force=force,
-                        limit=max(1, min(10000, limit)),
+                        limit=max(1, min(50000, limit)),
                     )
                 except Exception as exc:
                     return self._send_error(
