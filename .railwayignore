@@ -12,6 +12,8 @@
 !src/**
 !scripts/
 !scripts/quality_review.py
+!scripts/extract_frame_overlays.py
+!scripts/verify_composite.py
 !config/
 !config/catalogs.json
 !config/book_catalog.json
