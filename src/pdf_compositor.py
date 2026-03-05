@@ -1,4 +1,13 @@
-"""PDF-based compositor that preserves ornamental frame pixels via source SMask."""
+"""PDF-based compositor – three-layer approach (navy canvas → circular art → frame overlay).
+
+Replaces the legacy SMask-blending compositor with Tim's proven layering model:
+  1. Rasterise the source PDF cover to RGB at 300 DPI.
+  2. Build a frame overlay from that raster (punch a transparent circle in the centre).
+  3. Create a solid navy canvas.
+  4. Clip the AI-generated art to a circle and paste it onto the navy canvas.
+  5. Paste the frame overlay on top – the frame naturally covers the art-edge seam.
+  6. Write the result as JPG.  Optionally inject CMYK back into the PDF stream.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 
 try:
     import fitz  # type: ignore
@@ -33,32 +42,27 @@ except ModuleNotFoundError:  # pragma: no cover
 
 logger = get_logger(__name__)
 
-SMASK_FRAME_MIN = 5
-SMASK_FRAME_MAX = 250
+# ---------------------------------------------------------------------------
+# Geometry constants (proven in POC)
+# ---------------------------------------------------------------------------
 EXPECTED_DPI = 300
-EXPECTED_JPG_SIZE = (3784, 2777)
-# Trim generated art edges before fitting into the medallion image stream.
-# This reduces border-like artifacts synthesized near image boundaries.
+EXPECTED_JPG_SIZE = (3784, 2777)          # full cover w x h
+MEDALLION_CENTER = (2864, 1620)           # centre of the circular medallion
+FRAME_HOLE_RADIUS = 540                   # inner edge of frame ring (transparent hole)
+ART_CLIP_RADIUS = 600                     # slightly larger - 60 px overlap hidden by frame
+NAVY_FILL_RGB = (21, 32, 76)             # background colour matching original cover
+
+# Art pre-processing (kept from previous version)
 AI_ART_EDGE_TRIM_RATIO = 0.08
-# Auto-trim uniform outer margins (for example white/cream/black pillarbox bars)
-# that some generators return around the actual artwork.
 AI_UNIFORM_MARGIN_MAX_TRIM_RATIO = 0.22
 AI_UNIFORM_MARGIN_COLOR_TOL = 26.0
 AI_UNIFORM_MARGIN_STD_MAX = 22.0
 AI_UNIFORM_MARGIN_MATCH_RATIO = 0.92
-# Feather the first non-frame alpha band so high-contrast art edges do not
-# read like ornamental side cutouts against semi-transparent frame details.
-ART_EDGE_BLEND_MIN = SMASK_FRAME_MAX + 1  # 251
-ART_EDGE_BLEND_MAX = 254
-# Additional radial feather toward the medallion rim to suppress decorative
-# edge buildup from generated art while preserving core scene content.
-RADIAL_EDGE_BLEND_START = 0.84
-RADIAL_EDGE_BLEND_END = 0.98
-ART_EDGE_BLACK_SUPPRESS_RADIAL_MIN = 0.82
-ART_EDGE_BLACK_RGB_MAX = 72
-ART_EDGE_BLACK_RGB_DELTA_MAX = 40
 
 
+# ---------------------------------------------------------------------------
+# Utility: trim uniform margins from generated art
+# ---------------------------------------------------------------------------
 def _trim_uniform_margins(image: Image.Image) -> Image.Image:
     rgb = image.convert("RGB")
     arr = np.asarray(rgb, dtype=np.float32)
@@ -115,6 +119,9 @@ def _trim_uniform_margins(image: Image.Image) -> Image.Image:
     return rgb.crop((left, top, w - right, h - bottom))
 
 
+# ---------------------------------------------------------------------------
+# CMYK helpers (kept for optional PDF stream write-back)
+# ---------------------------------------------------------------------------
 def rgb_to_cmyk(rgb_array: np.ndarray) -> np.ndarray:
     """Convert RGB uint8 array (h,w,3) to CMYK uint8 (h,w,4)."""
     rgb = np.asarray(rgb_array, dtype=np.uint8)
@@ -147,6 +154,9 @@ def rgb_to_cmyk(rgb_array: np.ndarray) -> np.ndarray:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Catalog helpers
+# ---------------------------------------------------------------------------
 def _load_catalog(path: Path) -> list[dict[str, Any]]:
     payload = safe_json.load_json(path, [])
     if isinstance(payload, list):
@@ -184,6 +194,9 @@ def find_source_pdf_for_book(*, input_dir: Path, book_number: int, catalog_path:
     return None
 
 
+# ---------------------------------------------------------------------------
+# PDF / rendering helpers
+# ---------------------------------------------------------------------------
 def _inflate_stream_bytes(stream_obj: Any, *, expected_len: int) -> bytes:
     raw = bytes(stream_obj.read_raw_bytes())
     data: bytes
@@ -217,6 +230,132 @@ def _resolve_im0(page: Any) -> Any:
     raise ValueError("No image XObject with SMask found (expected /Im0)")
 
 
+def _render_pdf_to_jpg(*, source_pdf: Path, output_jpg: Path, dpi: int = EXPECTED_DPI) -> None:
+    output_jpg.parent.mkdir(parents=True, exist_ok=True)
+    doc = fitz.open(str(source_pdf))
+    try:
+        if doc.page_count <= 0:
+            raise ValueError("PDF has no pages")
+        page = doc[0]
+        scale = float(dpi) / 72.0
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        if image.size != EXPECTED_JPG_SIZE:
+            image = image.resize(EXPECTED_JPG_SIZE, Image.LANCZOS)
+        image.save(output_jpg, format="JPEG", quality=100, subsampling=0, dpi=(dpi, dpi))
+    finally:
+        doc.close()
+
+
+def _rasterise_pdf_page(source_pdf: Path, dpi: int = EXPECTED_DPI) -> Image.Image:
+    """Rasterise page 0 of a PDF to an RGB PIL Image at *dpi* resolution."""
+    doc = fitz.open(str(source_pdf))
+    try:
+        if doc.page_count <= 0:
+            raise ValueError("PDF has no pages")
+        page = doc[0]
+        scale = float(dpi) / 72.0
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        if image.size != EXPECTED_JPG_SIZE:
+            image = image.resize(EXPECTED_JPG_SIZE, Image.LANCZOS)
+        return image
+    finally:
+        doc.close()
+
+
+# ---------------------------------------------------------------------------
+# Three-layer compositing helpers
+# ---------------------------------------------------------------------------
+def _build_frame_overlay(cover_rgb: Image.Image) -> Image.Image:
+    """Create an RGBA frame overlay from the original cover raster.
+
+    Everything outside the inner medallion ring is kept opaque (the frame,
+    ornaments, text, spine, etc.).  The inside of the ring is made fully
+    transparent so the art layer beneath shows through.
+    """
+    w, h = cover_rgb.size
+    cx, cy = MEDALLION_CENTER
+
+    # Start with an RGBA copy of the full cover.
+    overlay = cover_rgb.copy().convert("RGBA")
+
+    # Create a mask: white = keep, black = transparent (the hole).
+    mask = Image.new("L", (w, h), 255)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse(
+        [cx - FRAME_HOLE_RADIUS, cy - FRAME_HOLE_RADIUS,
+         cx + FRAME_HOLE_RADIUS, cy + FRAME_HOLE_RADIUS],
+        fill=0,
+    )
+    overlay.putalpha(mask)
+    return overlay
+
+
+def _load_and_clip_art(ai_art_path: Path) -> Image.Image:
+    """Load AI art, trim margins, edge-trim, and clip to a circle of ART_CLIP_RADIUS.
+
+    Returns an RGBA image of size (2*ART_CLIP_RADIUS, 2*ART_CLIP_RADIUS) with
+    the circular art and transparent corners.
+    """
+    with Image.open(ai_art_path) as source:
+        rgb_source = _trim_uniform_margins(source)
+        if AI_ART_EDGE_TRIM_RATIO > 0:
+            src_w, src_h = rgb_source.size
+            trim_x = int(round(src_w * AI_ART_EDGE_TRIM_RATIO / 2.0))
+            trim_y = int(round(src_h * AI_ART_EDGE_TRIM_RATIO / 2.0))
+            if (src_w - 2 * trim_x) >= 64 and (src_h - 2 * trim_y) >= 64:
+                rgb_source = rgb_source.crop((trim_x, trim_y, src_w - trim_x, src_h - trim_y))
+
+    diameter = ART_CLIP_RADIUS * 2
+    art_resized = ImageOps.fit(
+        rgb_source,
+        (diameter, diameter),
+        method=Image.LANCZOS,
+        centering=(0.5, 0.5),
+    )
+    art_rgba = art_resized.convert("RGBA")
+
+    # Create circular mask.
+    circle_mask = Image.new("L", (diameter, diameter), 0)
+    draw = ImageDraw.Draw(circle_mask)
+    draw.ellipse([0, 0, diameter - 1, diameter - 1], fill=255)
+    art_rgba.putalpha(circle_mask)
+    return art_rgba
+
+
+def _composite_three_layers(
+    cover_rgb: Image.Image,
+    ai_art_path: Path,
+) -> Image.Image:
+    """Compose the three layers and return the final RGB image.
+
+    Layer 1 (bottom): solid navy canvas.
+    Layer 2 (middle): AI art clipped to circle at medallion centre.
+    Layer 3 (top):    frame overlay from the original cover.
+    """
+    w, h = cover_rgb.size
+    cx, cy = MEDALLION_CENTER
+
+    # Layer 1: navy canvas
+    canvas = Image.new("RGB", (w, h), NAVY_FILL_RGB)
+
+    # Layer 2: circular art
+    art_circle = _load_and_clip_art(ai_art_path)
+    art_x = cx - ART_CLIP_RADIUS
+    art_y = cy - ART_CLIP_RADIUS
+    canvas.paste(art_circle, (art_x, art_y), art_circle)
+
+    # Layer 3: frame overlay
+    frame_overlay = _build_frame_overlay(cover_rgb)
+    canvas.paste(frame_overlay, (0, 0), frame_overlay)
+
+    return canvas
+
+
+# ---------------------------------------------------------------------------
+# Legacy helper kept for backward-compat callers that still expect CMYK art
+# ---------------------------------------------------------------------------
 def _load_ai_art_cmyk(*, ai_art_path: Path, width: int, height: int) -> np.ndarray:
     with Image.open(ai_art_path) as source:
         rgb_source = _trim_uniform_margins(source)
@@ -236,23 +375,9 @@ def _load_ai_art_cmyk(*, ai_art_path: Path, width: int, height: int) -> np.ndarr
     return rgb_to_cmyk(rgb_arr)
 
 
-def _render_pdf_to_jpg(*, source_pdf: Path, output_jpg: Path, dpi: int = EXPECTED_DPI) -> None:
-    output_jpg.parent.mkdir(parents=True, exist_ok=True)
-    doc = fitz.open(str(source_pdf))
-    try:
-        if doc.page_count <= 0:
-            raise ValueError("PDF has no pages")
-        page = doc[0]
-        scale = float(dpi) / 72.0
-        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
-        image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-        if image.size != EXPECTED_JPG_SIZE:
-            image = image.resize(EXPECTED_JPG_SIZE, Image.LANCZOS)
-        image.save(output_jpg, format="JPEG", quality=100, subsampling=0, dpi=(dpi, dpi))
-    finally:
-        doc.close()
-
-
+# ---------------------------------------------------------------------------
+# Main entry: composite_cover_pdf  (THREE-LAYER APPROACH)
+# ---------------------------------------------------------------------------
 def composite_cover_pdf(
     source_pdf_path: str,
     ai_art_path: str,
@@ -260,7 +385,14 @@ def composite_cover_pdf(
     output_jpg_path: str,
     output_ai_path: str | None = None,
 ) -> dict[str, Any]:
-    """Replace PDF medallion illustration while preserving frame pixels + SMask."""
+    """Replace PDF medallion illustration using the three-layer compositing model.
+
+    1. Rasterise the original cover from the source PDF.
+    2. Build a frame overlay (original cover with transparent centre hole).
+    3. Create navy canvas, paste circular AI art, paste frame on top.
+    4. Save as JPG (primary webapp output).
+    5. Inject CMYK composite back into the PDF stream for PDF/AI output.
+    """
     source_pdf = Path(source_pdf_path)
     art_path = Path(ai_art_path)
     output_pdf = Path(output_pdf_path)
@@ -276,6 +408,27 @@ def composite_cover_pdf(
     output_jpg.parent.mkdir(parents=True, exist_ok=True)
     output_ai.parent.mkdir(parents=True, exist_ok=True)
 
+    # --- Step 1: Rasterise the original cover from the source PDF ---
+    cover_rgb = _rasterise_pdf_page(source_pdf, dpi=EXPECTED_DPI)
+    logger.info(
+        "Rasterised source PDF",
+        extra={"source": str(source_pdf), "size": cover_rgb.size},
+    )
+
+    # --- Step 2-4: Three-layer composite ---
+    final_rgb = _composite_three_layers(cover_rgb, art_path)
+
+    # --- Step 5: Save JPG ---
+    final_rgb.save(
+        output_jpg,
+        format="JPEG",
+        quality=100,
+        subsampling=0,
+        dpi=(EXPECTED_DPI, EXPECTED_DPI),
+    )
+    logger.info("Saved composite JPG", extra={"path": str(output_jpg)})
+
+    # --- Step 6: Write composite back into PDF stream ---
     pdf = pikepdf.Pdf.open(str(source_pdf))
     try:
         if len(pdf.pages) == 0:
@@ -285,88 +438,12 @@ def composite_cover_pdf(
 
         width = int(im0.get("/Width"))
         height = int(im0.get("/Height"))
-        if width <= 0 or height <= 0:
-            raise ValueError("Invalid Im0 dimensions")
 
-        raw_cmyk = _inflate_stream_bytes(im0, expected_len=width * height * 4)
-        source_cmyk = np.frombuffer(raw_cmyk, dtype=np.uint8).reshape(height, width, 4)
+        # Resize our RGB composite to match the PDF Im0 dimensions exactly.
+        pdf_rgb = final_rgb.resize((width, height), Image.LANCZOS)
+        cmyk_arr = rgb_to_cmyk(np.asarray(pdf_rgb, dtype=np.uint8))
 
-        smask_obj = im0.get("/SMask")
-        if smask_obj is None:
-            raise ValueError("Im0 is missing /SMask")
-        smask_raw = _inflate_stream_bytes(smask_obj, expected_len=width * height)
-        smask = np.frombuffer(smask_raw, dtype=np.uint8).reshape(height, width)
-
-        ai_cmyk = _load_ai_art_cmyk(ai_art_path=art_path, width=width, height=height)
-
-        # Frame protection: zero AI pixels outside art-safe SMask zone before composite.
-        ai_cmyk[smask < SMASK_FRAME_MIN] = [0, 0, 0, 0]
-        frame_zone_mask = (smask >= SMASK_FRAME_MIN) & (smask <= SMASK_FRAME_MAX)
-        ai_cmyk[frame_zone_mask] = [0, 0, 0, 0]
-
-        composite = ai_cmyk.copy()
-        # Preserve source CMYK for all non-opaque SMask pixels (ring + antialiasing).
-        preserve_mask = smask <= SMASK_FRAME_MAX
-        composite[preserve_mask] = source_cmyk[preserve_mask]
-        blend_mask = (smask >= ART_EDGE_BLEND_MIN) & (smask <= ART_EDGE_BLEND_MAX)
-        if np.any(blend_mask):
-            blend_span = max(1.0, float(ART_EDGE_BLEND_MAX - ART_EDGE_BLEND_MIN))
-            edge_alpha = (
-                (smask[blend_mask].astype(np.float32) - float(ART_EDGE_BLEND_MIN)) / blend_span
-            ).reshape(-1, 1)
-            edge_alpha = np.clip(edge_alpha, 0.0, 1.0)
-            src_edge = source_cmyk[blend_mask].astype(np.float32)
-            ai_edge = composite[blend_mask].astype(np.float32)
-            composite[blend_mask] = np.clip(
-                (src_edge * (1.0 - edge_alpha)) + (ai_edge * edge_alpha),
-                0.0,
-                255.0,
-            ).astype(np.uint8)
-        radial_mask_base = smask > SMASK_FRAME_MAX
-        if np.any(radial_mask_base):
-            yy, xx = np.ogrid[:height, :width]
-            cx = (width - 1) / 2.0
-            cy = (height - 1) / 2.0
-            rx = max(cx, 1.0)
-            ry = max(cy, 1.0)
-            radial = np.sqrt(((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2)
-            radial_mask = radial_mask_base & (radial >= RADIAL_EDGE_BLEND_START)
-            if np.any(radial_mask):
-                radial_span = max(1e-6, float(RADIAL_EDGE_BLEND_END - RADIAL_EDGE_BLEND_START))
-                radial_alpha = np.clip(
-                    (radial[radial_mask].astype(np.float32) - float(RADIAL_EDGE_BLEND_START)) / radial_span,
-                    0.0,
-                    1.0,
-                ).reshape(-1, 1)
-                src_radial = source_cmyk[radial_mask].astype(np.float32)
-                ai_radial = composite[radial_mask].astype(np.float32)
-                composite[radial_mask] = np.clip(
-                    (ai_radial * (1.0 - radial_alpha)) + (src_radial * radial_alpha),
-                    0.0,
-                    255.0,
-                ).astype(np.uint8)
-            # Suppress near-black edge artifacts in art zone that can read like
-            # side ornaments when seen through fine frame cutouts.
-            rgb_comp = (
-                np.stack(
-                    [
-                        (255 - composite[:, :, 0].astype(np.float32)) * (255 - composite[:, :, 3].astype(np.float32)) / 255.0,
-                        (255 - composite[:, :, 1].astype(np.float32)) * (255 - composite[:, :, 3].astype(np.float32)) / 255.0,
-                        (255 - composite[:, :, 2].astype(np.float32)) * (255 - composite[:, :, 3].astype(np.float32)) / 255.0,
-                    ],
-                    axis=-1,
-                )
-                .clip(0.0, 255.0)
-                .astype(np.uint8)
-            )
-            max_rgb = rgb_comp.max(axis=2)
-            min_rgb = rgb_comp.min(axis=2)
-            near_black = (max_rgb <= ART_EDGE_BLACK_RGB_MAX) & ((max_rgb - min_rgb) <= ART_EDGE_BLACK_RGB_DELTA_MAX)
-            black_edge_mask = radial_mask_base & (radial >= ART_EDGE_BLACK_SUPPRESS_RADIAL_MIN) & near_black
-            if np.any(black_edge_mask):
-                composite[black_edge_mask] = source_cmyk[black_edge_mask]
-
-        encoded = zlib.compress(composite.tobytes())
+        encoded = zlib.compress(cmyk_arr.tobytes())
         smask_ref = im0.get("/SMask")
         im0.write(encoded, filter=pikepdf.Name("/FlateDecode"))
         if smask_ref is not None:
@@ -378,8 +455,11 @@ def composite_cover_pdf(
     finally:
         pdf.close()
 
-    _render_pdf_to_jpg(source_pdf=output_pdf, output_jpg=output_jpg, dpi=EXPECTED_DPI)
     shutil.copyfile(output_pdf, output_ai)
+    logger.info(
+        "Saved composite PDF + AI",
+        extra={"pdf": str(output_pdf), "ai": str(output_ai)},
+    )
 
     return {
         "success": True,
@@ -387,13 +467,16 @@ def composite_cover_pdf(
         "output_pdf": str(output_pdf),
         "output_jpg": str(output_jpg),
         "output_ai": str(output_ai),
-        "center_x": 2864,
-        "center_y": 1620,
-        "image_width": int(width),
-        "image_height": int(height),
+        "center_x": MEDALLION_CENTER[0],
+        "center_y": MEDALLION_CENTER[1],
+        "image_width": int(cover_rgb.size[0]),
+        "image_height": int(cover_rgb.size[1]),
     }
 
 
+# ---------------------------------------------------------------------------
+# Batch: composite all variants for a book
+# ---------------------------------------------------------------------------
 def _parse_variant(stem: str) -> int:
     if "variant_" not in stem:
         return 0
