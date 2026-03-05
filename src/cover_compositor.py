@@ -49,8 +49,9 @@ TEMPLATE_PUNCH_RADIUS = 465
 TEMPLATE_FALLBACK_PUNCH_RADIUS = 420
 TEMPLATE_SUPERSAMPLE_FACTOR = 4
 ART_BLEED_PX = 140
-ART_TARGET_OUTER_RADIUS = 700
-ART_OUTER_INSET_PX = 8
+FRAME_HOLE_RADIUS = 540
+ART_CLIP_RADIUS = 600
+NAVY_FILL_RGB = (21, 32, 76)
 FRAME_MASK_PATH = Path(__file__).resolve().parent.parent / "config" / "frame_mask.png"
 FRAME_OVERLAY_DIR = Path(__file__).resolve().parent.parent / "config" / "frame_overlays"
 FRAME_OVERLAY_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "extract_frame_overlays.py"
@@ -776,13 +777,8 @@ def composite_single(
 
         canvas = Image.new("RGBA", (cover_w, cover_h), (*fill_rgb, 255))
 
-        # Keep generated art beneath the medallion and extend it close to the
-        # medallion outside edge so transparent scrollwork gaps never reveal base fill.
-        art_radius = max(
-            int(FALLBACK_RADIUS + ART_BLEED_PX),
-            int(ART_TARGET_OUTER_RADIUS - ART_OUTER_INSET_PX),
-        )
-        art_diameter = int(art_radius * 2)
+        art_radius = ART_CLIP_RADIUS  # 600
+        art_diameter = art_radius * 2  # 1200
         art = _simple_center_crop(illustration)
         art = art.resize((art_diameter, art_diameter), Image.LANCZOS)
         art = _color_match_illustration(cover=cover, illustration=art, region=region_obj)
@@ -792,7 +788,7 @@ def composite_single(
         art = art_bg
 
         art_layer = Image.new("RGBA", (cover_w, cover_h), (0, 0, 0, 0))
-        art_layer.paste(art, (center_x - art_diameter // 2, center_y - art_diameter // 2))
+        art_layer.paste(art, (center_x - art_radius, center_y - art_radius))
 
         clip_radius = art_radius
         clip_mask = _build_circle_feather_mask(
@@ -1494,55 +1490,47 @@ def _build_fallback_frame_overlay(
     center_y: int,
     punch_radius: int,
 ) -> Image.Image:
-    """Build RGBA overlay from cover + frame_mask.png (fallback path)."""
+    """Build RGBA frame overlay using simple layering.
+
+    1. Copy the original cover
+    2. Paint a navy circle at medallion center to erase old illustration
+    3. Punch a transparent hole at FRAME_HOLE_RADIUS
+    4. Return as RGBA — frame pixels opaque, medallion opening transparent
+
+    The art layer (placed UNDERNEATH this overlay) extends to ART_CLIP_RADIUS (600).
+    The frame hole is FRAME_HOLE_RADIUS (540). The 60px overlap is hidden by
+    the opaque frame ring sitting on top.
+    """
+    w, h = cover.size
     cover_rgba = cover.convert("RGBA")
-    w, h = cover_rgba.size
 
-    frame_mask = _load_frame_mask((w, h))
-    if frame_mask is None:
-        raise FileNotFoundError(
-            "config/frame_mask.png is missing or invalid. "
-            "Run: python scripts/generate_accurate_frame_mask.py"
-        )
-
-    cover_rgba.putalpha(frame_mask)
-
-    cover_rgb = np.array(cover.convert("RGB"), dtype=np.uint8)
-    mask_arr = np.array(frame_mask, dtype=np.uint8)
-    target_h, target_w = cover_rgb.shape[:2]
-
-    yy, xx = np.ogrid[:target_h, :target_w]
-    dist = np.sqrt((xx - int(center_x)) ** 2 + (yy - int(center_y)) ** 2)
-    ring_mask = (dist >= 465.0) & (dist <= 700.0) & (mask_arr >= 250)
-
-    r_ch = cover_rgb[:, :, 0].astype(np.float32)
-    g_ch = cover_rgb[:, :, 1].astype(np.float32)
-    b_ch = cover_rgb[:, :, 2].astype(np.float32)
-    brightness = np.maximum(r_ch, np.maximum(g_ch, b_ch))
-    shadow = np.minimum(r_ch, np.minimum(g_ch, b_ch))
-    saturation = brightness - shadow
-
-    is_gold = (
-        ring_mask
-        & (r_ch >= 120.0)
-        & (g_ch >= 85.0)
-        & (b_ch <= 145.0)
-        & ((r_ch - g_ch) >= -4.0)
-        & ((r_ch - b_ch) >= 14.0)
-        & (saturation >= 22.0)
+    # Step 1: Erase old illustration — paint solid navy over the entire
+    # medallion area. This ensures NO original illustration pixels survive.
+    erase_layer = cover_rgba.copy()
+    erase_draw = ImageDraw.Draw(erase_layer)
+    erase_r = FRAME_HOLE_RADIUS  # 540
+    erase_draw.ellipse(
+        (center_x - erase_r, center_y - erase_r,
+         center_x + erase_r, center_y + erase_r),
+        fill=(*NAVY_FILL_RGB, 255),
     )
-    is_dark_frame = ring_mask & (brightness <= 40.0)
-    is_frame_metal = is_gold | is_dark_frame
-    is_non_metal = ring_mask & ~is_frame_metal
 
-    gap_count = int(np.sum(is_non_metal))
-    if gap_count > 0:
-        rgba_arr = np.array(cover_rgba, dtype=np.uint8)
-        rgba_arr[is_non_metal, 3] = 0
-        cover_rgba = Image.fromarray(rgba_arr, mode="RGBA")
-        logger.info("Fallback overlay: made %d scrollwork gap pixels transparent", gap_count)
+    # Step 2: Punch transparent hole at FRAME_HOLE_RADIUS with 4x supersampling.
+    scale = TEMPLATE_SUPERSAMPLE_FACTOR  # 4
+    mask_large = Image.new("L", (w * scale, h * scale), 255)
+    mask_draw = ImageDraw.Draw(mask_large)
+    cx_s = center_x * scale
+    cy_s = center_y * scale
+    r_s = FRAME_HOLE_RADIUS * scale
+    mask_draw.ellipse(
+        (cx_s - r_s, cy_s - r_s, cx_s + r_s, cy_s + r_s),
+        fill=0,
+    )
+    frame_alpha = mask_large.resize((w, h), Image.LANCZOS)
 
-    return cover_rgba
+    # Step 3: Apply alpha — outside r=540 is opaque (frame), inside is transparent.
+    erase_layer.putalpha(frame_alpha)
+    return erase_layer
 
 
 def ensure_frame_overlays_exist(*, input_dir: Path, catalog_path: Path) -> None:
