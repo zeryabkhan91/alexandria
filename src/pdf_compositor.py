@@ -40,6 +40,12 @@ EXPECTED_JPG_SIZE = (3784, 2777)
 # Trim generated art edges before fitting into the medallion image stream.
 # This reduces border-like artifacts synthesized near image boundaries.
 AI_ART_EDGE_TRIM_RATIO = 0.08
+# Auto-trim uniform outer margins (for example white/cream/black pillarbox bars)
+# that some generators return around the actual artwork.
+AI_UNIFORM_MARGIN_MAX_TRIM_RATIO = 0.22
+AI_UNIFORM_MARGIN_COLOR_TOL = 26.0
+AI_UNIFORM_MARGIN_STD_MAX = 22.0
+AI_UNIFORM_MARGIN_MATCH_RATIO = 0.92
 # Feather the first non-frame alpha band so high-contrast art edges do not
 # read like ornamental side cutouts against semi-transparent frame details.
 ART_EDGE_BLEND_MIN = SMASK_FRAME_MAX + 1  # 251
@@ -51,6 +57,62 @@ RADIAL_EDGE_BLEND_END = 0.98
 ART_EDGE_BLACK_SUPPRESS_RADIAL_MIN = 0.82
 ART_EDGE_BLACK_RGB_MAX = 72
 ART_EDGE_BLACK_RGB_DELTA_MAX = 40
+
+
+def _trim_uniform_margins(image: Image.Image) -> Image.Image:
+    rgb = image.convert("RGB")
+    arr = np.asarray(rgb, dtype=np.float32)
+    if arr.ndim != 3 or arr.shape[2] != 3:
+        return rgb
+    h, w = int(arr.shape[0]), int(arr.shape[1])
+    if h < 64 or w < 64:
+        return rgb
+
+    patch = max(4, min(h, w) // 40)
+    corners = np.concatenate(
+        [
+            arr[:patch, :patch].reshape(-1, 3),
+            arr[:patch, w - patch :].reshape(-1, 3),
+            arr[h - patch :, :patch].reshape(-1, 3),
+            arr[h - patch :, w - patch :].reshape(-1, 3),
+        ],
+        axis=0,
+    )
+    corner_color = np.median(corners, axis=0)
+
+    def _line_matches(line: np.ndarray) -> bool:
+        if line.size == 0:
+            return False
+        diff = np.abs(line - corner_color).mean(axis=1)
+        match_ratio = float(np.mean(diff <= AI_UNIFORM_MARGIN_COLOR_TOL))
+        std_mean = float(np.std(line, axis=0).mean())
+        return match_ratio >= AI_UNIFORM_MARGIN_MATCH_RATIO and std_mean <= AI_UNIFORM_MARGIN_STD_MAX
+
+    max_trim_x = max(0, int(round(w * AI_UNIFORM_MARGIN_MAX_TRIM_RATIO)))
+    max_trim_y = max(0, int(round(h * AI_UNIFORM_MARGIN_MAX_TRIM_RATIO)))
+
+    left = 0
+    while left < max_trim_x and _line_matches(arr[:, left, :]):
+        left += 1
+    right = 0
+    while right < max_trim_x and _line_matches(arr[:, w - 1 - right, :]):
+        right += 1
+    top = 0
+    while top < max_trim_y and _line_matches(arr[top, :, :]):
+        top += 1
+    bottom = 0
+    while bottom < max_trim_y and _line_matches(arr[h - 1 - bottom, :, :]):
+        bottom += 1
+
+    if (left + right + top + bottom) <= 0:
+        return rgb
+
+    new_w = w - left - right
+    new_h = h - top - bottom
+    if new_w < max(64, int(w * 0.55)) or new_h < max(64, int(h * 0.55)):
+        return rgb
+
+    return rgb.crop((left, top, w - right, h - bottom))
 
 
 def rgb_to_cmyk(rgb_array: np.ndarray) -> np.ndarray:
@@ -157,7 +219,7 @@ def _resolve_im0(page: Any) -> Any:
 
 def _load_ai_art_cmyk(*, ai_art_path: Path, width: int, height: int) -> np.ndarray:
     with Image.open(ai_art_path) as source:
-        rgb_source = source.convert("RGB")
+        rgb_source = _trim_uniform_margins(source)
         if AI_ART_EDGE_TRIM_RATIO > 0:
             src_w, src_h = rgb_source.size
             trim_x = int(round(src_w * AI_ART_EDGE_TRIM_RATIO / 2.0))
