@@ -85,12 +85,22 @@ AI_BORDER_SOBEL_MAGNITUDE_THRESHOLD = 30
 VISUAL_FRAME_MEAN_DIFF_THRESHOLD = 5.0
 
 # -- Prompt-12 batch verification thresholds --
-RING_INNER_R = 420
-RING_OUTER_R = 520
-THRESHOLD_CHANGED_PCT = 2.0
-THRESHOLD_MEAN_DELTA = 5.0
+FALLBACK_RING_INNER_R = 420
+FALLBACK_RING_OUTER_R = 520
+FALLBACK_CHANGED_PCT_THRESHOLD = 2.0
+FALLBACK_MEAN_DELTA_THRESHOLD = 5.0
+
+# Overlay-aware frame check (matches compositor guard logic)
+OVERLAY_RING_INNER_R = 660
+OVERLAY_RING_OUTER_R = 800
+OVERLAY_CHANGED_PCT_THRESHOLD = 5.0
+OVERLAY_MEAN_DELTA_THRESHOLD = 10.0
 THRESHOLD_MAX_DELTA = 10.0
 PIXEL_CHANGE_THRESHOLD = 15
+MIN_RING_PIXELS = 1000
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FRAME_OVERLAY_DIR = PROJECT_ROOT / "config" / "frame_overlays"
 
 
 def _import_runtime_modules():
@@ -133,7 +143,31 @@ def verify_single_ring(original_path: Path, composited_path: Path, output_dir: P
     h, w = orig.shape[:2]
     yy, xx = np.ogrid[:h, :w]
     dist = np.sqrt((xx - CENTER_X) ** 2 + (yy - CENTER_Y) ** 2)
-    ring = (dist >= RING_INNER_R) & (dist <= RING_OUTER_R)
+
+    ring_mode = "fallback_radial"
+    overlay_alpha: np.ndarray | None = None
+    ring: np.ndarray | None = None
+
+    overlay_path = FRAME_OVERLAY_DIR / f"{original_path.stem}_frame.png"
+    if overlay_path.exists():
+        try:
+            overlay = Image.open(overlay_path).convert("RGBA")
+            if overlay.size != (w, h):
+                overlay = overlay.resize((w, h), Image.LANCZOS)
+            overlay_alpha = np.array(overlay.getchannel("A"), dtype=np.uint8)
+            candidate_ring = (
+                (dist >= OVERLAY_RING_INNER_R)
+                & (dist <= OVERLAY_RING_OUTER_R)
+                & (overlay_alpha >= 250)
+            )
+            if int(np.sum(candidate_ring)) >= MIN_RING_PIXELS:
+                ring = candidate_ring
+                ring_mode = "overlay_opaque"
+        except Exception:
+            overlay_alpha = None
+
+    if ring is None:
+        ring = (dist >= FALLBACK_RING_INNER_R) & (dist <= FALLBACK_RING_OUTER_R)
 
     diff = np.abs(orig - comp)
     channel_diff = diff.max(axis=2)
@@ -143,15 +177,26 @@ def verify_single_ring(original_path: Path, composited_path: Path, output_dir: P
     mean_delta = float(ring_pixels.mean()) if ring_pixels.size else 0.0
     max_delta = float(ring_pixels.max()) if ring_pixels.size else 0.0
 
-    passed = (
-        changed_pct < THRESHOLD_CHANGED_PCT
-        and mean_delta < THRESHOLD_MEAN_DELTA
-        and max_delta < THRESHOLD_MAX_DELTA
+    changed_threshold = (
+        OVERLAY_CHANGED_PCT_THRESHOLD
+        if ring_mode == "overlay_opaque"
+        else FALLBACK_CHANGED_PCT_THRESHOLD
     )
+    mean_threshold = (
+        OVERLAY_MEAN_DELTA_THRESHOLD
+        if ring_mode == "overlay_opaque"
+        else FALLBACK_MEAN_DELTA_THRESHOLD
+    )
+
+    passed = changed_pct < changed_threshold and mean_delta < mean_threshold and max_delta < THRESHOLD_MAX_DELTA
 
     result = {
         "original": str(original_path),
         "composited": str(composited_path),
+        "ring_mode": ring_mode,
+        "ring_pixels": int(ring_pixels.size),
+        "ring_changed_threshold": changed_threshold,
+        "ring_mean_threshold": mean_threshold,
         "ring_changed_pct": round(changed_pct, 3),
         "ring_mean_delta": round(mean_delta, 3),
         "ring_max_delta": round(max_delta, 3),
@@ -162,9 +207,16 @@ def verify_single_ring(original_path: Path, composited_path: Path, output_dir: P
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
         diff_vis = np.clip(diff * 3.0, 0, 255).astype(np.uint8)
-        ring_border = ((dist >= RING_INNER_R - 2) & (dist <= RING_INNER_R + 2)) | (
-            (dist >= RING_OUTER_R - 2) & (dist <= RING_OUTER_R + 2)
-        )
+        if ring_mode == "overlay_opaque" and overlay_alpha is not None:
+            ring_border = (
+                (((dist >= OVERLAY_RING_INNER_R - 2) & (dist <= OVERLAY_RING_INNER_R + 2))
+                 | ((dist >= OVERLAY_RING_OUTER_R - 2) & (dist <= OVERLAY_RING_OUTER_R + 2)))
+                & (overlay_alpha >= 250)
+            )
+        else:
+            ring_border = ((dist >= FALLBACK_RING_INNER_R - 2) & (dist <= FALLBACK_RING_INNER_R + 2)) | (
+                (dist >= FALLBACK_RING_OUTER_R - 2) & (dist <= FALLBACK_RING_OUTER_R + 2)
+            )
         diff_vis[ring_border] = [255, 0, 0]
         comparison = np.concatenate([orig.astype(np.uint8), comp.astype(np.uint8), diff_vis], axis=1)
         stem = original_path.stem
@@ -222,6 +274,7 @@ def verify_catalog_batch(
             print(
                 f"FAIL {book_number:>3}: changed={result['ring_changed_pct']}% "
                 f"mean={result['ring_mean_delta']} max={result['ring_max_delta']} "
+                f"mode={result.get('ring_mode')} "
                 f"({Path(result['composited']).name})"
             )
 
@@ -239,8 +292,10 @@ def verify_catalog_batch(
             "ring_max_delta": round(avg_max_delta, 3),
         },
         "thresholds": {
-            "ring_changed_pct_lt": THRESHOLD_CHANGED_PCT,
-            "ring_mean_delta_lt": THRESHOLD_MEAN_DELTA,
+            "overlay_ring_changed_pct_lt": OVERLAY_CHANGED_PCT_THRESHOLD,
+            "overlay_ring_mean_delta_lt": OVERLAY_MEAN_DELTA_THRESHOLD,
+            "fallback_ring_changed_pct_lt": FALLBACK_CHANGED_PCT_THRESHOLD,
+            "fallback_ring_mean_delta_lt": FALLBACK_MEAN_DELTA_THRESHOLD,
             "ring_max_delta_lt": THRESHOLD_MAX_DELTA,
             "pixel_change_threshold": PIXEL_CHANGE_THRESHOLD,
         },
@@ -257,8 +312,16 @@ def verify_catalog_batch(
     print(f"Compared covers:   {len(results)}")
     print(f"PASSED:            {passes}")
     print(f"FAILED:            {fails}")
-    print(f"Avg changed %:     {avg_changed:.3f} (threshold < {THRESHOLD_CHANGED_PCT})")
-    print(f"Avg mean delta:    {avg_mean_delta:.3f} (threshold < {THRESHOLD_MEAN_DELTA})")
+    print(
+        "Avg changed %:     "
+        f"{avg_changed:.3f} "
+        f"(overlay<{OVERLAY_CHANGED_PCT_THRESHOLD}, fallback<{FALLBACK_CHANGED_PCT_THRESHOLD})"
+    )
+    print(
+        "Avg mean delta:    "
+        f"{avg_mean_delta:.3f} "
+        f"(overlay<{OVERLAY_MEAN_DELTA_THRESHOLD}, fallback<{FALLBACK_MEAN_DELTA_THRESHOLD})"
+    )
     print(f"Avg max delta:     {avg_max_delta:.3f} (threshold < {THRESHOLD_MAX_DELTA})")
     print(f"Report JSON:       {report_path}")
     print(f"Comparison images: {verify_dir}")

@@ -55,7 +55,7 @@ FRAME_OVERLAY_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "ext
 VERIFY_COMPOSITE_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "verify_composite.py"
 # Bump this version when the overlay extraction logic changes.
 # This triggers automatic re-extraction of all cached frame overlays.
-FRAME_OVERLAY_VERSION = 3  # v1 guard ring, v2 natural SMask, v3 opening-only frame preservation
+FRAME_OVERLAY_VERSION = 4  # v4 transparent scrollwork gaps in frame ring overlays
 
 _GEOMETRY_CACHE: dict[str, dict[str, int]] = {}
 _FRAME_OVERLAY_EXTRACTION_ATTEMPTED = False
@@ -1493,16 +1493,39 @@ def _build_fallback_frame_overlay(
     w, h = cover_rgba.size
 
     frame_mask = _load_frame_mask((w, h))
-    if frame_mask is not None:
-        cover_rgba.putalpha(frame_mask)
-        return cover_rgba
+    if frame_mask is None:
+        raise FileNotFoundError(
+            "config/frame_mask.png is missing or invalid. "
+            "Run: python scripts/generate_accurate_frame_mask.py"
+        )
 
-    scale = 4
-    mask_large = Image.new("L", (w * scale, h * scale), 255)
-    draw = ImageDraw.Draw(mask_large)
-    cx_s, cy_s, r_s = center_x * scale, center_y * scale, punch_radius * scale
-    draw.ellipse((cx_s - r_s, cy_s - r_s, cx_s + r_s, cy_s + r_s), fill=0)
-    cover_rgba.putalpha(mask_large.resize((w, h), Image.LANCZOS))
+    cover_rgba.putalpha(frame_mask)
+
+    cover_rgb = np.array(cover.convert("RGB"), dtype=np.uint8)
+    mask_arr = np.array(frame_mask, dtype=np.uint8)
+    target_h, target_w = cover_rgb.shape[:2]
+
+    yy, xx = np.ogrid[:target_h, :target_w]
+    dist = np.sqrt((xx - int(center_x)) ** 2 + (yy - int(center_y)) ** 2)
+    ring_mask = (dist >= 465.0) & (dist <= 700.0) & (mask_arr >= 250)
+
+    r_ch = cover_rgb[:, :, 0].astype(np.float32)
+    g_ch = cover_rgb[:, :, 1].astype(np.float32)
+    b_ch = cover_rgb[:, :, 2].astype(np.float32)
+    brightness = np.maximum(r_ch, np.maximum(g_ch, b_ch))
+
+    is_gold = ring_mask & (r_ch > 80.0) & (r_ch > (b_ch + 10.0)) & (g_ch > 30.0)
+    is_dark_frame = ring_mask & (brightness < 60.0)
+    is_frame_metal = is_gold | is_dark_frame
+    is_non_metal = ring_mask & ~is_frame_metal
+
+    gap_count = int(np.sum(is_non_metal))
+    if gap_count > 0:
+        rgba_arr = np.array(cover_rgba, dtype=np.uint8)
+        rgba_arr[is_non_metal, 3] = 0
+        cover_rgba = Image.fromarray(rgba_arr, mode="RGBA")
+        logger.info("Fallback overlay: made %d scrollwork gap pixels transparent", gap_count)
+
     return cover_rgba
 
 

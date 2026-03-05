@@ -57,6 +57,43 @@ class OverlayStats:
     failed: int = 0
 
 
+def _apply_scrollwork_gap_transparency(
+    *,
+    cover_rgb: np.ndarray,
+    alpha: np.ndarray,
+    center_x: int,
+    center_y: int,
+    ring_inner: int = 465,
+    ring_outer: int = 700,
+) -> tuple[np.ndarray, int, int]:
+    """Keep frame metal opaque; make non-metal scrollwork gaps transparent."""
+    target_h, target_w = cover_rgb.shape[:2]
+    cx, cy = int(center_x), int(center_y)
+    if cx >= target_w or cy >= target_h:
+        cx, cy = target_w // 2, target_h // 2
+
+    yy, xx = np.ogrid[:target_h, :target_w]
+    dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    ring_mask = (dist >= float(ring_inner)) & (dist <= float(ring_outer)) & (alpha >= 250)
+
+    r_ch = cover_rgb[:, :, 0].astype(np.float32)
+    g_ch = cover_rgb[:, :, 1].astype(np.float32)
+    b_ch = cover_rgb[:, :, 2].astype(np.float32)
+    brightness = np.maximum(r_ch, np.maximum(g_ch, b_ch))
+
+    is_gold = ring_mask & (r_ch > 80.0) & (r_ch > (b_ch + 10.0)) & (g_ch > 30.0)
+    is_dark_frame = ring_mask & (brightness < 60.0)
+    is_frame_metal = is_gold | is_dark_frame
+    is_non_metal = ring_mask & ~is_frame_metal
+
+    updated = alpha.copy()
+    gap_count = int(np.sum(is_non_metal))
+    ring_count = int(np.sum(ring_mask))
+    if gap_count > 0:
+        updated[is_non_metal] = 0
+    return updated, gap_count, ring_count
+
+
 def _iter_dir_files(folder: Path) -> Iterable[Path]:
     if not folder.exists() or not folder.is_dir():
         return []
@@ -201,6 +238,20 @@ def _compose_overlay_with_smask(
     frame_mask_arr = np.array(frame_mask, dtype=np.uint8)
     alpha = np.maximum(alpha, frame_mask_arr)
 
+    alpha, gap_count, ring_count = _apply_scrollwork_gap_transparency(
+        cover_rgb=cover_rgb,
+        alpha=alpha,
+        center_x=CENTER_X,
+        center_y=CENTER_Y,
+    )
+    if gap_count > 0:
+        logger.info(
+            "Made %d scrollwork gap pixels transparent (%.1f%% of ring) for %s",
+            gap_count,
+            100.0 * float(gap_count) / max(1, ring_count),
+            output_path.name,
+        )
+
     rgba = np.dstack([cover_rgb, alpha])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(rgba, mode="RGBA").save(output_path, format="PNG", optimize=True)
@@ -247,14 +298,30 @@ def extract_overlay_from_pdf(pdf_path: Path, cover_jpg_path: Path, output_path: 
 
 
 def extract_overlay_fallback(cover_jpg_path: Path, output_path: Path, frame_mask_path: Path) -> None:
-    cover_rgba = Image.open(cover_jpg_path).convert("RGBA")
+    cover_rgb = np.array(Image.open(cover_jpg_path).convert("RGB"), dtype=np.uint8)
+    target_h, target_w = cover_rgb.shape[:2]
     mask = Image.open(frame_mask_path).convert("L")
-    if mask.size != cover_rgba.size:
-        mask = mask.resize(cover_rgba.size, Image.LANCZOS)
-    # Use frame_mask.png as-is — no guard ring override needed.
-    cover_rgba.putalpha(mask)
+    if mask.size != (target_w, target_h):
+        mask = mask.resize((target_w, target_h), Image.LANCZOS)
+    alpha = np.array(mask, dtype=np.uint8)
+
+    alpha, gap_count, ring_count = _apply_scrollwork_gap_transparency(
+        cover_rgb=cover_rgb,
+        alpha=alpha,
+        center_x=CENTER_X,
+        center_y=CENTER_Y,
+    )
+    if gap_count > 0:
+        logger.info(
+            "Fallback: Made %d scrollwork gap pixels transparent (%.1f%% of ring) for %s",
+            gap_count,
+            100.0 * float(gap_count) / max(1, ring_count),
+            output_path.name,
+        )
+
+    rgba = np.dstack([cover_rgb, alpha])
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    cover_rgba.save(output_path, format="PNG", optimize=True)
+    Image.fromarray(rgba, mode="RGBA").save(output_path, format="PNG", optimize=True)
 
 
 def run_extraction(

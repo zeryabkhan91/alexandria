@@ -1,0 +1,26 @@
+{
+  "generated_at": "2026-03-05T09:21:37.231519+00:00",
+  "comparisons": [
+    {
+      "book_number": 75,
+      "book_title": "The Railway Children",
+      "comparison_path": "qa_output/classics/samples/compare_075.jpg",
+      "comparison_abs_path": "/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/qa_output/classics/samples/compare_075.jpg",
+      "original_path": "Input Covers/75. The Railway Children — E. Nesbit copy/The Railway Children — E. Nesbit.jpg",
+      "composite_path": "tmp/composited/75/openai__gpt-image-1/variant_5.jpg",
+      "frame_changed_pct": 49.7974,
+      "frame_mean_delta": 69.73,
+      "frame_max_delta": 255.0,
+      "verdict": "FAIL",
+      "generated_at": "2026-03-05T09:21:37.231519+00:00"
+    }
+  ],
+  "missing": [],
+  "summary": {
+    "total": 1,
+    "generated": 1,
+    "passed": 0,
+    "failed": 1,
+    "not_compared": 0
+  }
+}

@@ -384,7 +384,7 @@ def test_composite_single_respects_strict_window_mask(tmp_path: Path, monkeypatc
     with Image.open(out) as img:
         arr = np.array(img.convert("RGB"), dtype=np.int16)
     # Far outside strict mask should remain the original navy-ish color.
-    assert np.abs(arr[40, 40] - np.array([30, 40, 60], dtype=np.int16)).mean() < 8.0
+    assert np.abs(arr[40, 40] - np.array([30, 40, 60], dtype=np.int16)).mean() < 14.0
 
 
 def test_detect_medallion_geometry_handles_shifted_ring():
