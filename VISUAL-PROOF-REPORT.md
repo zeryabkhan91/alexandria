@@ -2,7 +2,45 @@
 
 Last updated: `2026-03-08`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `87ac4e06-68e7-4089-82b0-18a810c5c0cb`
+Deployment ID: `c02020ba-26a1-45ee-8bb3-58286a891f10`
+
+## 1.8 PROMPT-23 Scene-Only Prompt Rewrite + Winner Prompt Save (2026-03-08)
+- Git commit (master):
+  - `c2d1e8b` — Rewrite Alexandria prompts and save winner prompts
+- Railway deploy:
+  - `c02020ba-26a1-45ee-8bb3-58286a891f10` (`SUCCESS`)
+- Local verification before deploy:
+  - `node --check src/static/js/pages/iterate.js` -> `PASS`
+  - `node --check src/static/js/pages/prompts.js` -> `PASS`
+  - `python3 -m py_compile src/prompt_library.py src/image_generator.py scripts/quality_review.py` -> `PASS`
+  - targeted `pytest` selection for prompt/library/save flow -> `PASS`
+- Live prompt-library verification:
+  - `GET /api/prompts?catalog=classics` shows rewritten Alexandria templates with `Book cover illustration only` scene-only prompt text and anti-frame negative prompt content
+  - saved winner prompt exists live:
+    - id: `88eb912f-6a9d-45df-a249-7cd786f315ef`
+    - name: `Winner — A Room with a View — BASE 4 — Romantic Realism`
+    - category: `winner`
+    - `win_count: 1`
+    - tags: `winner`, `a-room-with-a-view`, `base-4-romantic-realism`
+- Live iterate generation proof:
+  - API job: `15fc3977-7096-47ad-9d9c-8de113ebd903` (`completed`)
+  - book: `1`
+  - model: `openrouter/google/gemini-3-pro-image-preview`
+  - `library_prompt_id`: `alexandria-base-romantic-realism`
+  - compositor mode: `pdf`
+  - raw art path: `Output Covers/raw_art/1/15fc3977-7096-47ad-9d9c-_variant_1_openrouter_google_gemini-3-pro-image-preview.png`
+  - saved composite path: `Output Covers/saved_composites/1/15fc3977-7096-47ad-9d9c-_variant_1_openrouter_google_gemini-3-pro-image-preview.jpg`
+- Live UI proof:
+  - Iterate page loaded the rewritten BASE 4 prompt for book `1`
+  - result-card `Save Prompt` action completed and rendered `✅ Saved`
+  - Prompts page `Winners` filter isolated the saved winner prompt and excluded builtin `BASE 4 — Romantic Realism`
+- Visual proof artifacts:
+  - live iterate page: `/tmp/alexandria-proof-live-prompt23-final/live-iterate-prompt23.png`
+  - live result card with saved state: `/tmp/alexandria-proof-live-prompt23-final/live-result-card-prompt23.png`
+  - live prompts page winners filter: `/tmp/alexandria-proof-live-prompt23-final/live-prompts-winners-prompt23.png`
+  - live composited cover proof: `/tmp/alexandria-proof-live-prompt23-final/live-cover-book1-prompt23.png`
+- Known issue observed during proof run:
+  - browser console showed `404` for `/api/books/1/cover-preview?source=catalog&catalog=classics`; live generation and prompt save still completed successfully
 
 ## 1.7 PROMPT-22 Model Routing + Prompt Library + Save Raw (2026-03-08)
 - Git commits:
