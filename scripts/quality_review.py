@@ -2045,6 +2045,7 @@ def _execute_generation_payload(
     prompt_source = str(payload.get("prompt_source", payload.get("promptSource", "template")) or "template").strip().lower() or "template"
     template_id = str(payload.get("template_id", payload.get("templateId", "")) or "").strip()
     compose_prompt = bool(payload.get("compose_prompt", True))
+    preserve_prompt_text = bool(payload.get("preserve_prompt_text", False))
     template_ok, _template_details = _validate_template_id(runtime=runtime, template_id=template_id)
     if not template_ok:
         raise ValueError(f"Unknown template_id: {template_id}")
@@ -2174,6 +2175,7 @@ def _execute_generation_payload(
                 resume=False,
                 dry_run=dry_run,
                 cancel_checker=_cancel_checker if job_id else None,
+                preserve_prompt_text=preserve_prompt_text,
             )
             serialized = _serialize_generation_results(runtime=runtime, book=book, results=results)
             if library_prompt_id:
@@ -8315,6 +8317,7 @@ def serve_review_webapp(
                 prompt_source = str(body.get("promptSource", body.get("prompt_source", "template")) or "template").strip().lower() or "template"
                 template_id = str(body.get("template_id", body.get("templateId", "")) or "").strip()
                 compose_prompt = bool(body.get("compose_prompt", True))
+                preserve_prompt_text = bool(body.get("preserve_prompt_text", False))
                 template_ok, template_details = _validate_template_id(runtime=runtime_req, template_id=template_id)
                 if not template_ok:
                     return self._send_error(
@@ -8412,6 +8415,7 @@ def serve_review_webapp(
                         metadata={
                             "prompt_source": prompt_source,
                             "template_id": template_id,
+                            **({"preserve_prompt_text": True} if preserve_prompt_text else {}),
                             "composed_prompt": str(composed_prompt_payload.get("prompt", "")).strip(),
                             "prompt_components": composed_prompt_payload,
                             "inferred_genre": str(composed_prompt_payload.get("genre", "")).strip(),
@@ -10010,6 +10014,7 @@ def serve_review_webapp(
                 prompt_source = str(body.get("promptSource", body.get("prompt_source", "template")) or "template").strip().lower() or "template"
                 template_id = str(body.get("template_id", body.get("templateId", "")) or "").strip()
                 compose_prompt = bool(body.get("compose_prompt", True))
+                preserve_prompt_text = bool(body.get("preserve_prompt_text", False))
                 template_ok, template_details = _validate_template_id(runtime=runtime_req, template_id=template_id)
                 if not template_ok:
                     return self._send_error(
@@ -10177,6 +10182,7 @@ def serve_review_webapp(
                             metadata={
                                 "prompt_source": prompt_source,
                                 "template_id": template_id,
+                                **({"preserve_prompt_text": True} if preserve_prompt_text else {}),
                                 "composed_prompt": str(composed_prompt_payload.get("prompt", "")).strip(),
                                 "prompt_components": composed_prompt_payload,
                                 "inferred_genre": str(composed_prompt_payload.get("genre", "")).strip(),

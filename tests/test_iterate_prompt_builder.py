@@ -90,6 +90,7 @@ def test_iterate_prompt_builder_keeps_library_prompt_precomposed():
     assert "Edwardian Italy" in result["prompt"]
     assert result["styleLabel"] == "BASE 4 Romantic Realism"
     assert result["styleId"] == "none"
+    assert result["preservePromptText"] is True
     assert result["libraryPromptId"] == "alexandria-base-romantic-realism"
     assert result["composePrompt"] is False
     assert result["backendPromptSource"] == "custom"
@@ -116,4 +117,5 @@ def test_iterate_prompt_builder_keeps_legacy_style_diversifier_for_default_auto(
     assert 'Create a colorful circular medallion illustration for "A Room with a View" by E. M. Forster.' in result["prompt"]
     assert result["styleLabel"] == "Romantic Sublime"
     assert result["styleId"] == "romantic-sublime"
+    assert result["preservePromptText"] is False
     assert result["libraryPromptId"] == ""

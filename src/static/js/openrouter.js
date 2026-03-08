@@ -132,6 +132,7 @@ window.OpenRouter = {
     if (options.idempotency_key) payload.idempotency_key = String(options.idempotency_key).trim();
     if (options.max_attempts) payload.max_attempts = Math.max(1, Number(options.max_attempts || 1));
     if (typeof options.compose_prompt === 'boolean') payload.compose_prompt = options.compose_prompt;
+    if (options.preserve_prompt_text === true) payload.preserve_prompt_text = true;
     if (options.library_prompt_id) payload.library_prompt_id = String(options.library_prompt_id).trim();
 
     const generateResp = await fetch('/api/generate', {

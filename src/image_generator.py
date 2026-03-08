@@ -1315,6 +1315,7 @@ def generate_all_models(
     dry_run: bool = False,
     provider_override: str | None = None,
     cancel_checker: Callable[[str, int], bool] | None = None,
+    preserve_prompt_text: bool = False,
 ) -> list[GenerationResult]:
     """Fire ALL models concurrently for the same prompt."""
     runtime = config.get_config()
@@ -1369,18 +1370,21 @@ def generate_all_models(
                     logger.debug("cancel_checker failed for %s v%s: %s", model, variant, exc)
 
             image_path = model_dir / f"variant_{variant}.png"
-            diversified_prompt = _diversify_prompt_for_model_variant(
-                prompt=prompt,
-                model=model,
-                provider=provider,
-                variant=variant,
-                model_index=model_index,
-            )
-            diversified_prompt = _validate_prompt_relevance(
-                diversified_prompt,
-                book_title=book_title,
-                book_author=book_author,
-            )
+            if preserve_prompt_text:
+                diversified_prompt = _sanitize_prompt_text(str(prompt or ""))
+            else:
+                diversified_prompt = _diversify_prompt_for_model_variant(
+                    prompt=prompt,
+                    model=model,
+                    provider=provider,
+                    variant=variant,
+                    model_index=model_index,
+                )
+                diversified_prompt = _validate_prompt_relevance(
+                    diversified_prompt,
+                    book_title=book_title,
+                    book_author=book_author,
+                )
             seed = _variant_seed(rng=rng, book_number=book_number, model=model, variant=variant)
             if resume and image_path.exists():
                 logger.info(
@@ -1695,6 +1699,7 @@ def generate_single_book(
     resume: bool = True,
     dry_run: bool = False,
     cancel_checker: Callable[[str, int], bool] | None = None,
+    preserve_prompt_text: bool = False,
 ) -> list[GenerationResult]:
     """Primary single-cover entry point for iterative generation (D19)."""
     runtime = config.get_config()
@@ -1749,6 +1754,7 @@ def generate_single_book(
         dry_run=dry_run,
         provider_override=provider_override,
         cancel_checker=cancel_checker,
+        preserve_prompt_text=preserve_prompt_text,
     )
 
 

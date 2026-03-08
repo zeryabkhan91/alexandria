@@ -928,6 +928,28 @@ def test_generate_single_book_and_batch(tmp_path: Path, monkeypatch):
     assert any(row.skipped for row in batch_skips)
 
 
+def test_generate_all_models_preserve_prompt_text_skips_backend_diversification(tmp_path: Path, monkeypatch):
+    runtime = _Runtime(tmp_path)
+    monkeypatch.setattr(ig.config, "get_config", lambda: runtime)
+
+    results = ig.generate_all_models(
+        book_number=1,
+        prompt="Book cover illustration only - no text. Exact Alexandria prompt.",
+        negative_prompt="bad",
+        models=["openrouter/google/gemini-3-pro-image-preview"],
+        variants_per_model=1,
+        output_dir=tmp_path / "generated",
+        book_title="A Room with a View",
+        book_author="E. M. Forster",
+        dry_run=True,
+        preserve_prompt_text=True,
+    )
+
+    assert len(results) == 1
+    assert results[0].prompt == "Book cover illustration only - no text. Exact Alexandria prompt."
+    assert "Model signature:" not in results[0].prompt
+
+
 def test_generate_one_success_failover_and_failure(tmp_path: Path, monkeypatch):
     runtime = _Runtime(tmp_path)
     runtime.provider_keys = {"openai": "k", "openrouter": "k", "fal": "k", "google": "k", "replicate": "k"}
@@ -1442,6 +1464,32 @@ def test_generate_single_book_default_prompt_and_model_fallback(tmp_path: Path, 
     )
     assert "Prompt One" in str(captured.get("prompt", ""))
     assert captured["models"] == [runtime.ai_model]
+
+
+def test_generate_single_book_forwards_preserve_prompt_text(tmp_path: Path, monkeypatch):
+    runtime = _Runtime(tmp_path)
+    monkeypatch.setattr(ig.config, "get_config", lambda: runtime)
+    prompts_path = tmp_path / "book_prompts.json"
+    _write_prompts(prompts_path)
+    captured: dict[str, object] = {}
+
+    def _capture_generate_all_models(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(ig, "generate_all_models", _capture_generate_all_models)
+    ig.generate_single_book(
+        book_number=1,
+        prompts_path=prompts_path,
+        output_dir=tmp_path / "generated",
+        models=["openrouter/google/gemini-3-pro-image-preview"],
+        variants=1,
+        prompt_text="Book cover illustration only - no text. Exact Alexandria prompt.",
+        dry_run=True,
+        preserve_prompt_text=True,
+    )
+
+    assert captured["preserve_prompt_text"] is True
 
 
 def test_generate_batch_dry_run_failure_append_and_scope_limit(tmp_path: Path, monkeypatch):

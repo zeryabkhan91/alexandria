@@ -327,6 +327,7 @@ window.JobQueue = {
               catalog: 'classics',
               prompt_source: String(job.backend_prompt_source || job.prompt_source || 'custom').trim().toLowerCase() || 'custom',
               compose_prompt: job.compose_prompt !== false,
+              preserve_prompt_text: job.preserve_prompt_text === true,
               library_prompt_id: String(job.library_prompt_id || '').trim() || undefined,
               cover_source: 'drive',
               selected_cover_id: resolvedSelectedCoverId,
