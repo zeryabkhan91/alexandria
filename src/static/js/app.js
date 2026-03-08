@@ -443,13 +443,14 @@ window.JobQueue = {
         throw new Error('Backend composite unavailable; refusing raw fallback to preserve medallion layering.');
       }
       if (backendCompositedBlob) warnIfSuspiciousCompositeBlob(backendCompositedBlob, fullResCompositeSource);
-      job.generated_image_blob = rawBlob || rawSource;
-      job.composited_image_blob = backendCompositedBlob || fullResCompositeSource || null;
-      job.composite_pdf_url = best.compositedPdfPath || '';
-      job.composite_ai_url = best.compositedAiPath || '';
-      job.pdf_url = best.compositedPdfPath || '';
-      job.ai_url = best.compositedAiPath || '';
-      job.compositor_mode = String(best.row?.compositor_mode || '').trim() || '';
+        job.generated_image_blob = rawBlob || rawSource;
+        job.composited_image_blob = backendCompositedBlob || fullResCompositeSource || null;
+        job.composite_pdf_url = best.compositedPdfPath || '';
+        job.composite_ai_url = best.compositedAiPath || '';
+        job.pdf_url = best.compositedPdfPath || '';
+        job.ai_url = best.compositedAiPath || '';
+        job.backend_job_id = String(best.row?.job_id || result.job?.id || '').trim();
+        job.compositor_mode = String(best.row?.compositor_mode || '').trim() || '';
       job._compositeFailed = false;
       job._compositeError = null;
       if (backendCompositedBlob) job._compositeSource = 'backend-blob';

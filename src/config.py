@@ -38,7 +38,7 @@ DEFAULT_CATALOG_ID = os.getenv("CATALOG_ID", "classics").strip() or "classics"
 
 # Provider defaults
 AI_PROVIDER = os.getenv("AI_PROVIDER", "openrouter").strip().lower()
-AI_MODEL = os.getenv("AI_MODEL", "openrouter/google/gemini-2.5-flash-image").strip()
+AI_MODEL = os.getenv("AI_MODEL", "openrouter/google/gemini-3-pro-image-preview").strip()
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 FAL_API_KEY = os.getenv("FAL_API_KEY", "")
@@ -169,6 +169,10 @@ MODEL_PROVIDER_MAP: dict[str, str] = {
     "google/imagen-4.0-ultra-generate-001": "google",
 }
 
+MODEL_ALIAS_MAP: dict[str, str] = {
+    "nano-banana-pro": "openrouter/google/gemini-3-pro-image-preview",
+}
+
 MODEL_COST_USD: dict[str, float] = {
     "flux-2-pro": 0.055,
     "flux-2-schnell": 0.003,
@@ -176,7 +180,8 @@ MODEL_COST_USD: dict[str, float] = {
     "gpt-image-1-medium": 0.040,
     "imagen-4-ultra": 0.060,
     "imagen-4-fast": 0.030,
-    "nano-banana-pro": 0.067,
+    "nano-banana-pro": 0.02,
+    "openrouter/google/gemini-3-pro-image-preview": 0.02,
     "google/gemini-2.5-flash-image": 0.003,
     "google/gemini-3-pro-image-preview": 0.02,
     "google/gemini-3.1-flash-image-preview": 0.006,
@@ -767,6 +772,7 @@ class Config:
     max_cost_usd: float = MAX_COST_USD
 
     model_provider_map: dict[str, str] = field(default_factory=lambda: MODEL_PROVIDER_MAP.copy())
+    model_alias_map: dict[str, str] = field(default_factory=lambda: MODEL_ALIAS_MAP.copy())
     model_cost_usd: dict[str, float] = field(default_factory=lambda: MODEL_COST_USD.copy())
     model_modality: dict[str, str] = field(default_factory=lambda: MODEL_MODALITY.copy())
 
@@ -815,11 +821,19 @@ class Config:
 
     def resolve_model_provider(self, model: str, default_provider: str | None = None) -> str:
         """Resolve provider for a model, supporting provider/model notation."""
+        alias = self.model_alias_map.get(str(model or "").strip(), str(model or "").strip())
+        model = alias or model
         if "/" in model:
             prefix = model.split("/", 1)[0].strip().lower()
             if prefix in self.provider_keys:
                 return prefix
         return self.model_provider_map.get(model, (default_provider or self.ai_provider).lower())
+
+    def resolve_model_alias(self, model: str) -> str:
+        token = str(model or "").strip()
+        if not token:
+            return ""
+        return str(self.model_alias_map.get(token, token)).strip()
 
     def get_model_cost(self, model: str) -> float:
         normalized = model.split("/", 1)[-1] if "/" in model else model

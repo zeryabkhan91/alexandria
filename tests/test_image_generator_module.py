@@ -61,8 +61,13 @@ class _Runtime:
         self.model_modality = {
             "openrouter/flux-2-pro": "image",
             "openrouter/google/gemini-2.5-flash-image": "both",
+            "openrouter/google/gemini-3-pro-image-preview": "both",
             "flux-2-pro": "image",
             "google/gemini-2.5-flash-image": "both",
+            "google/gemini-3-pro-image-preview": "both",
+        }
+        self.model_alias_map = {
+            "nano-banana-pro": "openrouter/google/gemini-3-pro-image-preview",
         }
 
         self.data_dir = root / "data"
@@ -109,6 +114,10 @@ class _Runtime:
             or self.model_modality.get(f"openrouter/{normalized}")
             or "image"
         )
+
+    def resolve_model_alias(self, model: str) -> str:
+        token = str(model or "").strip()
+        return str(self.model_alias_map.get(token, token)).strip()
 
     def get_api_key(self, provider: str) -> str:
         return self.provider_keys.get(provider, "")
@@ -172,6 +181,16 @@ def test_synthetic_provider_and_small_helpers():
     assert ig._host_matches_allowlist("foo.bar.com", "openai.com") is False
     assert ig._host_matches_allowlist("", "*.openai.com") is False
     assert ig._host_matches_allowlist("foo.bar.com", "*") is True
+
+
+def test_negative_prompt_merge_and_nano_alias_resolution(tmp_path: Path, monkeypatch):
+    runtime = _Runtime(tmp_path)
+    monkeypatch.setattr(ig.config, "get_config", lambda: runtime)
+
+    merged = ig._merge_negative_prompt("custom negative")
+    assert "custom negative" in merged
+    assert ig.ALEXANDRIA_NEGATIVE_PROMPT in merged
+    assert ig._resolve_provider_model_name("openrouter", "nano-banana-pro") == "google/gemini-3-pro-image-preview"
 
 
 def test_base_provider_allowlist_and_notimplemented(tmp_path: Path):

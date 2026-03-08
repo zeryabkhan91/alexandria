@@ -1,8 +1,10 @@
 const DEFAULT_MODEL_COST = 0.01;
 const MODEL_LABEL_OVERRIDES = {
   'nano-banana-pro': 'Nano Banana Pro',
-  'openrouter/google/gemini-2.5-flash-image': 'Nano Banana Pro',
-  'google/gemini-2.5-flash-image': 'Gemini Flash (Google Direct)',
+  'openrouter/google/gemini-3-pro-image-preview': 'Nano Banana Pro',
+  'openrouter/google/gemini-2.5-flash-image': 'Nano Banana (Gemini 2.5 Flash)',
+  'google/gemini-3-pro-image-preview': 'Nano Banana Pro (Google Direct)',
+  'google/gemini-2.5-flash-image': 'Gemini 2.5 Flash (Google Direct)',
 };
 
 function _sleep(ms) {
@@ -84,7 +86,8 @@ window.OpenRouter = {
       console.warn('Unable to load models from backend:', err.message);
       this.MODELS = [
         { id: 'openrouter/openai/gpt-5-image', label: 'GPT-5 Image', cost: 0.04, modality: 'both' },
-        { id: 'openrouter/google/gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image', cost: 0.003, modality: 'both' },
+        { id: 'openrouter/google/gemini-3-pro-image-preview', label: 'Nano Banana Pro', cost: 0.02, modality: 'both' },
+        { id: 'openrouter/google/gemini-2.5-flash-image', label: 'Nano Banana (Gemini 2.5 Flash)', cost: 0.003, modality: 'both' },
       ];
       this.MODELS.forEach((m) => {
         this.MODEL_COSTS[m.id] = m.cost;

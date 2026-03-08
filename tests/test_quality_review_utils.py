@@ -929,6 +929,56 @@ def test_collect_selected_variant_files(tmp_path: Path):
     assert sorted(files) == sorted(["Book One/Variant-2/cover.ai", "Book One/Variant-2/cover.jpg", "Book One/Variant-2/cover.pdf"])
 
 
+def test_save_raw_helpers_resolve_paths_and_preserve_display_naming(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg.book_catalog_path.write_text(
+        json.dumps([{"number": 7, "title": "Temple / Dawn", "author": "A. Writer"}]),
+        encoding="utf-8",
+    )
+    raw_path = cfg.tmp_dir / "generated" / "7" / "openrouter__google__gemini-3-pro-image-preview" / "variant_1.png"
+    comp_path = cfg.tmp_dir / "composited" / "7" / "openrouter__google__gemini-3-pro-image-preview" / "variant_1.jpg"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    comp_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 64), (12, 34, 56)).save(raw_path, format="PNG")
+    Image.new("RGB", (64, 64), (56, 34, 12)).save(comp_path, format="JPEG")
+
+    job = qr.job_store.JobRecord(
+        id="job-1",
+        idempotency_key="idem-1",
+        job_type="generate_cover",
+        status="completed",
+        catalog_id="classics",
+        book_number=7,
+        payload={},
+        result={
+            "results": [
+                {
+                    "success": True,
+                    "variant": 1,
+                    "model": "openrouter/google/gemini-3-pro-image-preview",
+                    "image_path": str(raw_path),
+                    "composited_path": str(comp_path),
+                }
+            ]
+        },
+        error={},
+        attempts=1,
+        max_attempts=3,
+        priority=100,
+        retry_after="",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(timezone.utc).isoformat(),
+        finished_at=datetime.now(timezone.utc).isoformat(),
+        worker_id="",
+    )
+
+    assert qr._resolve_raw_image_path_for_job(runtime=cfg, job=job) == raw_path
+    assert qr._resolve_composite_image_path_for_job(runtime=cfg, job=job) == comp_path
+    assert qr._display_filename_token("Temple / Dawn") == "Temple Dawn"
+    assert qr._display_filename_token("Temple – Dawn") == "Temple – Dawn"
+
+
 def test_seed_builtin_prompts_creates_templates_and_is_idempotent(tmp_path: Path):
     cfg = _build_runtime_for_startup_checks(tmp_path)
     seeded = qr._seed_builtin_prompts(runtime=cfg, actor="test", overwrite=False)

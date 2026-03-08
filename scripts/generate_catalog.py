@@ -327,7 +327,8 @@ def _estimate_cost(quality_rows: list[dict[str, Any]]) -> float:
         "gpt-image-1-medium": 0.040,
         "imagen-4-ultra": 0.060,
         "imagen-4-fast": 0.030,
-        "nano-banana-pro": 0.067,
+        "nano-banana-pro": 0.020,
+        "openrouter/google/gemini-3-pro-image-preview": 0.020,
         "openai__gpt-image-1": 0.040,
     }
     return round(sum(model_cost.get(str(row.get("model", "unknown")), 0.04) for row in quality_rows if isinstance(row, dict)), 2)

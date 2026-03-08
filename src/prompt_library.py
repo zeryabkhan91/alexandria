@@ -19,6 +19,184 @@ except ModuleNotFoundError:  # pragma: no cover
 
 logger = get_logger(__name__)
 
+SUPPORTED_REUSABLE_PLACEHOLDERS: tuple[str, ...] = (
+    "{title}",
+    "{author}",
+    "{TITLE}",
+    "{AUTHOR}",
+    "{SUBTITLE}",
+    "{SCENE}",
+    "{MOOD}",
+    "{ERA}",
+)
+
+ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT = (
+    "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, "
+    "no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, "
+    "no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, "
+    "no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, "
+    "no blurry medallion illustration, no off-centre composition, no white or light backgrounds."
+)
+
+ALEXANDRIA_PROMPT_SPECS: tuple[dict[str, object], ...] = (
+    {
+        "id": "alexandria-base-classical-devotion",
+        "name": "BASE 1 — Classical Devotion",
+        "prompt_template": (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "Deep navy blue background (#0A1628). Ornate gold baroque scrollwork border frame with floral filigree along all four edges. "
+            "Centered circular medallion illustration in the style of Byzantine iconography and Renaissance religious painting: {SCENE}. "
+            "The illustration is framed by a thick gold circular border with decorative notching. "
+            "Leave clear empty space above and below the medallion where text will be composited later. "
+            "Small gold ornamental dividers as decorative accents. "
+            "The overall mood is {MOOD}. Era reference: {ERA}. Classical, sacred, museum-quality. "
+            "No modern elements. Aspect ratio 6:9, high resolution, print-ready."
+        ),
+        "notes": "Alexandria three-part formula prompt. Best for: Religious, Apocryphal, Biblical.",
+        "tags": ["alexandria", "base", "classical-devotion", "religious", "apocryphal", "biblical"],
+    },
+    {
+        "id": "alexandria-base-philosophical-gravitas",
+        "name": "BASE 2 — Philosophical Gravitas",
+        "prompt_template": (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "Deep navy blue background (#0A1628). Clean gold geometric border frame with Art Deco influence — straight lines, symmetrical corners, "
+            "subtle Greek key pattern along edges. Centered circular medallion illustration in the style of neoclassical painting: {SCENE}. "
+            "The illustration shows balanced composition with architectural or natural elements evoking contemplation. "
+            "Framed by a refined gold circular border. Leave clear empty space above and below the medallion where text will be composited later. "
+            "Minimal ornamental dividers — single gold rules. The mood is {MOOD}. Era reference: {ERA}. "
+            "Intellectual, timeless, restrained elegance. Aspect ratio 6:9, high resolution, print-ready."
+        ),
+        "notes": "Alexandria three-part formula prompt. Best for: Philosophy, Self-Help, Strategy.",
+        "tags": ["alexandria", "base", "philosophical-gravitas", "philosophy", "self-help", "strategy"],
+    },
+    {
+        "id": "alexandria-base-gothic-atmosphere",
+        "name": "BASE 3 — Gothic Atmosphere",
+        "prompt_template": (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "Deep navy-black background (#080F1D). Heavy ornate gold gothic frame with pointed arch motifs, thorned vine scrollwork, "
+            "and subtle skull or gargoyle corner embellishments. Centered circular medallion illustration in the style of dark Romantic-era painting "
+            "with dramatic chiaroscuro lighting: {SCENE}. The illustration emphasizes shadow, supernatural atmosphere, and Victorian-era dread. "
+            "Framed by an elaborate gold circular border with thorn or chain detailing. "
+            "Leave clear empty space above and below the medallion where text will be composited later. "
+            "Gothic ornamental dividers — small bat-wing or fleuron motifs. The mood is {MOOD}. Era reference: {ERA}. "
+            "Dark, atmospheric, hauntingly beautiful. Aspect ratio 6:9, high resolution, print-ready."
+        ),
+        "notes": "Alexandria three-part formula prompt. Best for: Horror, Gothic, Supernatural.",
+        "tags": ["alexandria", "base", "gothic-atmosphere", "horror", "gothic", "supernatural"],
+    },
+    {
+        "id": "alexandria-base-romantic-realism",
+        "name": "BASE 4 — Romantic Realism",
+        "prompt_template": (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "Deep navy blue background (#0F1B33). Elegant gold classical frame with balanced symmetry — laurel wreath corners, "
+            "subtle column or pilaster motifs along vertical edges, simple rule along top and bottom. "
+            "Centered circular medallion illustration in the style of 19th-century Romantic realism and academic painting: {SCENE}. "
+            "Rich colour palette within the medallion — warm earth tones, dramatic skies, detailed period clothing. "
+            "Framed by a refined gold circular border. Leave clear empty space above and below the medallion where text will be composited later. "
+            "Elegant gold fleuron dividers. The mood is {MOOD}. Era reference: {ERA}. "
+            "Literary, emotionally resonant, painterly. Aspect ratio 6:9, high resolution, print-ready."
+        ),
+        "notes": "Alexandria three-part formula prompt. Best for: Classical Literature, Novels, Drama.",
+        "tags": ["alexandria", "base", "romantic-realism", "literature", "novels", "drama"],
+    },
+    {
+        "id": "alexandria-base-esoteric-mysticism",
+        "name": "BASE 5 — Esoteric Mysticism",
+        "prompt_template": (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "Deep navy blue background (#0A1628) with very subtle dark celestial texture (barely visible star field). "
+            "Intricate gold border frame combining alchemical symbols, sacred geometry patterns, and esoteric motifs — pentagrams, ouroboros elements, celestial circles. "
+            "Centered circular medallion illustration in the style of medieval illuminated manuscripts crossed with Romantic-era mystical painting: {SCENE}. "
+            "The illustration features mystical light sources, symbolic objects, and arcane atmosphere. "
+            "Framed by a gold circular border with astrological or alchemical notations. "
+            "Leave clear empty space above and below the medallion where text will be composited later. "
+            "Esoteric ornamental dividers — small pentacle or celestial motifs. The mood is {MOOD}. Era reference: {ERA}. "
+            "Mysterious, ancient, forbidden knowledge. Aspect ratio 6:9, high resolution, print-ready."
+        ),
+        "notes": "Alexandria three-part formula prompt. Best for: Occult, Mystical, Forbidden Texts.",
+        "tags": ["alexandria", "base", "esoteric-mysticism", "occult", "mystical", "esoteric"],
+    },
+    {
+        "id": "alexandria-wildcard-edo-meets-alexandria",
+        "name": "WILDCARD 1 — Edo Meets Alexandria",
+        "prompt_template": (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "Deep navy blue background (#0A1628). Gold ornamental border frame with Japanese-influenced geometric patterns — interlocking hexagons, wave motifs (seigaiha), "
+            "and cloud scrolls rendered in gold leaf style. Centered circular medallion illustration painted in the style of Katsushika Hokusai meets classical European oil painting: {SCENE}, "
+            "rendered with ukiyo-e compositional principles but Western chiaroscuro lighting. "
+            "Framed by a gold circular border with wave-pattern detailing. Leave clear empty space above and below the medallion where text will be composited later. "
+            "Gold ornamental dividers using stylised cloud motifs. The mood is {MOOD}. Era reference: {ERA}. "
+            "Aspect ratio 6:9, high resolution, print-ready."
+        ),
+        "notes": "Alexandria wildcard prompt. Japanese woodblock elegance fused with classical oil storytelling.",
+        "tags": ["alexandria", "wildcard", "edo-meets-alexandria", "japanese", "ukiyoe"],
+    },
+    {
+        "id": "alexandria-wildcard-pre-raphaelite-garden",
+        "name": "WILDCARD 2 — Pre-Raphaelite Garden",
+        "prompt_template": (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "Deep navy blue background (#0A1628). Gold Art Nouveau border frame — sinuous organic lines, flowing botanical forms (iris, lily, vine tendrils) "
+            "in the style of Alphonse Mucha, rendered entirely in gold on navy. "
+            "Centered circular medallion illustration in the Pre-Raphaelite painting style: {SCENE}, with luminous skin tones, flowing drapery, rich botanical details, "
+            "and stained-glass-window quality light. Framed by a gold circular border with intertwined botanical motifs. "
+            "Leave clear empty space above and below the medallion where text will be composited later. "
+            "Art Nouveau floral dividers. The mood is {MOOD}. Era reference: {ERA}. Aspect ratio 6:9, high resolution, print-ready."
+        ),
+        "notes": "Alexandria wildcard prompt. Mucha framing plus Pre-Raphaelite colour for lush literary covers.",
+        "tags": ["alexandria", "wildcard", "pre-raphaelite-garden", "pre-raphaelite", "art-nouveau"],
+    },
+    {
+        "id": "alexandria-wildcard-illuminated-manuscript",
+        "name": "WILDCARD 3 — Illuminated Manuscript",
+        "prompt_template": (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "Deep navy blue background (#0A1628). Gold border frame in the style of medieval illuminated manuscript marginalia — intricate interlace knotwork (Book of Kells style), "
+            "inhabited vine scrolls with tiny gold animals and figures woven into the borders. "
+            "Centered circular medallion illustration in the style of a hand-painted medieval miniature with gold leaf highlights: {SCENE}, "
+            "rendered with flat perspective, vivid colours on gold ground, and meticulous decorative detail. "
+            "Framed by a Celtic knotwork gold circular border. Leave clear empty space above and below the medallion where text will be composited later. "
+            "Celtic knot dividers. The mood is {MOOD}. Era reference: {ERA}. Aspect ratio 6:9, high resolution, print-ready."
+        ),
+        "notes": "Alexandria wildcard prompt. Medieval manuscript energy for ancient or sacred material.",
+        "tags": ["alexandria", "wildcard", "illuminated-manuscript", "medieval", "celtic"],
+    },
+    {
+        "id": "alexandria-wildcard-celestial-cartography",
+        "name": "WILDCARD 4 — Celestial Cartography",
+        "prompt_template": (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "Deep navy blue background (#0A1628). Gold border frame with celestial cartography motifs — constellation lines, zodiac symbols, orbital paths, "
+            "and compass roses rendered in fine gold engraving style. "
+            "Centered circular medallion illustration in the style of astronomical engravings from Harmonia Macrocosmica crossed with Romantic landscape painting: {SCENE}, "
+            "with dramatic celestial elements — star fields, eclipses, planetary alignments, or aurora-like light integrated into the composition. "
+            "Framed by a gold circular border designed as an astrolabe or armillary sphere. "
+            "Leave clear empty space above and below the medallion where text will be composited later. "
+            "Gold star-and-compass dividers. The mood is {MOOD}. Era reference: {ERA}. Aspect ratio 6:9, high resolution, print-ready."
+        ),
+        "notes": "Alexandria wildcard prompt. Cosmic engraving language for knowledge-rich or metaphysical titles.",
+        "tags": ["alexandria", "wildcard", "celestial-cartography", "celestial", "astronomy"],
+    },
+    {
+        "id": "alexandria-wildcard-temple-of-knowledge",
+        "name": "WILDCARD 5 — Temple of Knowledge",
+        "prompt_template": (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "Deep navy blue background (#0A1628). Gold border frame in the style of ancient Egyptian temple relief carving — papyrus columns, lotus capitals, "
+            "winged sun disc at top center, ankh and djed pillar motifs along sides, all rendered as raised gold relief on navy. "
+            "Centered circular medallion illustration combining Egyptian tomb painting flatness with Orientalist oil painting richness: {SCENE}, "
+            "rendered with the bold outlines and profile views of Egyptian art but the colour depth and atmospheric lighting of 19th-century Orientalist masters. "
+            "Framed by a gold cartouche-style circular border. Leave clear empty space above and below the medallion where text will be composited later. "
+            "Gold scarab or lotus dividers. The mood is {MOOD}. Era reference: {ERA}. Aspect ratio 6:9, high resolution, print-ready."
+        ),
+        "notes": "Alexandria wildcard prompt. Direct homage to Alexandria's Egyptian origin and temple symbolism.",
+        "tags": ["alexandria", "wildcard", "temple-of-knowledge", "egyptian", "mystical"],
+    },
+)
+
 
 @dataclass(slots=True)
 class StyleAnchor:
@@ -71,8 +249,7 @@ class PromptLibrary:
 
     def save_prompt(self, prompt: LibraryPrompt) -> None:
         """Save a successful prompt to the library."""
-        if "{title}" not in prompt.prompt_template:
-            raise ValueError("Prompt template must include '{title}' placeholder for title-agnostic reuse.")
+        _validate_prompt_template(prompt.prompt_template)
         existing = self._prompts.get(prompt.id)
         normalized = LibraryPrompt(
             id=str(prompt.id),
@@ -118,7 +295,7 @@ class PromptLibrary:
                 if wanted.intersection({tag.lower() for tag in prompt.tags})
                 or wanted.intersection({anchor.lower() for anchor in prompt.style_anchors})
             ]
-        return sorted(values, key=lambda prompt: prompt.quality_score, reverse=True)
+        return _sorted_prompts(values)
 
     def get_prompt(self, prompt_id: str) -> LibraryPrompt | None:
         """Return one prompt by id."""
@@ -143,8 +320,7 @@ class PromptLibrary:
 
         name = str(updates.get("name", current.name) or current.name).strip() or current.name
         prompt_template = str(updates.get("prompt_template", current.prompt_template) or current.prompt_template).strip() or current.prompt_template
-        if "{title}" not in prompt_template:
-            raise ValueError("Prompt template must include '{title}' placeholder for title-agnostic reuse.")
+        _validate_prompt_template(prompt_template)
 
         style_anchors = updates.get("style_anchors", current.style_anchors)
         tags = updates.get("tags", current.tags)
@@ -247,7 +423,7 @@ class PromptLibrary:
                     return False
             return True
 
-        return sorted((prompt for prompt in self._prompts.values() if _matches(prompt)), key=lambda p: p.quality_score, reverse=True)
+        return _sorted_prompts(prompt for prompt in self._prompts.values() if _matches(prompt))
 
     def build_prompt(self, book_title: str, style_anchors: list[str], custom_text: str = "") -> str:
         """Build a prompt from style anchors + book title + optional custom text."""
@@ -275,14 +451,19 @@ class PromptLibrary:
         logger.info("Upserted style anchor", extra={"anchor": anchor.name})
 
     def _load_or_seed(self) -> None:
+        changed = False
         if self.library_path.exists():
             self._load()
+            changed = self._ensure_alexandria_prompts() or changed
             if self._style_anchors and self._prompts:
+                if changed:
+                    self._persist()
                 return
 
         anchors, prompts = self._seed_library()
         self._style_anchors = {anchor.name: anchor for anchor in anchors}
         self._prompts = {prompt.id: prompt for prompt in prompts}
+        self._ensure_alexandria_prompts()
         self._persist()
 
     def _load(self) -> None:
@@ -359,16 +540,49 @@ class PromptLibrary:
             "style_anchors": [asdict(anchor) for anchor in self.get_style_anchors()],
             "prompts": [
                 asdict(prompt)
-                for prompt in sorted(
-                    self._prompts.values(),
-                    key=lambda item: (item.quality_score, item.created_at),
-                    reverse=True,
-                )
+                for prompt in _sorted_prompts(self._prompts.values())
             ],
             "versions": {prompt_id: rows for prompt_id, rows in self._versions.items()},
         }
         safe_json.atomic_write_json(self.library_path, payload)
         logger.debug("Persisted prompt library", extra={"path": str(self.library_path), "anchors": len(self._style_anchors), "prompts": len(self._prompts)})
+
+    def _ensure_alexandria_prompts(self) -> bool:
+        changed = False
+        existing_by_name = {str(prompt.name).strip().lower(): prompt for prompt in self._prompts.values()}
+        for spec in ALEXANDRIA_PROMPT_SPECS:
+            prompt_id = str(spec.get("id", "")).strip()
+            name = str(spec.get("name", "")).strip()
+            if not prompt_id or not name:
+                continue
+            current = self._prompts.get(prompt_id) or existing_by_name.get(name.lower())
+            if current is not None:
+                continue
+            created_at = _utc_now()
+            prompt = LibraryPrompt(
+                id=prompt_id,
+                name=name,
+                prompt_template=str(spec.get("prompt_template", "")).strip(),
+                style_anchors=[],
+                negative_prompt=ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT,
+                source_book="builtin",
+                source_model="openrouter/google/gemini-3-pro-image-preview",
+                quality_score=1.0,
+                saved_by="system",
+                created_at=created_at,
+                notes=str(spec.get("notes", "")).strip(),
+                tags=list(spec.get("tags", [])) if isinstance(spec.get("tags", []), list) else ["alexandria"],
+                category="builtin",
+                version=1,
+                usage_count=0,
+                win_count=0,
+                last_used_at="",
+                updated_at=created_at,
+            )
+            self._prompts[prompt.id] = prompt
+            existing_by_name[name.lower()] = prompt
+            changed = True
+        return changed
 
     def _seed_library(self) -> tuple[list[StyleAnchor], list[LibraryPrompt]]:
         templates = safe_json.load_json(config.PROMPT_TEMPLATES_PATH, {})
@@ -537,6 +751,35 @@ class PromptLibrary:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _validate_prompt_template(template: str) -> None:
+    if not _has_supported_placeholder(template):
+        joined = ", ".join(SUPPORTED_REUSABLE_PLACEHOLDERS)
+        raise ValueError(f"Prompt template must include at least one reusable placeholder ({joined}).")
+
+
+def _has_supported_placeholder(template: str) -> bool:
+    token = str(template or "")
+    return any(marker in token for marker in SUPPORTED_REUSABLE_PLACEHOLDERS)
+
+
+def _prompt_priority(prompt: LibraryPrompt) -> tuple[int, int, float, int, int, str]:
+    tags = {str(tag).strip().lower() for tag in prompt.tags if str(tag).strip()}
+    is_alexandria = 1 if "alexandria" in tags else 0
+    is_builtin = 1 if str(prompt.category or "").strip().lower() == "builtin" else 0
+    return (
+        is_alexandria,
+        is_builtin,
+        float(prompt.quality_score or 0.0),
+        int(prompt.win_count or 0),
+        int(prompt.usage_count or 0),
+        str(prompt.created_at or ""),
+    )
+
+
+def _sorted_prompts(prompts: Iterable[LibraryPrompt]) -> list[LibraryPrompt]:
+    return sorted(prompts, key=_prompt_priority, reverse=True)
 
 
 def load_default_prompt_library() -> PromptLibrary:

@@ -139,6 +139,13 @@ ARTIFACT_RETRY_APPEND = (
     "banners, plaques, medallion rings, circular frames, ornamental borders, decorative edges, "
     "filigree, scrollwork, arabesques, ornamental curls, black ornamental silhouettes, or lace-like cutout motifs."
 )
+ALEXANDRIA_NEGATIVE_PROMPT = (
+    "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, "
+    "no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, "
+    "no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, "
+    "no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, "
+    "no blurry medallion illustration, no off-centre composition, no white or light backgrounds."
+)
 _PROMPT_REMOVAL_PATTERNS: tuple[str, ...] = (
     r"\bcircular vignette composition\b",
     r"(?<!no )\bcircular(?:\s+medallion)?(?:\s+frame)?\b",
@@ -1211,10 +1218,11 @@ def generate_image(
     """Generate a single image via the specified model/provider."""
     runtime = config.get_config()
 
+    negative_prompt = _merge_negative_prompt(negative_prompt)
     model_prefix = _model_provider_prefix(runtime, model)
     provider = model_prefix or params.get("provider") or runtime.resolve_model_provider(model)
     provider = str(provider).lower()
-    provider_model = _resolve_provider_model_name(provider=provider, model=model)
+    provider_model = _resolve_provider_model_name(provider=provider, model=model, runtime=runtime)
     width = int(params.get("width", runtime.image_width))
     height = int(params.get("height", runtime.image_height))
 
@@ -1320,6 +1328,7 @@ def generate_all_models(
     results: list[GenerationResult] = []
     failures: list[GenerationResult] = []
     dry_run_plan: list[dict[str, Any]] = []
+    effective_negative_prompt = _merge_negative_prompt(negative_prompt)
 
     tasks: list[tuple[str, int, Path, str, str, int]] = []
     rng = random.SystemRandom()
@@ -1406,7 +1415,7 @@ def generate_all_models(
                         "provider": provider,
                         "variant": variant,
                         "prompt": diversified_prompt,
-                        "negative_prompt": negative_prompt,
+                        "negative_prompt": effective_negative_prompt,
                         "output_path": str(image_path),
                         "estimated_cost": runtime.get_model_cost(model),
                         "seed": seed,
@@ -1445,7 +1454,7 @@ def generate_all_models(
                     book_number=book_number,
                     variant=variant,
                     prompt=variant_prompt,
-                    negative_prompt=negative_prompt,
+                    negative_prompt=effective_negative_prompt,
                     model=model,
                     provider=provider,
                     output_path=image_path,
@@ -1465,7 +1474,7 @@ def generate_all_models(
         results = _regenerate_near_duplicate_variants(
             runtime=runtime,
             book_number=book_number,
-            negative_prompt=negative_prompt,
+            negative_prompt=effective_negative_prompt,
             output_dir=output_dir,
             results=results,
             resume=resume,
@@ -1704,7 +1713,11 @@ def generate_single_book(
         library_matches = [prompt for prompt in prompt_library.get_prompts() if prompt.id == library_prompt_id]
         if not library_matches:
             raise KeyError(f"Prompt id '{library_prompt_id}' not found in prompt library")
-        selected_prompt = library_matches[0].prompt_template.format(title=title)
+        selected_prompt = _apply_library_prompt_tokens(
+            library_matches[0].prompt_template,
+            title=title,
+            author=author,
+        )
         if not negative_prompt:
             selected_negative_prompt = library_matches[0].negative_prompt
 
@@ -2202,9 +2215,10 @@ def _create_provider_instance(
     return provider_class(model=model, api_key=api_key, runtime=runtime)
 
 
-def _resolve_provider_model_name(provider: str, model: str) -> str:
+def _resolve_provider_model_name(provider: str, model: str, runtime: config.Config | None = None) -> str:
     """Strip provider prefix from provider/model notation."""
-    token = model.strip()
+    cfg = runtime or config.get_config()
+    token = cfg.resolve_model_alias(model)
     if "/" not in token:
         return token
 
@@ -2212,6 +2226,26 @@ def _resolve_provider_model_name(provider: str, model: str) -> str:
     if prefix.lower() == provider.lower() and suffix:
         return suffix
     return token
+
+
+def _merge_negative_prompt(negative_prompt: str | None) -> str:
+    custom = " ".join(str(negative_prompt or "").split()).strip()
+    baseline = " ".join(ALEXANDRIA_NEGATIVE_PROMPT.split()).strip()
+    if not custom:
+        return baseline
+    if baseline.lower() in custom.lower():
+        return custom
+    return f"{custom} {baseline}".strip()
+
+
+def _apply_library_prompt_tokens(template: str, *, title: str, author: str) -> str:
+    return (
+        str(template or "")
+        .replace("{title}", str(title or ""))
+        .replace("{author}", str(author or ""))
+        .replace("{TITLE}", str(title or ""))
+        .replace("{AUTHOR}", str(author or ""))
+    )
 
 
 def _model_provider_prefix(runtime: config.Config, model: str) -> str | None:

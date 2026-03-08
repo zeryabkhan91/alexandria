@@ -69,7 +69,7 @@ def test_save_prompt_and_filters(tmp_path: Path, monkeypatch):
     assert any(p.id == "custom-1" for p in searched)
 
 
-def test_save_prompt_requires_title_placeholder(tmp_path: Path, monkeypatch):
+def test_save_prompt_requires_supported_placeholder(tmp_path: Path, monkeypatch):
     templates_path = tmp_path / "prompt_templates.json"
     templates_path.write_text(json.dumps(_templates_payload()), encoding="utf-8")
     monkeypatch.setattr(pl.config, "PROMPT_TEMPLATES_PATH", templates_path)
@@ -91,6 +91,38 @@ def test_save_prompt_requires_title_placeholder(tmp_path: Path, monkeypatch):
     )
     with pytest.raises(ValueError):
         library.save_prompt(invalid)
+
+
+def test_alexandria_prompts_seeded_first_and_scene_placeholders_allowed(tmp_path: Path, monkeypatch):
+    templates_path = tmp_path / "prompt_templates.json"
+    templates_path.write_text(json.dumps(_templates_payload()), encoding="utf-8")
+    monkeypatch.setattr(pl.config, "PROMPT_TEMPLATES_PATH", templates_path)
+
+    library = pl.PromptLibrary(tmp_path / "prompt_library.json")
+    prompts = library.get_prompts()
+    alexandria = [prompt for prompt in prompts if "alexandria" in {tag.lower() for tag in prompt.tags}]
+    assert len(alexandria) >= 10
+    assert "alexandria" in {tag.lower() for tag in prompts[0].tags}
+
+    scene_prompt = pl.LibraryPrompt(
+        id="scene-based",
+        name="Scene Based",
+        prompt_template="Book cover illustration only — {SCENE} with mood {MOOD}.",
+        style_anchors=[],
+        negative_prompt="text",
+        source_book="book",
+        source_model="model",
+        quality_score=0.9,
+        saved_by="tester",
+        created_at="2026-03-08T00:00:00+00:00",
+        notes="scene prompt",
+        tags=["alexandria"],
+        category="builtin",
+    )
+    library.save_prompt(scene_prompt)
+    saved = library.get_prompt("scene-based")
+    assert saved is not None
+    assert "{SCENE}" in saved.prompt_template
 
 
 def test_build_prompt_best_prompts_add_anchor(tmp_path: Path, monkeypatch):

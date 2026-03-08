@@ -7,21 +7,58 @@ let _defaultModelId = null;
 let _lastVisibleModelIds = [];
 let _defaultSelectedModelIds = [];
 const PREFERRED_DEFAULT_MODELS = [
-  'openrouter/google/gemini-2.5-flash-image',
+  'openrouter/google/gemini-3-pro-image-preview',
   'nano-banana-pro',
-  'google/gemini-2.5-flash-image',
+  'google/gemini-3-pro-image-preview',
 ];
 const RECOMMENDED_PINNED_MODEL_IDS = [
-  'openrouter/google/gemini-2.5-flash-image',
+  'openrouter/google/gemini-3-pro-image-preview',
+  'google/gemini-3-pro-image-preview',
   'google/gemini-2.5-flash-image',
+  'openrouter/google/gemini-2.5-flash-image',
 ];
 const NANO_BANANA_MODEL_IDS = new Set([
-  'openrouter/google/gemini-2.5-flash-image',
+  'openrouter/google/gemini-3-pro-image-preview',
   'nano-banana-pro',
 ]);
 const GEMINI_FLASH_DIRECT_MODEL_IDS = new Set([
   'google/gemini-2.5-flash-image',
+  'google/gemini-3-pro-image-preview',
 ]);
+const GENRE_PROMPT_MAP = {
+  religious: { base: 'BASE 1 — Classical Devotion', wildcards: ['WILDCARD 3 — Illuminated Manuscript', 'WILDCARD 5 — Temple of Knowledge'] },
+  apocryphal: { base: 'BASE 1 — Classical Devotion', wildcards: ['WILDCARD 3 — Illuminated Manuscript', 'WILDCARD 5 — Temple of Knowledge'] },
+  biblical: { base: 'BASE 1 — Classical Devotion', wildcards: ['WILDCARD 3 — Illuminated Manuscript', 'WILDCARD 5 — Temple of Knowledge'] },
+  philosophy: { base: 'BASE 2 — Philosophical Gravitas', wildcards: ['WILDCARD 4 — Celestial Cartography', 'WILDCARD 1 — Edo Meets Alexandria'] },
+  'self-help': { base: 'BASE 2 — Philosophical Gravitas', wildcards: ['WILDCARD 4 — Celestial Cartography', 'WILDCARD 1 — Edo Meets Alexandria'] },
+  strategy: { base: 'BASE 2 — Philosophical Gravitas', wildcards: ['WILDCARD 4 — Celestial Cartography', 'WILDCARD 1 — Edo Meets Alexandria'] },
+  horror: { base: 'BASE 3 — Gothic Atmosphere', wildcards: ['WILDCARD 4 — Celestial Cartography', 'WILDCARD 2 — Pre-Raphaelite Garden'] },
+  gothic: { base: 'BASE 3 — Gothic Atmosphere', wildcards: ['WILDCARD 4 — Celestial Cartography', 'WILDCARD 2 — Pre-Raphaelite Garden'] },
+  supernatural: { base: 'BASE 3 — Gothic Atmosphere', wildcards: ['WILDCARD 4 — Celestial Cartography', 'WILDCARD 2 — Pre-Raphaelite Garden'] },
+  literature: { base: 'BASE 4 — Romantic Realism', wildcards: ['WILDCARD 2 — Pre-Raphaelite Garden', 'WILDCARD 1 — Edo Meets Alexandria'] },
+  novels: { base: 'BASE 4 — Romantic Realism', wildcards: ['WILDCARD 2 — Pre-Raphaelite Garden', 'WILDCARD 1 — Edo Meets Alexandria'] },
+  drama: { base: 'BASE 4 — Romantic Realism', wildcards: ['WILDCARD 2 — Pre-Raphaelite Garden', 'WILDCARD 1 — Edo Meets Alexandria'] },
+  occult: { base: 'BASE 5 — Esoteric Mysticism', wildcards: ['WILDCARD 5 — Temple of Knowledge', 'WILDCARD 3 — Illuminated Manuscript'] },
+  mystical: { base: 'BASE 5 — Esoteric Mysticism', wildcards: ['WILDCARD 5 — Temple of Knowledge', 'WILDCARD 3 — Illuminated Manuscript'] },
+  esoteric: { base: 'BASE 5 — Esoteric Mysticism', wildcards: ['WILDCARD 5 — Temple of Knowledge', 'WILDCARD 3 — Illuminated Manuscript'] },
+  collections: { base: 'BASE 2 — Philosophical Gravitas', wildcards: ['WILDCARD 4 — Celestial Cartography'] },
+  anthologies: { base: 'BASE 2 — Philosophical Gravitas', wildcards: ['WILDCARD 4 — Celestial Cartography'] },
+};
+const GENRE_PROMPT_ALIASES = {
+  'literary-fiction': 'literature',
+  'classic-literature': 'literature',
+  literary: 'literature',
+  fiction: 'literature',
+  novel: 'novels',
+  collection: 'collections',
+  anthology: 'anthologies',
+  religion: 'religious',
+  sacred: 'religious',
+  gnostic: 'apocryphal',
+  'biblical-studies': 'biblical',
+  spirituality: 'mystical',
+  mysticism: 'mystical',
+};
 
 function modelIdToLabel(modelId) {
   const model = OpenRouter.MODELS.find((m) => m.id === modelId);
@@ -314,19 +351,149 @@ function resolveJobArtifactHref(job, keys = []) {
   return candidates[0] || '';
 }
 
-function applyPromptPlaceholders(promptText, book) {
-  return String(promptText || '')
-    .replaceAll('{title}', String(book?.title || ''))
-    .replaceAll('{author}', String(book?.author || ''));
+function _bookEnrichment(book) {
+  return (book && typeof book.enrichment === 'object' && book.enrichment) ? book.enrichment : {};
 }
 
-function resolvePrompt(templateObj, book, customPrompt) {
+function defaultSceneForBook(book) {
+  const enrichment = _bookEnrichment(book);
+  const iconicScenes = Array.isArray(enrichment.iconic_scenes) ? enrichment.iconic_scenes : [];
+  const firstScene = iconicScenes.find((item) => String(item || '').trim());
+  return String(
+    book?.scene
+    || enrichment.scene
+    || firstScene
+    || book?.description
+    || book?.default_prompt
+    || `a scene from "${book?.title || 'an ancient text'}"`
+  ).trim();
+}
+
+function defaultMoodForBook(book) {
+  const enrichment = _bookEnrichment(book);
+  const toneList = Array.isArray(enrichment.tones) ? enrichment.tones.filter((item) => String(item || '').trim()) : [];
+  return String(book?.mood || enrichment.mood || toneList[0] || 'classical, timeless, evocative').trim();
+}
+
+function defaultEraForBook(book) {
+  const enrichment = _bookEnrichment(book);
+  if (Array.isArray(enrichment.era)) {
+    const first = enrichment.era.find((item) => String(item || '').trim());
+    return String(first || '').trim();
+  }
+  return String(book?.era || enrichment.era || '').trim();
+}
+
+function cleanupResolvedPrompt(promptText) {
+  return String(promptText || '')
+    .replace(/Era reference:\s*(?:\.|,|;|:)?/gi, '')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/([.?!])\s*\./g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function applyPromptPlaceholders(promptText, book, sceneOverride, moodOverride, eraOverride) {
+  const scene = String(sceneOverride || defaultSceneForBook(book)).trim();
+  const mood = String(moodOverride || defaultMoodForBook(book)).trim();
+  const era = String(eraOverride || defaultEraForBook(book)).trim();
+  const replaced = String(promptText || '')
+    .replaceAll('{title}', String(book?.title || ''))
+    .replaceAll('{author}', String(book?.author || ''))
+    .replaceAll('{TITLE}', String(book?.title || ''))
+    .replaceAll('{AUTHOR}', String(book?.author || ''))
+    .replaceAll('{SUBTITLE}', String(book?.subtitle || ''))
+    .replaceAll('{SCENE}', scene)
+    .replaceAll('{MOOD}', mood)
+    .replaceAll('{ERA}', era);
+  return cleanupResolvedPrompt(replaced);
+}
+
+function resolvePrompt(templateObj, book, customPrompt, sceneVal, moodVal, eraVal) {
   const custom = String(customPrompt || '').trim();
   if (custom) {
-    return applyPromptPlaceholders(custom, book).trim();
+    return applyPromptPlaceholders(custom, book, sceneVal, moodVal, eraVal).trim();
   }
   const base = templateObj?.prompt_template || `Create a colorful circular medallion illustration for "{title}" by {author}.`;
-  return `${applyPromptPlaceholders(base, book)} No text, no letters, no logos, no border, no frame, colorful and richly detailed, no empty space.`.trim();
+  const resolved = applyPromptPlaceholders(base, book, sceneVal, moodVal, eraVal);
+  if (!resolved.toLowerCase().includes('no text')) {
+    return `${resolved} No text, no letters, no words, no numbers.`.trim();
+  }
+  return resolved.trim();
+}
+
+function sortPromptsForUI(prompts) {
+  return [...(Array.isArray(prompts) ? prompts : [])].sort((left, right) => {
+    const leftTags = new Set((Array.isArray(left?.tags) ? left.tags : []).map((tag) => String(tag || '').trim().toLowerCase()).filter(Boolean));
+    const rightTags = new Set((Array.isArray(right?.tags) ? right.tags : []).map((tag) => String(tag || '').trim().toLowerCase()).filter(Boolean));
+    const leftAlex = leftTags.has('alexandria') ? 1 : 0;
+    const rightAlex = rightTags.has('alexandria') ? 1 : 0;
+    if (leftAlex !== rightAlex) return rightAlex - leftAlex;
+    const leftBuiltin = String(left?.category || '').trim().toLowerCase() === 'builtin' ? 1 : 0;
+    const rightBuiltin = String(right?.category || '').trim().toLowerCase() === 'builtin' ? 1 : 0;
+    if (leftBuiltin !== rightBuiltin) return rightBuiltin - leftBuiltin;
+    const leftQuality = Number(left?.quality_score || 0);
+    const rightQuality = Number(right?.quality_score || 0);
+    if (leftQuality !== rightQuality) return rightQuality - leftQuality;
+    return String(left?.name || '').localeCompare(String(right?.name || ''));
+  });
+}
+
+function isAlexandriaTemplate(templateObj, customPrompt = '') {
+  const templateText = String(templateObj?.prompt_template || customPrompt || '').trim();
+  return templateText.includes('{SCENE}');
+}
+
+function normalizedPromptName(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function findPromptByName(name) {
+  const token = normalizedPromptName(name);
+  if (!token) return null;
+  return sortPromptsForUI(DB.dbGetAll('prompts')).find((prompt) => normalizedPromptName(prompt?.name) === token) || null;
+}
+
+function genrePromptConfigForBook(book) {
+  const enrichment = _bookEnrichment(book);
+  const rawTokens = [
+    String(book?.genre || ''),
+    String(enrichment.genre || ''),
+    ...(Array.isArray(enrichment.tags) ? enrichment.tags.map((item) => String(item || '')) : []),
+  ]
+    .flatMap((value) => String(value || '').toLowerCase().split(/[^a-z0-9_+-]+/))
+    .map((value) => value.replaceAll('_', '-').trim())
+    .filter(Boolean);
+  const expanded = new Set(rawTokens);
+  rawTokens.forEach((token) => {
+    const mapped = GENRE_PROMPT_ALIASES[token];
+    if (mapped) expanded.add(mapped);
+  });
+  for (const key of Object.keys(GENRE_PROMPT_MAP)) {
+    if (expanded.has(key)) return GENRE_PROMPT_MAP[key];
+  }
+  if (expanded.has('literary') || expanded.has('fiction')) return GENRE_PROMPT_MAP.literature;
+  return null;
+}
+
+function suggestedWildcardPromptForBook(book) {
+  const config = genrePromptConfigForBook(book);
+  const names = Array.isArray(config?.wildcards) ? config.wildcards : [];
+  if (!names.length) return null;
+  const seed = Number(book?.number || book?.id || 0);
+  const index = Math.abs(seed || 0) % names.length;
+  return findPromptByName(names[index]);
+}
+
+function backendJobIdForJob(job) {
+  const direct = String(job?.backend_job_id || '').trim();
+  if (direct) return direct;
+  try {
+    const parsed = JSON.parse(String(job?.results_json || '{}'));
+    return String(parsed?.result?.job_id || '').trim();
+  } catch {
+    return '';
+  }
 }
 
 function escapeHtml(value) {
@@ -378,7 +545,9 @@ function modelCapabilities(model) {
 function modelDescription(model) {
   const token = normalizedModelId(model).toLowerCase();
   if (isNanoModel(model)) return 'Best Nano Banana quality tier (recommended default).';
-  if (isGeminiFlashDirectModel(model)) return 'Gemini Flash direct Google provider route.';
+  if (token.includes('google/gemini-3-pro-image-preview')) return 'Nano Banana Pro direct Google provider route.';
+  if (token.includes('google/gemini-2.5-flash-image')) return 'Gemini 2.5 Flash direct Google provider route.';
+  if (isGeminiFlashDirectModel(model)) return 'Gemini direct Google provider route.';
   if (token.includes('gpt-5-image-mini')) return 'Lower-cost GPT-5 image generation.';
   if (token.includes('gpt-5-image') || token.includes('gpt-image-1')) return 'Premium multimodal image + text output.';
   if (token.includes('riverflow') && token.includes('fast-preview')) return 'Fast draft variant for quick iteration.';
@@ -471,7 +640,7 @@ window.Pages.iterate = {
     }
     await DB.loadPrompts(catalogId);
 
-    const prompts = DB.dbGetAll('prompts');
+    const prompts = sortPromptsForUI(DB.dbGetAll('prompts'));
     const options = books
       .sort((a, b) => Number(a.number || 0) - Number(b.number || 0))
       .map((book) => `<option value="${book.id}">${book.number}. ${book.title}</option>`)
@@ -526,11 +695,20 @@ window.Pages.iterate = {
             <div class="form-group">
               <label class="form-label">Prompt template</label>
               <select class="form-select" id="iterPromptSel">${promptOptions}</select>
+              <div class="text-xs text-muted mt-8" id="iterWildcardSuggestion"></div>
             </div>
           </div>
           <div class="form-group">
             <label class="form-label">Custom prompt</label>
-            <textarea class="form-textarea" id="iterPrompt" rows="4" placeholder="Override the prompt. Use {title} and {author} placeholders..."></textarea>
+            <textarea class="form-textarea" id="iterPrompt" rows="4" placeholder="Override the prompt. Use {title}, {author}, {SCENE}, {MOOD}, and {ERA} placeholders..."></textarea>
+            <div id="iterVarFields" class="mt-8 hidden">
+              <label class="form-label mt-8">Scene description</label>
+              <textarea class="form-textarea" id="iterScene" rows="2" placeholder="e.g. A radiant divine figure emerging from concentric celestial spheres..."></textarea>
+              <label class="form-label mt-8">Mood</label>
+              <input class="form-input" id="iterMood" type="text" placeholder="e.g. mystical, luminous, sacred" />
+              <label class="form-label mt-8">Era (optional)</label>
+              <input class="form-input" id="iterEra" type="text" placeholder="e.g. 2nd century Gnostic" />
+            </div>
           </div>
         </div>
 
@@ -564,12 +742,87 @@ window.Pages.iterate = {
     const advanced = document.getElementById('iterAdvanced');
     const variantsEl = document.getElementById('iterVariants');
     const promptSelEl = document.getElementById('iterPromptSel');
+    const wildcardSuggestionEl = document.getElementById('iterWildcardSuggestion');
     const customPromptEl = document.getElementById('iterPrompt');
+    const varFieldsEl = document.getElementById('iterVarFields');
+    const sceneEl = document.getElementById('iterScene');
+    const moodEl = document.getElementById('iterMood');
+    const eraEl = document.getElementById('iterEra');
     const modelSearchEl = document.getElementById('iterModelSearch');
     const modelGridEl = document.getElementById('iterModelGrid');
     const modelSummaryEl = document.getElementById('iterModelSummary');
     const modelFilterButtons = Array.from(content.querySelectorAll('[data-model-filter]'));
     const modelActionButtons = Array.from(content.querySelectorAll('[data-model-action]'));
+
+    const selectedBook = () => {
+      const bookId = Number(selectEl?.value || 0);
+      return books.find((row) => Number(row.id) === bookId) || null;
+    };
+
+    const updateWildcardSuggestion = (book) => {
+      if (!wildcardSuggestionEl) return;
+      const wildcardPrompt = suggestedWildcardPromptForBook(book);
+      if (!wildcardPrompt) {
+        wildcardSuggestionEl.innerHTML = '';
+        return;
+      }
+      wildcardSuggestionEl.innerHTML = `
+        <button class="filter-chip" type="button" data-wildcard-prompt="${escapeHtml(String(wildcardPrompt.id || ''))}">
+          Try wildcard: ${escapeHtml(String(wildcardPrompt.name || ''))}
+        </button>
+      `;
+      const button = wildcardSuggestionEl.querySelector('[data-wildcard-prompt]');
+      button?.addEventListener('click', () => {
+        if (promptSelEl) {
+          promptSelEl.value = String(wildcardPrompt.id || '');
+          promptSelEl.dispatchEvent(new Event('change'));
+        }
+      });
+    };
+
+    const updateVariableFields = (templateObj, { forceDefaults = false } = {}) => {
+      if (!varFieldsEl || !sceneEl || !moodEl || !eraEl) return;
+      const book = selectedBook();
+      const activePromptText = String(templateObj?.prompt_template || customPromptEl?.value || '').trim();
+      const usesAlexandriaFields = activePromptText.includes('{SCENE}');
+      varFieldsEl.classList.toggle('hidden', !usesAlexandriaFields);
+      if (!usesAlexandriaFields) return;
+      if (forceDefaults || !String(sceneEl.value || '').trim()) sceneEl.value = defaultSceneForBook(book);
+      if (forceDefaults || !String(moodEl.value || '').trim()) moodEl.value = defaultMoodForBook(book);
+      if (forceDefaults || !String(eraEl.value || '').trim()) eraEl.value = defaultEraForBook(book);
+    };
+
+    const applyPromptSelection = (promptId, { forceAlexandriaDefaults = false } = {}) => {
+      const selected = promptId ? DB.dbGet('prompts', String(promptId)) : null;
+      if (selected?.prompt_template && customPromptEl) {
+        customPromptEl.value = String(selected.prompt_template);
+      } else if (!promptId && customPromptEl) {
+        customPromptEl.value = '';
+      }
+      updateVariableFields(selected, { forceDefaults: forceAlexandriaDefaults });
+      updateWildcardSuggestion(selectedBook());
+      return selected;
+    };
+
+    const autoSelectGenrePrompt = () => {
+      const book = selectedBook();
+      const currentPromptId = String(promptSelEl?.value || '').trim();
+      const currentPrompt = currentPromptId ? DB.dbGet('prompts', currentPromptId) : null;
+      const config = genrePromptConfigForBook(book);
+      if (!book || !config || !promptSelEl) {
+        updateVariableFields(currentPrompt, { forceDefaults: true });
+        updateWildcardSuggestion(book);
+        return;
+      }
+      const basePrompt = findPromptByName(config.base);
+      if (!basePrompt) {
+        updateVariableFields(currentPrompt, { forceDefaults: true });
+        updateWildcardSuggestion(book);
+        return;
+      }
+      promptSelEl.value = String(basePrompt.id || '');
+      applyPromptSelection(basePrompt.id, { forceAlexandriaDefaults: true });
+    };
 
     _defaultSelectedModelIds = defaultSelectedModelIds(OpenRouter.MODELS);
     _defaultModelId = _defaultSelectedModelIds[0] || normalizedModelId(OpenRouter.MODELS[0] || null) || null;
@@ -584,6 +837,7 @@ window.Pages.iterate = {
 
     selectEl?.addEventListener('change', () => {
       _selectedBookId = Number(selectEl.value || 0) || null;
+      autoSelectGenrePrompt();
       this.loadExistingResults();
     });
 
@@ -598,6 +852,7 @@ window.Pages.iterate = {
         if (!rows.length) rows = await DB.loadBooks(catalogId);
         const sorted = [...(Array.isArray(rows) ? rows : [])]
           .sort((a, b) => Number(a.number || 0) - Number(b.number || 0));
+        books = sorted;
         const current = Number(selectEl?.value || 0);
         if (selectEl) {
           selectEl.innerHTML = ['<option value="">— Select a book —</option>']
@@ -623,6 +878,7 @@ window.Pages.iterate = {
         } else {
           Toast.success(`Catalog synced: ${sorted.length} books`);
         }
+        autoSelectGenrePrompt();
       } catch (err) {
         if (syncStatus) syncStatus.textContent = 'Sync failed';
         Toast.error(`Sync failed: ${err.message || err}`);
@@ -715,16 +971,13 @@ window.Pages.iterate = {
 
     variantsEl?.addEventListener('change', updateCost);
     promptSelEl?.addEventListener('change', () => {
-      if (!customPromptEl) return;
       const promptId = String(promptSelEl.value || '').trim();
-      if (!promptId) {
-        customPromptEl.value = '';
-        return;
-      }
-      const selected = DB.dbGet('prompts', promptId);
-      if (selected?.prompt_template) {
-        customPromptEl.value = String(selected.prompt_template);
-      }
+      applyPromptSelection(promptId, { forceAlexandriaDefaults: true });
+    });
+    customPromptEl?.addEventListener('input', () => {
+      const promptId = String(promptSelEl?.value || '').trim();
+      const selected = promptId ? DB.dbGet('prompts', promptId) : null;
+      updateVariableFields(selected, { forceDefaults: false });
     });
     renderModels();
 
@@ -741,6 +994,12 @@ window.Pages.iterate = {
     if (initialBook && books.some((b) => Number(b.id) === initialBook)) {
       selectEl.value = String(initialBook);
       _selectedBookId = initialBook;
+    }
+    if (_selectedBookId) {
+      autoSelectGenrePrompt();
+    } else {
+      updateWildcardSuggestion(null);
+      updateVariableFields(null, { forceDefaults: false });
     }
     this.loadExistingResults();
   },
@@ -760,12 +1019,19 @@ window.Pages.iterate = {
     const variantCount = Number(document.getElementById('iterVariants')?.value || 1);
     const promptId = String(document.getElementById('iterPromptSel')?.value || '').trim();
     const customPrompt = document.getElementById('iterPrompt')?.value || '';
-    const promptSource = String(customPrompt || '').trim() ? 'custom' : 'template';
+    const sceneVal = document.getElementById('iterScene')?.value || '';
+    const moodVal = document.getElementById('iterMood')?.value || '';
+    const eraVal = document.getElementById('iterEra')?.value || '';
     const books = DB.dbGetAll('books');
     const book = books.find((b) => Number(b.id) === bookId);
     if (!book) return;
 
     const templateObj = promptId ? DB.dbGet('prompts', promptId) : null;
+    const templateText = String(templateObj?.prompt_template || '').trim();
+    const trimmedCustomPrompt = String(customPrompt || '').trim();
+    const promptSource = trimmedCustomPrompt && trimmedCustomPrompt !== templateText
+      ? 'custom'
+      : (promptId ? 'template' : (trimmedCustomPrompt ? 'custom' : 'template'));
     const styleSelections = StyleDiversifier.selectDiverseStyles(selectedModels.length * variantCount);
     const selectedCoverId = String(book.cover_jpg_id || book.drive_cover_id || '').trim();
     const selectedCoverBookNumber = Number(book.number || book.id || bookId || 0);
@@ -776,7 +1042,8 @@ window.Pages.iterate = {
       for (let variant = 1; variant <= variantCount; variant += 1) {
         const style = styleSelections[styleIndex % styleSelections.length];
         styleIndex += 1;
-        const basePrompt = resolvePrompt(templateObj, book, customPrompt);
+        const customPromptOverride = promptSource === 'custom' ? customPrompt : '';
+        const basePrompt = resolvePrompt(templateObj, book, customPromptOverride, sceneVal, moodVal, eraVal);
         const prompt = StyleDiversifier.buildDiversifiedPrompt(book.title, book.author, style) + ' ' + basePrompt;
         jobs.push({
           id: uuid(),
@@ -938,6 +1205,7 @@ window.Pages.iterate = {
               <button class="btn btn-secondary btn-sm" data-dl-comp="${job.id}" ${showDownloads ? '' : 'disabled'}>⬇ Download</button>
               <button class="btn btn-secondary btn-sm" data-dl-raw="${job.id}" ${showDownloads ? '' : 'disabled'}>⬇ Raw</button>
               <button class="btn btn-secondary btn-sm" data-view-qa-book="${Number(job.book_id || 0)}" ${showComparison ? '' : 'disabled'}>Compare</button>
+              <button class="btn btn-sm" data-save-raw="${job.id}" ${showDownloads ? '' : 'disabled'} style="background:#d4af37;color:#0a1628;font-weight:600;">💾 Save Raw</button>
               <button class="btn btn-secondary btn-sm" data-save-prompt="${job.id}">💾 Prompt</button>
             </div>
           </div>
@@ -981,6 +1249,10 @@ window.Pages.iterate = {
       const book = Number(btn.dataset.viewQaBook || 0);
       if (!Number.isFinite(book) || book <= 0) return;
       window.open(`/api/visual-qa/image/${book}?catalog=classics`, '_blank', 'noopener,noreferrer');
+    }));
+    grid.querySelectorAll('[data-save-raw]').forEach((btn) => btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await this.saveRaw(btn.dataset.saveRaw, btn);
     }));
     grid.querySelectorAll('[data-save-prompt]').forEach((btn) => btn.addEventListener('click', (e) => { e.stopPropagation(); this.savePromptFromJob(btn.dataset.savePrompt); }));
   },
@@ -1117,10 +1389,70 @@ window.Pages.iterate = {
     a.click();
   },
 
+  async saveRaw(jobId, button) {
+    const job = DB.dbGet('jobs', jobId);
+    if (!job || !button) return;
+    const existingDriveUrl = String(button.dataset.driveUrl || '').trim();
+    if (existingDriveUrl) {
+      window.open(existingDriveUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    const backendJobId = backendJobIdForJob(job);
+    if (!backendJobId) {
+      Toast.error('Save Raw failed: backend job id is missing.');
+      return;
+    }
+
+    const originalText = String(button.textContent || '💾 Save Raw');
+    const originalBackground = button.style.background;
+    const originalColor = button.style.color;
+    button.disabled = true;
+    button.textContent = 'Saving...';
+
+    try {
+      const resp = await fetch('/api/save-raw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: backendJobId }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
+        throw new Error(data.message || data.error || `HTTP ${resp.status}`);
+      }
+
+      const partial = Boolean(data.warning) && !data.drive_url;
+      button.textContent = partial ? '✓ Saved (Drive unavailable)' : '✓ Saved';
+      button.style.background = partial ? '#d4af37' : '#2d6a4f';
+      button.style.color = partial ? '#0a1628' : '#fff';
+      button.disabled = false;
+      button.dataset.driveUrl = String(data.drive_url || '');
+
+      if (data.drive_url) {
+        button.title = 'Click to open in Google Drive';
+      } else {
+        button.title = String(data.warning || 'Saved locally.');
+      }
+
+      Toast.success(partial ? String(data.warning || 'Saved locally; Drive unavailable.') : 'Saved raw package.');
+    } catch (err) {
+      button.textContent = '✗ Failed';
+      button.style.background = '#d32f2f';
+      button.style.color = '#fff';
+      button.disabled = false;
+      button.dataset.driveUrl = '';
+      Toast.error(`Save Raw failed: ${err.message || err}`);
+      setTimeout(() => {
+        button.textContent = originalText;
+        button.style.background = originalBackground;
+        button.style.color = originalColor;
+      }, 2500);
+    }
+  },
+
   refreshPromptDropdown(selectedId = '') {
     const promptSel = document.getElementById('iterPromptSel');
     if (!promptSel) return;
-    const prompts = DB.dbGetAll('prompts');
+    const prompts = sortPromptsForUI(DB.dbGetAll('prompts'));
     promptSel.innerHTML = ['<option value="">Default auto</option>']
       .concat(prompts.map((p) => `<option value="${p.id}">${p.name}</option>`))
       .join('');

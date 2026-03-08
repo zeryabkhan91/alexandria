@@ -148,6 +148,15 @@ DRIVE_SYNC_LOG_PATH = PROJECT_ROOT / "data" / "drive_sync_log.json"
 SETTINGS_STORE_PATH = PROJECT_ROOT / "settings_store.json"
 CGI_CATALOG_CACHE_PATH = PROJECT_ROOT / "catalog_cache.json"
 CGI_CATALOG_MAX_AGE_SECONDS = 3600
+SAVE_RAW_DRIVE_FOLDER_ID = "1SHzAaDU1pN0ECC61KCRtYijv4dp4IR59"
+SAVE_RAW_LOCAL_DIRNAME = "Chosen Winner Generated Covers"
+FALLBACK_FAVICON_SVG = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+    b'<rect width="64" height="64" rx="12" fill="#0A1628"/>'
+    b'<circle cx="32" cy="32" r="19" fill="none" stroke="#D4AF37" stroke-width="6"/>'
+    b'<circle cx="32" cy="32" r="8" fill="#D4AF37"/>'
+    b"</svg>"
+)
 APP_STARTED_AT = time.time()
 ACTIVE_WORKER_MODE = "inline"
 STARTUP_HEALTH: dict[str, Any] = {
@@ -214,11 +223,11 @@ def _budget_presets_for_runtime(runtime: config.Config) -> list[dict[str, Any]]:
             "name": "Balanced",
             "description": "Good quality at reasonable cost",
             "models": [
-                "openrouter/google/gemini-2.5-flash-image",
+                "openrouter/google/gemini-3-pro-image-preview",
                 "openrouter/openai/gpt-5-image-mini",
             ],
             "estimated_cost_per_image_usd": round(
-                model_cost.get("openrouter/google/gemini-2.5-flash-image", 0.003)
+                model_cost.get("openrouter/google/gemini-3-pro-image-preview", 0.02)
                 + model_cost.get("openrouter/openai/gpt-5-image-mini", 0.012),
                 6,
             ),
@@ -228,12 +237,12 @@ def _budget_presets_for_runtime(runtime: config.Config) -> list[dict[str, Any]]:
             "name": "Premium",
             "description": "Best quality, all top models",
             "models": [
-                "openrouter/google/gemini-2.5-flash-image",
+                "openrouter/google/gemini-3-pro-image-preview",
                 "openrouter/openai/gpt-5-image",
                 "fal/fal-ai/flux-2-pro",
             ],
             "estimated_cost_per_image_usd": round(
-                model_cost.get("openrouter/google/gemini-2.5-flash-image", 0.003)
+                model_cost.get("openrouter/google/gemini-3-pro-image-preview", 0.02)
                 + model_cost.get("openrouter/openai/gpt-5-image", 0.04)
                 + model_cost.get("fal/fal-ai/flux-2-pro", 0.045),
                 6,
@@ -4475,8 +4484,10 @@ def _compose_prompt_for_book(
 
 _MODEL_LABEL_OVERRIDES: dict[str, str] = {
     "nano-banana-pro": "Nano Banana Pro",
-    "openrouter/google/gemini-2.5-flash-image": "Nano Banana Pro",
-    "google/gemini-2.5-flash-image": "Gemini Flash (Google Direct)",
+    "openrouter/google/gemini-3-pro-image-preview": "Nano Banana Pro",
+    "openrouter/google/gemini-2.5-flash-image": "Nano Banana (Gemini 2.5 Flash)",
+    "google/gemini-3-pro-image-preview": "Nano Banana Pro (Google Direct)",
+    "google/gemini-2.5-flash-image": "Gemini 2.5 Flash (Google Direct)",
 }
 
 
@@ -4806,7 +4817,17 @@ def _prompt_library_payload(
         payload["versions_count"] = len(library.get_versions(prompt.id))
         payload["best_model_pairing"] = str(payload.get("source_model", "")).strip() or "unknown"
         rows.append(payload)
-    rows.sort(key=lambda item: (_safe_float(item.get("quality_score"), 0.0), _safe_int(item.get("usage_count"), 0)), reverse=True)
+    rows.sort(
+        key=lambda item: (
+            1 if "alexandria" in {str(tag).strip().lower() for tag in item.get("tags", []) if str(tag).strip()} else 0,
+            1 if str(item.get("category", "")).strip().lower() == "builtin" else 0,
+            _safe_float(item.get("quality_score"), 0.0),
+            _safe_int(item.get("win_count"), 0),
+            _safe_int(item.get("usage_count"), 0),
+            str(item.get("created_at", "")),
+        ),
+        reverse=True,
+    )
     return {"ok": True, "catalog": runtime.catalog_id, "prompts": rows, "count": len(rows)}
 
 
@@ -4891,7 +4912,7 @@ def _import_prompt_payload(*, runtime: config.Config, body: dict[str, Any]) -> d
         if not isinstance(row, dict):
             continue
         template = str(row.get("prompt_template", "")).strip()
-        if "{title}" not in template:
+        if not template:
             continue
         prompt = LibraryPrompt(
             id=str(row.get("id", "") or str(uuid.uuid4())),
@@ -6127,9 +6148,16 @@ def serve_review_webapp(
                     cache_control="no-store",
                 )
             if path == "/favicon.ico":
-                return self._serve_project_relative(
-                    "/favicon.ico",
-                    allowed_roots=[PROJECT_ROOT],
+                favicon_path = PROJECT_ROOT / "favicon.ico"
+                if favicon_path.is_file():
+                    return self._serve_project_relative(
+                        "/favicon.ico",
+                        allowed_roots=[PROJECT_ROOT],
+                        cache_control="public, max-age=86400",
+                    )
+                return self._send_bytes(
+                    FALLBACK_FAVICON_SVG,
+                    content_type="image/svg+xml",
                     cache_control="public, max-age=86400",
                 )
             if path.startswith("/css/") or path.startswith("/js/") or path.startswith("/img/"):
@@ -9709,6 +9737,101 @@ def serve_review_webapp(
                 _invalidate_cache("/api/delivery/status", "/api/delivery/tracking", "/api/exports", "/api/storage/usage")
                 return self._send_json({"ok": bool(summary.get("ok", False)), "summary": summary})
 
+            if path == "/api/save-raw":
+                job_id = str(body.get("job_id", "") or body.get("backend_job_id", "")).strip()
+                if not job_id:
+                    return self._send_error(
+                        code="JOB_ID_REQUIRED",
+                        message="job_id is required",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                job = job_db_store.get_job(job_id)
+                if job is None:
+                    return self._send_error(
+                        code="JOB_NOT_FOUND",
+                        message="job not found",
+                        details={"job_id": job_id},
+                        status=HTTPStatus.NOT_FOUND,
+                        endpoint=path,
+                    )
+                book = _book_row_for_number(runtime=runtime_req, book_number=int(job.book_number or 0))
+                if not isinstance(book, dict):
+                    return self._send_error(
+                        code="BOOK_NOT_FOUND",
+                        message="book not found for job",
+                        details={"job_id": job_id, "book_number": int(job.book_number or 0)},
+                        status=HTTPStatus.NOT_FOUND,
+                        endpoint=path,
+                    )
+
+                title = _display_filename_token(str(book.get("title", f"Book {int(job.book_number or 0)}")))
+                author = _display_filename_token(str(book.get("author", "Unknown")))
+                catalog_number = str(
+                    book.get("catalog_number")
+                    or book.get("number")
+                    or job.book_number
+                    or "0"
+                ).strip()
+                folder_name = f"{catalog_number}. {title} - {author}"
+                file_stem = f"{title} – {author}"
+                raw_filename = f"{file_stem} (generated raw).png"
+                comp_filename = f"{file_stem}.jpg"
+
+                raw_source = _resolve_raw_image_path_for_job(runtime=runtime_req, job=job)
+                comp_source = _resolve_composite_image_path_for_job(runtime=runtime_req, job=job)
+                if raw_source is None and comp_source is None:
+                    return self._send_error(
+                        code="JOB_OUTPUTS_NOT_FOUND",
+                        message="No raw or composite image found for job",
+                        details={"job_id": job_id},
+                        status=HTTPStatus.NOT_FOUND,
+                        endpoint=path,
+                    )
+
+                local_folder = _local_save_raw_root(runtime=runtime_req) / folder_name
+                local_folder.mkdir(parents=True, exist_ok=True)
+                warnings: list[str] = []
+                saved_files: list[str] = []
+
+                if raw_source is not None and raw_source.exists():
+                    raw_target = _copy_image_with_format(raw_source, local_folder / raw_filename, format_name="PNG")
+                    saved_files.append(str(raw_target))
+                else:
+                    warnings.append("Generated raw image not found.")
+
+                if comp_source is not None and comp_source.exists():
+                    comp_target = _copy_image_with_format(comp_source, local_folder / comp_filename, format_name="JPEG")
+                    saved_files.append(str(comp_target))
+                else:
+                    warnings.append("Composite image not found.")
+
+                drive_url: str | None = None
+                try:
+                    drive_url = _upload_folder_to_drive(
+                        runtime=runtime_req,
+                        local_folder=local_folder,
+                        folder_name=folder_name,
+                        parent_folder_id=SAVE_RAW_DRIVE_FOLDER_ID,
+                    )
+                except Exception as exc:
+                    warning = f"Drive upload failed: {exc}"
+                    logger.warning(warning)
+                    warnings.append(warning)
+
+                return self._send_json(
+                    {
+                        "ok": True,
+                        "job_id": job_id,
+                        "book_number": int(job.book_number or 0),
+                        "folder_name": folder_name,
+                        "local_folder": str(local_folder),
+                        "saved_files": saved_files,
+                        "drive_url": drive_url,
+                        "warning": " ".join(warnings).strip() or None,
+                    }
+                )
+
             if path == "/api/save-prompt":
                 with lock:
                     library = PromptLibrary(runtime_req.prompt_library_path)
@@ -10764,6 +10887,47 @@ def serve_review_webapp(
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+            try:
+                started = float(getattr(self, "_request_started_at", 0.0) or 0.0)
+                if started > 0:
+                    _record_slow_request(
+                        method=str(getattr(self, "_request_method", "GET")),
+                        path=str(getattr(self, "_request_path", self.path)),
+                        duration_seconds=time.perf_counter() - started,
+                        status_code=int(HTTPStatus.OK),
+                        catalog_id=str(catalog_id or self._current_catalog() or ""),
+                    )
+            except Exception:
+                pass
+            try:
+                runtime_for_slo = self._runtime_for_catalog_token(str(catalog_id or "").strip() or self._current_catalog())
+                _slo_tracker_for_runtime(runtime_for_slo).record_response(
+                    int(HTTPStatus.OK),
+                    catalog_id=runtime_for_slo.catalog_id,
+                )
+            except Exception:  # pragma: no cover - best effort
+                pass
+
+        def _send_bytes(
+            self,
+            content: bytes,
+            *,
+            content_type: str = "application/octet-stream",
+            cache_control: str = "public, max-age=86400",
+            headers: dict[str, str] | None = None,
+            catalog_id: str | None = None,
+        ):
+            payload = bytes(content or b"")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", cache_control)
+            self.send_header("X-Request-Id", self._current_request_id())
+            if headers:
+                for key, value in headers.items():
+                    self.send_header(str(key), str(value))
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
             try:
                 started = float(getattr(self, "_request_started_at", 0.0) or 0.0)
                 if started > 0:
@@ -12811,6 +12975,113 @@ def _build_source_download_file(
         source=True,
     )
     return source, filename
+
+
+def _primary_job_result_row(job: job_store.JobRecord | None) -> dict[str, Any] | None:
+    rows = _job_result_rows(job)
+    if not rows:
+        return None
+    for row in rows:
+        if bool(row.get("success", False)):
+            return row
+    return rows[0]
+
+
+def _resolve_raw_image_path_for_job(*, runtime: config.Config, job: job_store.JobRecord) -> Path | None:
+    row = _primary_job_result_row(job)
+    if not isinstance(row, dict):
+        return None
+    candidate = _project_path_if_exists(row.get("raw_art_path"))
+    if candidate is not None and candidate.exists():
+        return candidate
+    candidate = _project_path_if_exists(row.get("image_path"))
+    if candidate is not None and candidate.exists():
+        return candidate
+    return _source_image_for_variant(
+        runtime=runtime,
+        book_number=int(job.book_number or 0),
+        variant=_safe_int(row.get("variant", row.get("variant_id", 0)), 0),
+        model=str(row.get("model", "") or ""),
+        record=row,
+    )
+
+
+def _resolve_composite_image_path_for_job(*, runtime: config.Config, job: job_store.JobRecord) -> Path | None:
+    row = _primary_job_result_row(job)
+    if not isinstance(row, dict):
+        return None
+    candidate = _project_path_if_exists(row.get("composited_path"))
+    if candidate is not None and candidate.exists():
+        return candidate
+    source_image = _project_path_if_exists(row.get("image_path"))
+    if source_image is not None:
+        derived = _resolve_composited_candidate(source_image, runtime=runtime)
+        if derived is not None and derived.exists():
+            return derived
+    variant = _safe_int(row.get("variant", row.get("variant_id", 0)), 0)
+    variant_dir = _variant_output_dir(runtime=runtime, book_number=int(job.book_number or 0), variant=variant)
+    if variant_dir is None:
+        return None
+    jpg_rows = sorted(variant_dir.glob("*.jpg"))
+    return jpg_rows[0] if jpg_rows else None
+
+
+def _display_filename_token(text: str, *, allow_en_dash: bool = True) -> str:
+    token = str(text or "").strip()
+    if not token:
+        return "Untitled"
+    token = re.sub(r"[\\/:*?\"<>|]", " ", token)
+    if not allow_en_dash:
+        token = token.replace("–", "-")
+    token = re.sub(r"\s+", " ", token).strip()
+    return token or "Untitled"
+
+
+def _copy_image_with_format(source: Path, destination: Path, *, format_name: str) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source_ext = source.suffix.lower().lstrip(".")
+    expected_ext = destination.suffix.lower().lstrip(".")
+    if source_ext == expected_ext and format_name.upper() in {"PNG", "JPEG"}:
+        shutil.copy2(source, destination)
+        return destination
+    with Image.open(source) as img:
+        rendered = img.convert("RGBA" if format_name.upper() == "PNG" else "RGB")
+        rendered.save(destination, format=format_name)
+    return destination
+
+
+def _local_save_raw_root(*, runtime: config.Config) -> Path:
+    return runtime.output_dir / SAVE_RAW_LOCAL_DIRNAME
+
+
+def _upload_folder_to_drive(*, runtime: config.Config, local_folder: Path, folder_name: str, parent_folder_id: str) -> str:
+    credentials_path = _resolve_credentials_path(runtime)
+    if not credentials_path.is_absolute():
+        credentials_path = PROJECT_ROOT / credentials_path
+    service = gdrive_sync.authenticate(credentials_path if credentials_path.exists() else None)
+
+    folder_metadata = {
+        "name": str(folder_name),
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [str(parent_folder_id)],
+    }
+    created_folder = service.files().create(body=folder_metadata, fields="id").execute()
+    created_folder_id = str(created_folder.get("id", "")).strip()
+    if not created_folder_id:
+        raise RuntimeError("Google Drive folder creation did not return an id")
+
+    for file_path in sorted(local_folder.iterdir()):
+        if not file_path.is_file():
+            continue
+        mime_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+        file_metadata = {
+            "name": file_path.name,
+            "parents": [created_folder_id],
+        }
+        media = gdrive_sync.MediaFileUpload(str(file_path), mimetype=mime_type)
+        service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+
+    return f"https://drive.google.com/drive/folders/{created_folder_id}"
 
 
 def _build_book_download_zip(*, runtime: config.Config, book_number: int) -> tuple[Path, str]:
