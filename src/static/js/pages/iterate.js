@@ -422,6 +422,41 @@ function resolvePrompt(templateObj, book, customPrompt, sceneVal, moodVal, eraVa
   return resolved.trim();
 }
 
+function buildGenerationJobPrompt({ book, templateObj, promptId, customPrompt, sceneVal, moodVal, eraVal, style }) {
+  const trimmedPromptId = String(promptId || '').trim();
+  const trimmedCustomPrompt = String(customPrompt || '').trim();
+  const templateText = String(templateObj?.prompt_template || '').trim();
+  const promptSource = trimmedCustomPrompt && trimmedCustomPrompt !== templateText
+    ? 'custom'
+    : (trimmedPromptId ? 'template' : (trimmedCustomPrompt ? 'custom' : 'template'));
+  const customPromptOverride = promptSource === 'custom' ? customPrompt : '';
+  const basePrompt = resolvePrompt(templateObj, book, customPromptOverride, sceneVal, moodVal, eraVal);
+  const usesStandalonePrompt = Boolean(trimmedPromptId || trimmedCustomPrompt);
+  const prompt = usesStandalonePrompt
+    ? basePrompt
+    : `${StyleDiversifier.buildDiversifiedPrompt(book.title, book.author, style)} ${basePrompt}`.trim();
+  const templateName = String(templateObj?.name || '').trim();
+  const styleLabel = usesStandalonePrompt
+    ? (
+      (templateName && promptSource === 'custom' && trimmedPromptId)
+        ? `${templateName} (edited)`
+        : (templateName || (promptSource === 'custom' ? 'Custom prompt' : 'Precomposed prompt'))
+    )
+    : (style?.label || 'Default');
+  return {
+    prompt,
+    promptSource,
+    backendPromptSource: 'custom',
+    composePrompt: false,
+    libraryPromptId: trimmedPromptId,
+    styleId: usesStandalonePrompt ? 'none' : (style?.id || 'none'),
+    styleLabel,
+  };
+}
+
+window.__ITERATE_TEST_HOOKS__ = window.__ITERATE_TEST_HOOKS__ || {};
+window.__ITERATE_TEST_HOOKS__.buildGenerationJobPrompt = buildGenerationJobPrompt;
+
 function sortPromptsForUI(prompts) {
   return [...(Array.isArray(prompts) ? prompts : [])].sort((left, right) => {
     const leftTags = new Set((Array.isArray(left?.tags) ? left.tags : []).map((tag) => String(tag || '').trim().toLowerCase()).filter(Boolean));
@@ -1042,21 +1077,29 @@ window.Pages.iterate = {
       for (let variant = 1; variant <= variantCount; variant += 1) {
         const style = styleSelections[styleIndex % styleSelections.length];
         styleIndex += 1;
-        const customPromptOverride = promptSource === 'custom' ? customPrompt : '';
-        const basePrompt = resolvePrompt(templateObj, book, customPromptOverride, sceneVal, moodVal, eraVal);
-        const prompt = StyleDiversifier.buildDiversifiedPrompt(book.title, book.author, style) + ' ' + basePrompt;
+        const promptPayload = buildGenerationJobPrompt({
+          book,
+          templateObj,
+          promptId,
+          customPrompt,
+          sceneVal,
+          moodVal,
+          eraVal,
+          style,
+        });
         jobs.push({
           id: uuid(),
           book_id: bookId,
           model,
           variant,
           status: 'queued',
-          prompt,
-          style_id: style?.id || 'none',
-          style_label: style?.label || 'Default',
+          prompt: promptPayload.prompt,
+          style_id: promptPayload.styleId,
+          style_label: promptPayload.styleLabel,
           prompt_source: promptSource,
-          backend_prompt_source: 'custom',
-          compose_prompt: false,
+          backend_prompt_source: promptPayload.backendPromptSource,
+          compose_prompt: promptPayload.composePrompt,
+          library_prompt_id: promptPayload.libraryPromptId,
           selected_cover_id: selectedCoverId,
           selected_cover_book_number: selectedCoverBookNumber,
           quality_score: null,
