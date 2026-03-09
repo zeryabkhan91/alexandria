@@ -36,7 +36,6 @@ RUN mkdir -p config scripts
 COPY scripts/quality_review.py scripts/quality_review.py
 COPY config/catalogs.json config/catalogs.json
 COPY config/book_catalog.json config/book_catalog.json
-COPY config/book_catalog_enriched.json.gz config/book_catalog_enriched.json.gz
 COPY config/book_prompts.json config/book_prompts.json
 COPY config/book_catalog_test-catalog.json config/book_catalog_test-catalog.json
 COPY config/book_prompts_test-catalog.json config/book_prompts_test-catalog.json
@@ -58,9 +57,12 @@ COPY .env.example .env.example
 RUN python - <<'PY'
 from pathlib import Path
 import gzip
+from urllib.request import urlopen
 
+url = "https://raw.githubusercontent.com/ltvspot/alexandria-cover-designer/master/config/book_catalog_enriched.json.gz"
 src = Path("config/book_catalog_enriched.json.gz")
 dst = Path("config/book_catalog_enriched.json")
+src.write_bytes(urlopen(url, timeout=120).read())
 with gzip.open(src, "rb") as fsrc, dst.open("wb") as fdst:
     while True:
         chunk = fsrc.read(1024 * 1024)
