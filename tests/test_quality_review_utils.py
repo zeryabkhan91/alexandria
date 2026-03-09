@@ -1054,25 +1054,27 @@ def test_hydrate_serialized_result_paths_persists_saved_composite_after_composit
     assert (qr.PROJECT_ROOT / str(hydrated[0]["saved_composited_path"])).exists()
 
 
-def test_seed_builtin_prompts_creates_templates_and_is_idempotent(tmp_path: Path):
+def test_seed_builtin_prompts_is_retired_and_idempotent(tmp_path: Path):
     cfg = _build_runtime_for_startup_checks(tmp_path)
     seeded = qr._seed_builtin_prompts(runtime=cfg, actor="test", overwrite=False)
     assert seeded["ok"] is True
-    assert int(seeded["total_builtins"]) >= 10
-    assert int(seeded["created"]) >= 0
-    assert int(seeded["updated"]) >= 0
+    assert int(seeded["total_builtins"]) == 0
+    assert int(seeded["created"]) == 0
+    assert int(seeded["updated"]) == 0
+    assert int(seeded["skipped"]) == 0
     library_rows = qr.PromptLibrary(cfg.prompt_library_path).get_prompts()
     names = {str(row.name) for row in library_rows}
-    assert "Sevastopol / Dramatic Conflict" in names
-    assert "Cossack / Epic Journey" in names
+    assert "Sevastopol / Dramatic Conflict" not in names
+    assert "Cossack / Epic Journey" not in names
 
     second = qr._seed_builtin_prompts(runtime=cfg, actor="test", overwrite=False)
     assert second["ok"] is True
     assert int(second["created"]) == 0
-    assert int(second["skipped"]) >= int(seeded["total_builtins"])
+    assert int(second["total_builtins"]) == 0
+    assert int(second["skipped"]) == 0
 
 
-def test_seed_builtin_prompts_repairs_malformed_builtin_rows_without_overwrite(tmp_path: Path):
+def test_seed_builtin_prompts_no_longer_repairs_retired_legacy_rows(tmp_path: Path):
     cfg = _build_runtime_for_startup_checks(tmp_path)
     cfg.prompt_library_path.write_text(
         json.dumps(
@@ -1113,19 +1115,15 @@ def test_seed_builtin_prompts_repairs_malformed_builtin_rows_without_overwrite(t
 
     seeded = qr._seed_builtin_prompts(runtime=cfg, actor="test", overwrite=False)
     assert seeded["ok"] is True
-    assert int(seeded.get("repaired", 0)) >= 1
-    assert int(seeded["updated"]) >= 1
+    assert int(seeded.get("total_builtins", 0)) == 0
+    assert int(seeded.get("repaired", 0)) == 0
+    assert int(seeded["updated"]) == 0
 
     rows = qr.PromptLibrary(cfg.prompt_library_path).get_prompts(tags=["builtin_v2:sevastopol-dramatic-conflict"])
     assert rows
-    repaired = rows[0]
-    lowered_prompt = str(repaired.prompt_template).lower()
-    lowered_negative = str(repaired.negative_prompt).lower()
-    assert "{title}" in repaired.prompt_template
-    assert "no, no" not in lowered_prompt
-    assert "no, no" not in lowered_negative
-    assert "no text" in lowered_prompt
-    assert "no border" in lowered_prompt or "no frame" in lowered_prompt
+    untouched = rows[0]
+    assert untouched.id == "builtin-malformed-1"
+    assert "no, no" in str(untouched.prompt_template).lower()
 
 
 def test_save_prompt_from_request_creates_winner_prompt_and_dedupes(tmp_path: Path):

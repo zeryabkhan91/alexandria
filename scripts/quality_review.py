@@ -5111,70 +5111,10 @@ def _import_prompt_payload(*, runtime: config.Config, body: dict[str, Any]) -> d
 
 
 def _builtin_prompt_seed_rows() -> list[dict[str, str]]:
-    def _normalize_constraint_artifacts(text: str) -> str:
-        out = str(text or "")
-        out = re.sub(r"\bno\s*,\s*no\b", "no", out, flags=re.IGNORECASE)
-        out = re.sub(r"\bno,\s*(?=no\b)", "", out, flags=re.IGNORECASE)
-        out = re.sub(r"\bno,\s*(?=[\.,;:!?]|$)", "", out, flags=re.IGNORECASE)
-        out = re.sub(r",\s*no\s*,", ", ", out, flags=re.IGNORECASE)
-        out = re.sub(r",\s*,+", ", ", out)
-        out = re.sub(r"\s+,", ",", out)
-        out = re.sub(r"\s+", " ", out)
-        return out.strip(" ,")
-
-    rows: list[dict[str, str]] = []
-    for item in prompt_generator.PROMPT_LIBRARY_BUILTINS:
-        if not isinstance(item, dict):
-            continue
-        label = str(item.get("label", "")).strip()
-        modifier = str(item.get("modifier", "")).strip()
-        style_id = str(item.get("id", "")).strip()
-        if not label or not modifier:
-            continue
-        template = (
-            'Create a vivid, highly detailed illustration for the classic book "{title}" by {author}. '
-            "Identify the story's most iconic scene, central character, or symbolic turning point, then depict that moment as a cinematic narrative scene. "
-            f"Style direction: {label}. {modifier} "
-            "Keep one dominant focal subject, dynamic depth, and strong emotional storytelling. "
-            "Output rules: scene artwork only, no text, no letters, no words, no typography, no logos, no labels, "
-            "no watermark, no ribbon, no plaque, no decorative border, no frame, no medallion ring."
-        )
-        constrained_template = prompt_generator.enforce_prompt_constraints(
-            template.replace("{title}", "BOOKTITLETOKEN").replace("{author}", "BOOKAUTHORTOKEN")
-        )
-        constrained_template = constrained_template.replace("BOOKTITLETOKEN", "{title}").replace("BOOKAUTHORTOKEN", "{author}")
-        constrained_template = _normalize_constraint_artifacts(constrained_template)
-        if "{title}" not in constrained_template:
-            constrained_template = f'Illustration for "{{title}}" by {{author}}. {constrained_template}'.strip()
-            constrained_template = _normalize_constraint_artifacts(constrained_template)
-        elif "{author}" not in constrained_template:
-            constrained_template = f'For "{{title}}" by {{author}}: {constrained_template}'.strip()
-            constrained_template = _normalize_constraint_artifacts(constrained_template)
-        lowered = constrained_template.lower()
-        if f"style direction: {label.lower()}" not in lowered:
-            constrained_template = f"Style direction: {label}. {modifier} {constrained_template}".strip()
-            constrained_template = _normalize_constraint_artifacts(constrained_template)
-            lowered = constrained_template.lower()
-        if "no text" not in lowered:
-            constrained_template = f"{constrained_template}, no text, no letters, no words, no typography".strip(" ,")
-            lowered = constrained_template.lower()
-        if "no border" not in lowered and "no frame" not in lowered:
-            constrained_template = f"{constrained_template}, no border, no frame".strip(" ,")
-            constrained_template = _normalize_constraint_artifacts(constrained_template)
-        rows.append(
-            {
-                "style_id": style_id or _safe_file_stem(label).replace("_", "-"),
-                "name": label,
-                "prompt_template": constrained_template,
-                "negative_prompt": (
-                    "text, letters, words, typography, logos, labels, watermark, signature, "
-                    "ribbon banner, plaque, medallion ring, border, frame, decorative edge, ornamental border, "
-                    "filigree, scrollwork, arabesque, ornamental curls, decorative flourishes, "
-                    "black ornamental silhouettes, lace-like cutout motifs"
-                ),
-            }
-        )
-    return rows
+    # PROMPT-26 retires the pre-Alexandria built-in prompt set. Keep the seed
+    # pathway inert so startup and manual "seed builtins" actions cannot
+    # repopulate legacy dropdown entries.
+    return []
 
 
 def _seed_builtin_prompts(*, runtime: config.Config, actor: str = "tim", overwrite: bool = False) -> dict[str, Any]:
