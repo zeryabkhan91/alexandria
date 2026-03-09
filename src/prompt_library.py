@@ -144,41 +144,44 @@ ALEXANDRIA_PROMPT_SPECS: tuple[dict[str, object], ...] = (
     },
     {
         "id": "alexandria-wildcard-edo-meets-alexandria",
-        "name": "WILDCARD 1 — Edo Meets Alexandria",
+        "name": "WILDCARD 1 — Dramatic Graphic Novel",
         "prompt_template": (
             "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
             "No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book "
-            "illustration fusing Japanese ukiyo-e woodblock style with golden-age European book illustration: "
-            "{SCENE}. Ukiyo-e compositional principles — dramatic asymmetry, bold wave-like forms, flat colour "
-            "planes with sharp defined outlines — combined with Western atmospheric depth and warm lighting. Dense "
-            "environmental detail in both traditions: individual wave crests, cherry blossom petals, cloud "
-            "formations, intricate fabric patterns. Rich saturated indigo, vermillion, ivory, and gold palette "
-            "with deep contrast. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. The "
-            "graphic precision of a Hokusai woodblock print merged with the rich colour of a European illustrated "
-            "classic. Square format, high resolution, print-ready."
+            "illustration in a dramatic graphic novel engraving style: {SCENE}. The composition uses bold "
+            "parallel crosshatching and line engraving across all figures and surfaces — visible ink strokes "
+            "creating form, depth, and shadow through dense directional linework. Characters rendered in dramatic "
+            "close-up with expressive faces, strong silhouettes, and heavy black outlines. Background layers "
+            "narrative context — architectural landmarks, crowds, dramatic events — rendered as bold silhouettes "
+            "against a turbulent sky. Colour palette strictly limited to deep black, warm amber, burnt orange, "
+            "and selective gold highlights with intense contrast between light and shadow. The sky dominates with "
+            "swirling dramatic clouds in orange and amber. Circular vignette composition. The mood is {MOOD}. Era "
+            "reference: {ERA}. The bold graphic intensity of a revolutionary poster crossed with the narrative "
+            "density of a European graphic novel master engraving. Square format, high resolution, print-ready."
         ),
-        "notes": "Alexandria wildcard prompt. Japanese woodblock elegance fused with classical oil storytelling.",
-        "tags": ["alexandria", "wildcard", "edo-meets-alexandria", "japanese", "ukiyoe"],
+        "notes": "Alexandria wildcard prompt. Dramatic amber-black engraving with graphic novel poster energy.",
+        "tags": ["graphic-novel", "crosshatch", "dramatic", "poster-art", "amber", "bold-lines"],
     },
     {
         "id": "alexandria-wildcard-pre-raphaelite-garden",
-        "name": "WILDCARD 2 — Pre-Raphaelite Garden",
+        "name": "WILDCARD 2 — Vintage Travel Poster",
         "prompt_template": (
             "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
             "No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book "
-            "illustration in a lush Pre-Raphaelite and Art Nouveau illustration style: {SCENE}. Luminous skin "
-            "tones with delicate warmth. Flowing drapery in rich jewel colours — emerald, ruby, sapphire — with "
-            "every fold individually rendered. Abundant botanical details filling every area — roses with "
-            "individual thorns, lilies with visible stamens, trailing ivy with dew drops, wildflowers identifiable "
-            "by species. Warm stained-glass quality light in gold and violet. Hair rendered strand by strand, "
-            "catching light differently on every wave. Every surface lush with natural detail — moss on stones, "
-            "bark texture on trees, petals floating on water. Circular vignette composition. The mood is {MOOD}. "
-            "Era reference: {ERA}. Lush, jewel-toned book illustration with the romantic detail density of a "
-            "Waterhouse painting rendered as a premium illustrated edition. Square format, high resolution, "
+            "illustration in the bold flat-colour style of a 1930s vintage travel poster: {SCENE}. The "
+            "composition uses layered depth planes — detailed foreground elements (trees, figures, objects), a "
+            "prominent mid-ground focal structure (building, monument, landscape feature), and a dramatic backdrop "
+            "(mountains, skyline, horizon). All shapes rendered with clean bold outlines and filled with flat "
+            "unblended colour blocks — no gradients, no soft shading, pure colour areas with sharp edges. "
+            "Simplified but recognisable forms with geometric confidence. Colour palette strictly limited to 5-7 "
+            "bold colours: deep burgundy, navy blue, warm cream, burnt orange, forest green, and selective gold "
+            "accents. Strong geometric composition with clear visual hierarchy. Circular vignette composition. The "
+            "mood is {MOOD}. Era reference: {ERA}. The bold graphic confidence of a WPA-era National Park poster "
+            "or Art Deco railway advertisement with rich narrative detail. Square format, high resolution, "
             "print-ready."
         ),
-        "notes": "Alexandria wildcard prompt. Mucha framing plus Pre-Raphaelite colour for lush literary covers.",
-        "tags": ["alexandria", "wildcard", "pre-raphaelite-garden", "pre-raphaelite", "art-nouveau"],
+        "notes": "Alexandria wildcard prompt. Flat-colour WPA travel-poster composition with bold geometric depth.",
+        "tags": ["vintage-poster", "travel-poster", "flat-colour", "WPA", "bold", "geometric"],
     },
     {
         "id": "alexandria-wildcard-illuminated-manuscript",
