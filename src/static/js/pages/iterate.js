@@ -71,8 +71,28 @@ const ALEXANDRIA_AUTO_ROTATE_PROMPT_IDS = [
   'alexandria-wildcard-celestial-cartography',
   'alexandria-wildcard-temple-of-knowledge',
 ];
-const AUTO_ROTATE_PROMPT_OPTION_LABEL = 'All 10 prompts (auto-rotate)';
-const AUTO_ROTATE_PROMPT_INFO = 'Each variant will use a different prompt: 5 base styles + 5 wildcard styles';
+const ALEXANDRIA_PROMPT_ID_BY_NAME = {
+  'BASE 1 — Classical Devotion': 'alexandria-base-classical-devotion',
+  'BASE 2 — Philosophical Gravitas': 'alexandria-base-philosophical-gravitas',
+  'BASE 3 — Gothic Atmosphere': 'alexandria-base-gothic-atmosphere',
+  'BASE 4 — Romantic Realism': 'alexandria-base-romantic-realism',
+  'BASE 5 — Esoteric Mysticism': 'alexandria-base-esoteric-mysticism',
+  'WILDCARD 1 — Edo Meets Alexandria': 'alexandria-wildcard-edo-meets-alexandria',
+  'WILDCARD 2 — Pre-Raphaelite Garden': 'alexandria-wildcard-pre-raphaelite-garden',
+  'WILDCARD 3 — Illuminated Manuscript': 'alexandria-wildcard-illuminated-manuscript',
+  'WILDCARD 4 — Celestial Cartography': 'alexandria-wildcard-celestial-cartography',
+  'WILDCARD 5 — Temple of Knowledge': 'alexandria-wildcard-temple-of-knowledge',
+};
+const ALEXANDRIA_WILDCARD_IDS = [
+  'alexandria-wildcard-edo-meets-alexandria',
+  'alexandria-wildcard-pre-raphaelite-garden',
+  'alexandria-wildcard-illuminated-manuscript',
+  'alexandria-wildcard-celestial-cartography',
+  'alexandria-wildcard-temple-of-knowledge',
+];
+const DEFAULT_GENRE_BASE_PROMPT_NAME = 'BASE 4 — Romantic Realism';
+const AUTO_ROTATE_PROMPT_OPTION_LABEL = 'Smart rotation (genre-matched + scene variety)';
+const AUTO_ROTATE_PROMPT_INFO = 'Each variant uses the best prompt for this book\'s genre with a different scene — truly unique covers';
 
 function modelIdToLabel(modelId) {
   const model = OpenRouter.MODELS.find((m) => m.id === modelId);
@@ -398,6 +418,81 @@ function defaultEraForBook(book) {
   return String(book?.era || enrichment.era || '').trim();
 }
 
+function buildScenePool(book, count) {
+  const total = Math.max(1, Number(count || 1));
+  const enrichment = _bookEnrichment(book);
+  const pool = [];
+  const seen = new Set();
+  const pushUnique = (value) => {
+    const trimmed = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!trimmed) return;
+    const token = trimmed.toLowerCase();
+    if (seen.has(token)) return;
+    seen.add(token);
+    pool.push(trimmed);
+  };
+
+  if (Array.isArray(enrichment.iconic_scenes)) {
+    enrichment.iconic_scenes.forEach((scene) => pushUnique(scene));
+  }
+
+  const protagonist = String(enrichment.protagonist || '').trim();
+  const settingPrimary = String(enrichment.setting_primary || '').trim();
+  const settingDetails = String(enrichment.setting_details || '').trim();
+
+  if (protagonist) {
+    pushUnique(
+      `${protagonist} in a pivotal moment — ${settingPrimary ? `set in ${settingPrimary}` : 'a defining scene from the story'}`,
+    );
+  }
+
+  if (settingPrimary) {
+    pushUnique(`${settingPrimary}${settingDetails ? `, ${settingDetails}` : ''} — establishing atmosphere of the story's world`);
+  }
+
+  const motifs = Array.isArray(enrichment.visual_motifs) ? enrichment.visual_motifs.filter(Boolean) : [];
+  const symbols = Array.isArray(enrichment.symbolic_elements) ? enrichment.symbolic_elements.filter(Boolean) : [];
+  const symbolicPool = [...motifs, ...symbols]
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  if (symbolicPool.length >= 2) {
+    pushUnique(`symbolic arrangement of ${symbolicPool.join(', ')} — visual metaphor for the story's themes`);
+  }
+
+  const keyCharacters = Array.isArray(enrichment.key_characters)
+    ? enrichment.key_characters.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (keyCharacters.length >= 2) {
+    pushUnique(`${keyCharacters.slice(0, 3).join(', ')} — a dramatic ensemble scene from the story`);
+  }
+
+  if (!pool.length) {
+    pushUnique(defaultSceneForBook(book));
+  }
+
+  const variationPrefixes = [
+    '',
+    'intimate close-up view of ',
+    'wide panoramic establishing shot of ',
+    'dramatic chiaroscuro lighting on ',
+    'serene contemplative depiction of ',
+    'dynamic action-filled moment of ',
+  ];
+
+  const results = [];
+  for (let index = 0; index < total; index += 1) {
+    if (index < pool.length) {
+      results.push(pool[index]);
+      continue;
+    }
+    const baseScene = pool[index % pool.length] || defaultSceneForBook(book);
+    const prefix = variationPrefixes[Math.floor(index / pool.length) % variationPrefixes.length] || '';
+    results.push(prefix ? `${prefix}${baseScene}` : baseScene);
+  }
+  return results;
+}
+
 function cleanupResolvedPrompt(promptText) {
   return String(promptText || '')
     .replace(/Era reference:\s*(?:\.|,|;|:)?/gi, '')
@@ -471,6 +566,10 @@ function buildGenerationJobPrompt({ book, templateObj, promptId, customPrompt, s
 
 window.__ITERATE_TEST_HOOKS__ = window.__ITERATE_TEST_HOOKS__ || {};
 window.__ITERATE_TEST_HOOKS__.buildGenerationJobPrompt = buildGenerationJobPrompt;
+window.__ITERATE_TEST_HOOKS__.buildScenePool = ({ book, count, ...rawBook }) => {
+  const targetBook = book && typeof book === 'object' ? book : rawBook;
+  return buildScenePool(targetBook, count);
+};
 
 function isAutoRotateSelection(promptId, customPrompt = '') {
   return !String(promptId || '').trim() && !String(customPrompt || '').trim();
@@ -543,6 +642,19 @@ function findPromptByName(name) {
   return sortPromptsForUI(DB.dbGetAll('prompts')).find((prompt) => normalizedPromptName(prompt?.name) === token) || null;
 }
 
+function findPromptById(id) {
+  const token = String(id || '').trim();
+  if (!token) return null;
+  return DB.dbGet('prompts', token)
+    || sortPromptsForUI(DB.dbGetAll('prompts')).find((prompt) => String(prompt?.id || '').trim() === token)
+    || null;
+}
+
+function promptIdForName(name) {
+  const prompt = findPromptByName(name);
+  return String(prompt?.id || ALEXANDRIA_PROMPT_ID_BY_NAME[String(name || '').trim()] || '').trim();
+}
+
 function genrePromptConfigForBook(book) {
   const enrichment = _bookEnrichment(book);
   const rawTokens = [
@@ -564,6 +676,47 @@ function genrePromptConfigForBook(book) {
   if (expanded.has('literary') || expanded.has('fiction')) return GENRE_PROMPT_MAP.literature;
   return null;
 }
+
+function buildGenreAwareRotation(book, variantCount) {
+  const total = Math.max(1, Number(variantCount || 1));
+  const genreConfig = genrePromptConfigForBook(book) || GENRE_PROMPT_MAP.literature || null;
+  const basePromptName = String(genreConfig?.base || DEFAULT_GENRE_BASE_PROMPT_NAME).trim() || DEFAULT_GENRE_BASE_PROMPT_NAME;
+  const basePromptId = promptIdForName(basePromptName) || ALEXANDRIA_PROMPT_ID_BY_NAME[DEFAULT_GENRE_BASE_PROMPT_NAME];
+  const recommendedWildcardIds = (Array.isArray(genreConfig?.wildcards) ? genreConfig.wildcards : [])
+    .map((name) => promptIdForName(name))
+    .filter(Boolean);
+  const orderedWildcards = Array.from(new Set(recommendedWildcardIds.concat(
+    ALEXANDRIA_WILDCARD_IDS.filter((id) => !recommendedWildcardIds.includes(id)),
+  )));
+  const scenes = buildScenePool(book, total);
+  const promptIds = [];
+
+  if (total <= 1) {
+    promptIds.push(basePromptId);
+  } else if (total <= 5) {
+    promptIds.push(basePromptId);
+    for (let index = 1; index < total; index += 1) {
+      promptIds.push(orderedWildcards[(index - 1) % orderedWildcards.length] || basePromptId);
+    }
+  } else {
+    const baseCount = Math.ceil(total / 2);
+    const wildcardCount = total - baseCount;
+    const bases = Array.from({ length: baseCount }, () => basePromptId);
+    const wildcards = Array.from({ length: wildcardCount }, (_, index) => orderedWildcards[index % orderedWildcards.length] || basePromptId);
+    while (promptIds.length < total) {
+      if (bases.length) promptIds.push(bases.shift());
+      if (promptIds.length >= total) break;
+      if (wildcards.length) promptIds.push(wildcards.shift());
+    }
+  }
+
+  return promptIds.map((promptId, index) => ({
+    promptId: promptId || basePromptId,
+    sceneOverride: String(scenes[index] || scenes[0] || defaultSceneForBook(book)).trim(),
+  }));
+}
+
+window.__ITERATE_TEST_HOOKS__.buildGenreAwareRotation = ({ book, variantCount }) => buildGenreAwareRotation(book, variantCount);
 
 function suggestedWildcardPromptForBook(book) {
   const config = genrePromptConfigForBook(book);
@@ -592,6 +745,17 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function resultCardPromptLabel(job) {
+  return String(job?.prompt_name || job?.style_label || 'Default').trim() || 'Default';
+}
+
+function sceneSnippetText(value, maxLength = 84) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
 }
 
 function saveRawButtonState(job) {
@@ -1226,18 +1390,19 @@ window.Pages.iterate = {
     const book = books.find((b) => Number(b.id) === bookId);
     if (!book) return;
 
-    const templateObj = promptId ? DB.dbGet('prompts', promptId) : null;
+    const templateObj = promptId ? findPromptById(promptId) : null;
     const resolvedScene = String(sceneVal || defaultSceneForBook(book)).trim();
     const resolvedMood = String(moodVal || defaultMoodForBook(book)).trim();
     const resolvedEra = String(eraVal || defaultEraForBook(book)).trim();
     const trimmedCustomPrompt = String(customPrompt || '').trim();
     const styleSelections = StyleDiversifier.selectDiverseStyles(selectedModels.length * variantCount);
-    const rotatePromptIds = isAutoRotateSelection(promptId, trimmedCustomPrompt)
-      ? autoRotatePromptAssignments(variantCount)
+    const rotateAssignments = isAutoRotateSelection(promptId, trimmedCustomPrompt)
+      ? buildGenreAwareRotation(book, variantCount)
       : [];
-    const rotateTemplates = rotatePromptIds.map((assignedId) => ({
-      promptId: assignedId,
-      templateObj: DB.dbGet('prompts', assignedId),
+    const rotateTemplates = rotateAssignments.map((assignment) => ({
+      promptId: String(assignment?.promptId || '').trim(),
+      sceneOverride: String(assignment?.sceneOverride || '').trim(),
+      templateObj: findPromptById(assignment?.promptId),
     }));
     if (rotateTemplates.some((row) => !row.templateObj)) {
       Toast.error('Prompt rotation is unavailable because one or more Alexandria prompts are missing from the library.');
@@ -1255,12 +1420,13 @@ window.Pages.iterate = {
         const assignment = rotateTemplates[variant - 1] || null;
         const assignedPromptId = String(assignment?.promptId || promptId).trim();
         const assignedTemplate = assignment?.templateObj || templateObj || null;
+        const assignedScene = String(assignment?.sceneOverride || resolvedScene).trim();
         const promptPayload = buildGenerationJobPrompt({
           book,
           templateObj: assignedTemplate,
           promptId: assignedPromptId,
           customPrompt: assignment ? '' : customPrompt,
-          sceneVal,
+          sceneVal: assignedScene,
           moodVal,
           eraVal,
           style,
@@ -1279,9 +1445,9 @@ window.Pages.iterate = {
           compose_prompt: promptPayload.composePrompt,
           preserve_prompt_text: promptPayload.preservePromptText,
           library_prompt_id: promptPayload.libraryPromptId,
-          prompt_name: String(assignedTemplate?.name || '').trim(),
+          prompt_name: String(assignedTemplate?.name || promptPayload.styleLabel || '').trim(),
           prompt_negative_prompt: String(assignedTemplate?.negative_prompt || '').trim(),
-          scene_description: resolvedScene,
+          scene_description: assignedScene,
           mood: resolvedMood,
           era: resolvedEra,
           selected_cover_id: selectedCoverId,
@@ -1417,6 +1583,9 @@ window.Pages.iterate = {
       const errorText = status === 'failed' ? String(job.error || '').trim() : '';
       const saveRawState = saveRawButtonState(job);
       const savePromptState = savePromptButtonState(job);
+      const promptLabel = resultCardPromptLabel(job);
+      const sceneText = String(job.scene_description || '').replace(/\s+/g, ' ').trim();
+      const sceneSnippet = sceneSnippetText(sceneText);
       return `
         <div class="result-card ${hasPreview ? '' : 'result-card-empty'}" ${hasPreview ? `data-view="${job.id}"` : ''}>
           ${hasPreview
@@ -1430,7 +1599,9 @@ window.Pages.iterate = {
             <div class="quality-meter">
               <div class="quality-bar"><div class="quality-fill ${qualityClass(quality)}" style="width:${Math.round(quality * 100)}%"></div></div>
             </div>
-            <div class="card-meta">$${Number(job.cost_usd || 0).toFixed(3)} · ${job.style_label || 'Default'}</div>
+            <div class="result-card-prompt-badge" title="${escapeHtml(promptLabel)}">${escapeHtml(promptLabel)}</div>
+            ${sceneSnippet ? `<div class="result-card-scene-snippet" title="${escapeHtml(sceneText)}">${escapeHtml(sceneSnippet)}</div>` : ''}
+            <div class="card-meta result-card-cost">$${Number(job.cost_usd || 0).toFixed(3)}</div>
             ${errorText ? `<div class="card-meta text-danger">${errorText}</div>` : ''}
             <div class="result-card-actions mt-8">
               <button class="btn btn-secondary btn-sm" data-dl-comp="${job.id}" ${showDownloads ? '' : 'disabled'}>⬇ Download</button>

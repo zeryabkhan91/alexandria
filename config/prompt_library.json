@@ -148,7 +148,7 @@
     {
       "id": "alexandria-wildcard-celestial-cartography",
       "name": "WILDCARD 4 — Celestial Cartography",
-      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book illustration in the style of 17th-century astronomical engravings crossed with richly coloured book illustration: {SCENE}. Dense celestial detail — individually rendered stars, planetary bodies with visible surface features, eclipses with corona flare, aurora-like curtains of light woven through the composition. Fine copper-engraving linework combined with rich saturated colour. Deep indigo sky gradations with golden celestial bodies rendered with metallic luminosity. Figures positioned among or contemplating celestial phenomena. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. The scientific precision of a Harmonia Macrocosmica star chart rendered with the rich colour of a premium illustrated edition. Square format, high resolution, print-ready.",
+      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book illustration in the style of a 17th-century scientific engraving hand-coloured with rich pigments: {SCENE}. The composition follows the visual language of antique maps and nautical charts — compass roses, cartographic grid lines rendered as fine copper-plate engraving, territorial boundaries as decorative ribbon banners. Figures appear as explorers, scholars, or navigators studying instruments — astrolabes, sextants, celestial globes, armillary spheres — all rendered with mechanical precision showing individual gears and calibration marks. Colour palette of aged parchment cream, sepia ink, ocean teal, and strategic accents of vermillion and gold leaf, distinctly warm and earthly rather than cosmic. Fine crosshatching textures throughout. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. The scientific precision of a Blaeu atlas plate coloured by a master cartographer. Square format, high resolution, print-ready.",
       "style_anchors": [],
       "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
       "source_book": "builtin",
@@ -156,7 +156,7 @@
       "quality_score": 1.0,
       "saved_by": "system",
       "created_at": "2026-03-08T09:39:50.801663+00:00",
-      "notes": "Alexandria wildcard prompt. Cosmic engraving language for knowledge-rich or metaphysical titles.",
+      "notes": "Alexandria wildcard prompt. Cartographic and scientific engraving language distinct from the darker cosmic BASE 5 aesthetic.",
       "tags": [
         "alexandria",
         "wildcard",
