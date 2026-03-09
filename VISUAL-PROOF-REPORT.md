@@ -1,8 +1,77 @@
 # Visual Proof Report
 
-Last updated: `2026-03-08`
+Last updated: `2026-03-09`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `bc4de471-572a-4d6b-a174-231e14ac12a2`
+Deployment ID: `43eab0d5-d946-47ff-ad10-a83a821823d5`
+
+## 1.10 PROMPT-25 Genre-Aware Rotation + Scene Variation (2026-03-09)
+- Git commits (master):
+  - `e4f24c6` — Make prompt rotation genre-aware
+  - `24bf559` — Use title keywords for scene rotation fallback
+- Railway deploys:
+  - `fb25fc98-0c7a-438f-b89f-ad0f9a1f62d9` (`SUCCESS`, but live proof exposed a scene-variation gap because deployed book payloads did not include enrichment)
+  - `43eab0d5-d946-47ff-ad10-a83a821823d5` (`SUCCESS`; active corrected PROMPT-25 runtime used for proof)
+- Local verification before deploy:
+  - `node --check src/static/js/pages/iterate.js` -> `PASS`
+  - `python3` JSON parse of `config/prompt_library.json` -> `PASS`
+  - targeted `pytest tests/test_iterate_prompt_builder.py -q` -> `PASS`
+- Live deployment health after corrected rollout:
+  - `status: ok`
+  - `healthy: true`
+  - `uptime_seconds: 0`
+  - `books_cataloged: 99`
+- Live smart-rotation configuration proof:
+  - selecting book `1` forces prompt selector to `Smart rotation (genre-matched + scene variety)`
+  - variants auto-set to `10`
+  - helper text becomes visible: `Each variant uses the best prompt for this book's genre with a different scene — truly unique covers`
+- Live scene-pool proof:
+  - live book `1` payload currently ships with empty `enrichment`, so corrected PROMPT-25 falls back to `prompt_components.title_keywords` instead of collapsing to one repeated generic scene
+  - live `buildScenePool(book1, 6)` returned six distinct strings including:
+    - `narrative tableau shaped by room, view, window — a defining moment from A Room with a View`
+    - `setting-focused scene built around italian villa and florentine landscape with period atmosphere`
+    - `symbolic arrangement of room, view, window, italian villa — thematic emblem for A Room with a View`
+- Live genre-mapping proof:
+  - live `buildGenreAwareRotation(book19, 4)` for `Crime and Punishment` returned:
+    - `alexandria-base-romantic-realism`
+    - `alexandria-wildcard-pre-raphaelite-garden`
+    - `alexandria-wildcard-edo-meets-alexandria`
+    - `alexandria-wildcard-illuminated-manuscript`
+  - no wrong-genre BASE 1 / 2 / 3 / 5 prompts were selected for this literary title
+- Live generation proof:
+  - Iterate batch for book `1` reached `10 completed · 10 total`
+  - rendered prompt badges were:
+    - `BASE 4 — Romantic Realism`
+    - `WILDCARD 2 — Pre-Raphaelite Garden`
+    - `BASE 4 — Romantic Realism`
+    - `WILDCARD 1 — Edo Meets Alexandria`
+    - `BASE 4 — Romantic Realism`
+    - `WILDCARD 3 — Illuminated Manuscript`
+    - `BASE 4 — Romantic Realism`
+    - `WILDCARD 4 — Celestial Cartography`
+    - `BASE 4 — Romantic Realism`
+    - `WILDCARD 5 — Temple of Knowledge`
+  - rendered scene snippets were all different across the 10 cards
+  - latest live API jobs for book `1` confirm only `alexandria-base-romantic-realism` plus wildcard prompt ids were used; no wrong-genre base prompts appeared
+  - model: `openrouter/google/gemini-3-pro-image-preview`
+  - compositor mode: `pdf`
+- Live Save Prompt proof:
+  - all 10 completed result cards rendered visible `💾 Save Prompt` buttons before saving
+  - first result card saved successfully and rerendered as `✅ Saved`
+  - saved prompt id: `de47a45c-133d-493e-b9f6-e034697d003a`
+  - saved prompt class persisted as `save-prompt-btn saved`
+  - `GET /api/prompts?catalog=classics` confirms live winner prompt:
+    - `Winner — A Room with a View — BASE 4 — Romantic Realism`
+    - `category: winner`
+    - `win_count: 1`
+- Known issue observed during proof run:
+  - browser console still shows `404` for `/api/books/1/cover-preview?source=catalog&catalog=classics`
+  - the 404 did not block generation, smart rotation, or prompt saving
+- Visual proof artifacts:
+  - live iterate configuration: `/tmp/alexandria-proof-live-prompt25-final/live-iterate-config-prompt25.png`
+  - live iterate completed smart rotation results: `/tmp/alexandria-proof-live-prompt25-final/live-iterate-results-prompt25.png`
+  - live iterate saved-state page: `/tmp/alexandria-proof-live-prompt25-final/live-iterate-saved-prompt25.png`
+  - live result card close-up: `/tmp/alexandria-proof-live-prompt25-final/live-result-card-saved-prompt25.png`
+  - live composited cover crop: `/tmp/alexandria-proof-live-prompt25-final/live-cover-book1-prompt25.png`
 
 ## 1.9 PROMPT-24 Prompt Rotation + Save Prompt Visibility (2026-03-08)
 - Git commit (master):
