@@ -421,6 +421,7 @@ function defaultEraForBook(book) {
 function buildScenePool(book, count) {
   const total = Math.max(1, Number(count || 1));
   const enrichment = _bookEnrichment(book);
+  const promptComponents = (book && typeof book.prompt_components === 'object' && book.prompt_components) ? book.prompt_components : {};
   const pool = [];
   const seen = new Set();
   const pushUnique = (value) => {
@@ -465,6 +466,19 @@ function buildScenePool(book, count) {
     : [];
   if (keyCharacters.length >= 2) {
     pushUnique(`${keyCharacters.slice(0, 3).join(', ')} — a dramatic ensemble scene from the story`);
+  }
+
+  const titleKeywords = Array.isArray(promptComponents.title_keywords)
+    ? promptComponents.title_keywords.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (titleKeywords.length) {
+    pushUnique(`narrative tableau shaped by ${titleKeywords.slice(0, 3).join(', ')} — a defining moment from ${book?.title || 'the story'}`);
+    if (titleKeywords.length >= 2) {
+      pushUnique(`setting-focused scene built around ${titleKeywords.slice(-2).join(' and ')} with period atmosphere`);
+    }
+    if (titleKeywords.length >= 3) {
+      pushUnique(`symbolic arrangement of ${titleKeywords.slice(0, 4).join(', ')} — thematic emblem for ${book?.title || 'the story'}`);
+    }
   }
 
   if (!pool.length) {

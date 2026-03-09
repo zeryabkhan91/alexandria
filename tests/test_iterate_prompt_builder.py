@@ -201,6 +201,27 @@ def test_build_scene_pool_uses_enrichment_sources_and_variation_prefixes():
     assert result[7].startswith("intimate close-up view of ")
 
 
+def test_build_scene_pool_uses_title_keywords_when_enrichment_missing():
+    result = _run_iterate_hook(
+        "buildScenePool",
+        {
+            "title": "A Room with a View",
+            "prompt_components": {
+                "title_keywords": ["room", "view", "window", "italian villa", "florentine landscape"],
+            },
+            "count": 5,
+        },
+    )
+
+    assert result == [
+        'narrative tableau shaped by room, view, window — a defining moment from A Room with a View',
+        'setting-focused scene built around italian villa and florentine landscape with period atmosphere',
+        'symbolic arrangement of room, view, window, italian villa — thematic emblem for A Room with a View',
+        'intimate close-up view of narrative tableau shaped by room, view, window — a defining moment from A Room with a View',
+        'intimate close-up view of setting-focused scene built around italian villa and florentine landscape with period atmosphere',
+    ]
+
+
 def test_build_genre_aware_rotation_matches_literature_and_varies_scenes():
     result = _run_iterate_hook(
         "buildGenreAwareRotation",
