@@ -4,6 +4,54 @@ Last updated: `2026-03-09`
 Deployment URL: `https://web-production-900a7.up.railway.app`
 Deployment ID: `ede2c904-a7d2-41c7-b7ae-8b38c4fa43b0`
 
+## 1.13 PROMPT-29 Enrichment Rewrite + Drive Write Truth + Pricing Sync (2026-03-09)
+- Git commit (master):
+  - `7452737` — Implement PROMPT-29 enrichment, drive, and pricing fixes
+- Railway deploy:
+  - `687efd8c-10c2-43c2-bbcb-8c65e8a6f7cf` (`SUCCESS`; active PROMPT-29 proof runtime)
+- Local verification before deploy:
+  - `python3 -m py_compile src/book_enricher.py src/config.py scripts/quality_review.py` -> `PASS`
+  - `node --check src/static/js/pages/iterate.js` -> `PASS`
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/test_book_enricher_module.py -q` -> `PASS`
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/test_config_module.py -q` -> `PASS`
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/test_quality_review_utils.py -q -k 'save_raw or drive_status or startup_checks or sync_catalog'` -> `PASS`
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/test_quality_review_server_smoke.py -q -k 'drive_and_provider_connectivity_payloads'` -> `PASS`
+- Functional changes verified live:
+  - startup catalog sync now sees the real Google Drive catalog size:
+    - `books_cataloged: 2397`
+  - live `POST /api/enrich-book` for book `1` succeeded with automatic provider/model resolution:
+    - `provider: openai`
+    - `model: gpt-4o-mini`
+    - `llm_count: 1`
+    - `fallback_count: 0`
+    - returned non-generic protagonist / scene content for `A Room with a View`
+  - live Iterate pricing proof:
+    - `sourceful/riverflow-v2-fast` renders at `$0.020`
+  - live Drive diagnostics proof:
+    - `GET /api/drive-status` returns:
+      - `connected: true`
+      - `parent_folder_access: true`
+      - `write_access: false`
+      - `retry_supported: false`
+- Honest PROMPT-29 scope outcome:
+  - the codepath fixes are live, but the full `2397`-book enrichment rewrite was **not** completed during this turn
+  - measured live throughput was roughly `15-16 seconds / book`, which implies a multi-hour run for the full catalog
+  - local validation confirms the checked-in enriched catalog still contains the old generic rows:
+    - `python3 -m src.book_enricher --validate --output config/book_catalog_enriched.json`
+    - result: `total_books=99`, `generic_rows=99`, `usable_books=0`
+  - current production startup warning is therefore accurate:
+    - `Only 0/2397 books have usable enrichment data`
+- Live residual issues surfaced honestly by PROMPT-29:
+  - Google Drive write/upload is still blocked by the deployed service account environment, so Save Raw cannot complete a true Drive upload:
+    - `write_access: false`
+    - service account returns the known no-storage-quota / no-write-capability error
+  - the Iterate page now loads the full `2397`-book catalog, but the UI waits on a very large `GET /api/iterate-data?limit=9999&offset=0` response before the selector is populated
+- Visual proof artifacts:
+  - live Iterate early-loading shell: `/var/folders/_l/b6_b807n6j38l2dkrxc48qbr0000gn/T/playwright-mcp-output/1772964276108/page-2026-03-09T11-20-45-852Z.png`
+  - live `/api/health` proof: `/var/folders/_l/b6_b807n6j38l2dkrxc48qbr0000gn/T/playwright-mcp-output/1772964276108/page-2026-03-09T11-21-33-287Z.png`
+  - live `/api/drive-status` proof: `/var/folders/_l/b6_b807n6j38l2dkrxc48qbr0000gn/T/playwright-mcp-output/1772964276108/page-2026-03-09T11-21-57-163Z.png`
+  - live enrichment result proof: `/var/folders/_l/b6_b807n6j38l2dkrxc48qbr0000gn/T/playwright-mcp-output/1772964276108/page-2026-03-09T11-23-10-497Z.png`
+
 ## 1.12 PROMPT-27 Save Raw Drive Upload Guardrails + Retry Diagnostics (2026-03-09)
 - Git commit (master):
   - `2605175` — Fix Save Raw Google Drive upload retries
