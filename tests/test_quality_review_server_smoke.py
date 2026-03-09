@@ -49,18 +49,23 @@ def _request_json(
         data=data,
         headers=req_headers,
     )
-    with urlopen(request, timeout=15) as response:
-        body = response.read().decode("utf-8")
+    try:
+        with urlopen(request, timeout=15) as response:
+            body = response.read().decode("utf-8")
+            parsed = json.loads(body) if body else {}
+            return int(getattr(response, "status", 200)), parsed
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8")
         parsed = json.loads(body) if body else {}
-        return int(getattr(response, "status", 200)), parsed
+        return int(exc.code), parsed
 
 
-def _wait_for_health(base_url: str, timeout_seconds: float = 45.0) -> None:
+def _wait_for_health(base_url: str, *, path: str = "/api/health", timeout_seconds: float = 45.0) -> None:
     deadline = time.time() + timeout_seconds
     last_error = ""
     while time.time() < deadline:
         try:
-            status = _fetch_status(base_url, "/api/health")
+            status = _fetch_status(base_url, path)
             if status == 200:
                 return
         except URLError as exc:
@@ -68,10 +73,15 @@ def _wait_for_health(base_url: str, timeout_seconds: float = 45.0) -> None:
         except Exception as exc:  # pragma: no cover - defensive
             last_error = str(exc)
         time.sleep(0.25)
-    raise RuntimeError(f"quality_review server did not become ready: {last_error}")
+    raise RuntimeError(f"quality_review server did not become ready at {path}: {last_error}")
 
 
-def _start_server(*, extra_args: list[str] | None = None) -> tuple[subprocess.Popen[bytes], str]:
+def _start_server(
+    *,
+    extra_args: list[str] | None = None,
+    wait_path: str = "/api/health",
+    timeout_seconds: float = 45.0,
+) -> tuple[subprocess.Popen[bytes], str]:
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
     env = os.environ.copy()
@@ -88,7 +98,7 @@ def _start_server(*, extra_args: list[str] | None = None) -> tuple[subprocess.Po
         env=env,
     )
     try:
-        _wait_for_health(base_url)
+        _wait_for_health(base_url, path=wait_path, timeout_seconds=timeout_seconds)
     except Exception:
         process.terminate()
         try:
@@ -201,6 +211,15 @@ def test_quality_review_server_primary_routes_smoke():
         _stop_server(process)
 
 
+def test_quality_review_server_healthz_binds_before_full_startup():
+    process, base_url = _start_server(wait_path="/api/healthz", timeout_seconds=10.0)
+    try:
+        assert _fetch_status(base_url, "/api/healthz") == 200
+        assert _fetch_status(base_url, "/healthz") == 200
+    finally:
+        _stop_server(process)
+
+
 def test_quality_review_server_drive_and_provider_connectivity_payloads():
     process, base_url = _start_server()
     try:
@@ -227,6 +246,47 @@ def test_quality_review_server_drive_and_provider_connectivity_payloads():
         assert isinstance(connectivity_1.get("providers"), dict)
         assert connectivity_2.get("cached") is True
         assert connectivity_force.get("cached") is False
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_cover_preview_and_visual_qa_missing_errors_are_json():
+    process, base_url = _start_server(wait_path="/api/healthz", timeout_seconds=10.0)
+    try:
+        cover_status, cover_payload = _request_json(base_url, "/api/books/99999/cover-preview?catalog=classics")
+        assert cover_status == 404
+        assert cover_payload.get("ok") is False
+        assert "error" in cover_payload
+
+        qa_status, qa_payload = _request_json(base_url, "/api/visual-qa/image/99999?catalog=classics")
+        assert qa_status == 404
+        assert qa_payload.get("ok") is False
+        assert qa_payload.get("error") == "No generated images available for this book. Generate covers first."
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_iterate_data_returns_22_priced_models():
+    process, base_url = _start_server(wait_path="/api/healthz", timeout_seconds=10.0)
+    try:
+        status, payload = _request_json(base_url, "/api/iterate-data?catalog=classics&limit=1&offset=0")
+        assert status == 200
+        models = payload.get("models", [])
+        model_costs = payload.get("model_costs", {})
+        assert isinstance(models, list)
+        assert len(models) == 22
+        assert isinstance(model_costs, dict)
+        assert all(float(model_costs.get(model, 0) or 0) > 0 for model in models)
+        assert {
+            "openrouter/sourceful/riverflow-v2-pro",
+            "openrouter/sourceful/riverflow-v2-max-preview",
+            "openrouter/black-forest-labs/flux.2-max",
+            "openrouter/black-forest-labs/flux.2-flex",
+            "openrouter/sourceful/riverflow-v2-standard-preview",
+            "openrouter/sourceful/riverflow-v2-fast",
+            "google/gemini-3-pro-image-preview",
+            "google/gemini-3.1-flash-image-preview",
+        }.issubset(set(models))
     finally:
         _stop_server(process)
 

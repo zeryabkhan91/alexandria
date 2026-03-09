@@ -254,6 +254,45 @@ def test_runtime_model_costs_include_prompt29_riverflow_fix():
     assert config.get_config("classics").get_model_cost("openrouter/sourceful/riverflow-v2-fast") == pytest.approx(0.02)
 
 
+def test_runtime_model_costs_include_prompt31_model_prices():
+    expected = {
+        "openrouter/sourceful/riverflow-v2-pro": 0.05,
+        "openrouter/sourceful/riverflow-v2-max-preview": 0.06,
+        "openrouter/black-forest-labs/flux.2-max": 0.06,
+        "openrouter/black-forest-labs/flux.2-flex": 0.025,
+        "openrouter/sourceful/riverflow-v2-standard-preview": 0.04,
+        "openrouter/sourceful/riverflow-v2-fast": 0.02,
+        "google/gemini-3-pro-image-preview": 0.02,
+        "google/gemini-3.1-flash-image-preview": 0.006,
+    }
+    runtime_costs = config.runtime_model_costs_copy()
+    cfg = config.get_config("classics")
+    for model, cost in expected.items():
+        key = model.split("/", 1)[-1] if model.startswith("openrouter/") else model
+        assert runtime_costs[key] == pytest.approx(cost)
+        assert cfg.get_model_cost(model) == pytest.approx(cost)
+
+
+def test_all_active_models_have_explicit_positive_cost_entries():
+    missing = [
+        model
+        for model in config.ALL_MODELS
+        if model not in config.MODEL_COST_USD and model.split("/", 1)[-1] not in config.MODEL_COST_USD
+    ]
+    assert missing == []
+
+    cfg = config.get_config("classics")
+    assert len(cfg.all_models) == 22
+    assert {
+        "fal/fal-ai/flux-2/klein/4b",
+        "fal/fal-ai/flux-2-pro",
+        "openai/gpt-image-1-mini",
+        "openai/gpt-image-1",
+    }.issubset(set(cfg.all_models))
+    for model in cfg.all_models:
+        assert cfg.get_model_cost(model) > 0.0, model
+
+
 def test_sync_openrouter_pricing_updates_runtime_costs_and_get_config(monkeypatch: pytest.MonkeyPatch):
     class _FakeResponse:
         status_code = 200

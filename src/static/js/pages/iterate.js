@@ -1928,7 +1928,7 @@ window.Pages.iterate = {
       e.stopPropagation();
       const book = Number(btn.dataset.viewQaBook || 0);
       if (!Number.isFinite(book) || book <= 0) return;
-      window.open(`/api/visual-qa/image/${book}?catalog=classics`, '_blank', 'noopener,noreferrer');
+      window.open(`/#visual-qa?book=${encodeURIComponent(String(book))}&open=1`, '_blank', 'noopener,noreferrer');
     }));
     grid.querySelectorAll('[data-save-raw]').forEach((btn) => btn.addEventListener('click', async (e) => {
       e.stopPropagation();

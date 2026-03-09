@@ -1801,6 +1801,28 @@ def test_health_payload_includes_startup_checks(tmp_path: Path):
         qr.STARTUP_HEALTH = original_startup
 
 
+def test_startup_healthz_payload_reports_initializing_without_catalog_reads(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    original_startup = dict(qr.STARTUP_HEALTH)
+    original_state = qr._startup_state_snapshot()
+    try:
+        qr.STARTUP_HEALTH = {}
+        qr._set_startup_state(status="initializing", started_at="2026-03-09T00:00:00+00:00", completed_at="", error="")
+        payload = qr._startup_healthz_payload(runtime=cfg)
+        assert payload["ok"] is True
+        assert payload["healthy"] is True
+        assert payload["startup"]["status"] == "initializing"
+        assert payload["startup"]["checks_completed"] is False
+    finally:
+        qr.STARTUP_HEALTH = original_startup
+        qr._set_startup_state(
+            status=str(original_state.get("status", "idle") or "idle"),
+            started_at=str(original_state.get("started_at", "") or ""),
+            completed_at=str(original_state.get("completed_at", "") or ""),
+            error=str(original_state.get("error", "") or ""),
+        )
+
+
 def test_health_payload_includes_structured_drive_connectivity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg = _build_runtime_for_startup_checks(tmp_path)
     cfg = replace(cfg, gdrive_source_folder_id="source-folder-id")
@@ -2057,6 +2079,81 @@ def test_cover_preview_helpers_build_thumbnail_file(tmp_path: Path):
     with Image.open(written) as rendered:
         assert rendered.width <= 320
         assert rendered.height <= 320
+
+
+def test_resolve_cover_preview_source_path_returns_not_found_for_missing_book(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    resolved, status, meta = qr._resolve_cover_preview_source_path(runtime=cfg, book_number=99999, source="catalog")
+    assert resolved is None
+    assert status == 404
+    assert "not found" in str(meta.get("error", "")).lower()
+
+
+def test_resolve_cover_preview_source_path_returns_service_unavailable_when_source_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg.book_catalog_path.write_text(
+        json.dumps([{"number": 1, "title": "Book", "author": "Author", "folder_name": "Book 1"}]),
+        encoding="utf-8",
+    )
+    with qr._JSON_LIST_ROWS_CACHE_LOCK:
+        qr._JSON_LIST_ROWS_CACHE.clear()
+    monkeypatch.setattr(qr.drive_manager, "ensure_local_input_cover", lambda **_kwargs: {"ok": False, "error": "No source cover is available for book 1."})
+    resolved, status, meta = qr._resolve_cover_preview_source_path(runtime=cfg, book_number=1, source="catalog")
+    assert resolved is None
+    assert status == 503
+    assert "no source cover" in str(meta.get("error", "")).lower()
+
+
+def test_load_visual_qa_payload_does_not_generate_on_cache_miss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    generate_calls = {"visual": 0, "structural": 0}
+
+    def _unexpected_visual(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        generate_calls["visual"] += 1
+        raise AssertionError("visual QA generation should not run on GET cache miss")
+
+    def _unexpected_structural(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        generate_calls["structural"] += 1
+        raise AssertionError("structural QA generation should not run on GET cache miss")
+
+    monkeypatch.setattr(qr, "_generate_visual_qa", _unexpected_visual)
+    monkeypatch.setattr(qr, "_generate_structural_visual_qa", _unexpected_structural)
+
+    payload = qr._load_visual_qa_payload(runtime=cfg, force_generate=False, book_number=1)
+    assert payload["comparisons"] == []
+    assert payload["message"] == "No generated images available for this book. Generate covers first."
+    assert generate_calls == {"visual": 0, "structural": 0}
+
+
+def test_visual_qa_image_path_reads_index_without_triggering_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    visual_dir = qr._visual_qa_dir_for_runtime(cfg)
+    visual_dir.mkdir(parents=True, exist_ok=True)
+    image_path = visual_dir / "compare_001.jpg"
+    Image.new("RGB", (128, 128), color=(100, 120, 140)).save(image_path)
+    qr._visual_qa_index_path_for_runtime(cfg).write_text(
+        json.dumps(
+            {
+                "comparisons": [
+                    {
+                        "book_number": 1,
+                        "book_title": "Book",
+                        "comparison_path": qr._to_project_relative(image_path),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        qr,
+        "_generate_visual_qa",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("visual QA generation should not run when resolving image paths")),
+    )
+
+    resolved = qr._visual_qa_image_path(runtime=cfg, book_number=1)
+    assert resolved == image_path
 
 
 def test_ensure_winner_payload_writes_catalog_scoped_plain_selection_map(tmp_path: Path):

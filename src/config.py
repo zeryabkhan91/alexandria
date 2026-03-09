@@ -101,6 +101,10 @@ ALL_MODELS = [
             "openrouter/google/gemini-3.1-flash-image-preview,"
             "openrouter/sourceful/riverflow-v2-fast,"
             "openrouter/google/gemini-2.5-flash-image,"
+            "fal/fal-ai/flux-2/klein/4b,"
+            "fal/fal-ai/flux-2-pro,"
+            "openai/gpt-image-1-mini,"
+            "openai/gpt-image-1,"
             "google/gemini-3-pro-image-preview,"
             "google/gemini-3.1-flash-image-preview,"
             "google/gemini-2.5-flash-image"
@@ -191,14 +195,14 @@ MODEL_COST_USD: dict[str, float] = {
     "google/gemini-3.1-flash-image-preview": 0.006,
     "openai/gpt-5-image-mini": 0.012,
     "openai/gpt-5-image": 0.04,
-    "sourceful/riverflow-v2-pro": 0.15,
-    "sourceful/riverflow-v2-max-preview": 0.075,
-    "sourceful/riverflow-v2-standard-preview": 0.035,
+    "sourceful/riverflow-v2-pro": 0.05,
+    "sourceful/riverflow-v2-max-preview": 0.06,
+    "sourceful/riverflow-v2-standard-preview": 0.04,
     "sourceful/riverflow-v2-fast-preview": 0.03,
     "sourceful/riverflow-v2-fast": 0.02,
     "bytedance-seed/seedream-4.5": 0.04,
-    "black-forest-labs/flux.2-max": 0.07,
-    "black-forest-labs/flux.2-flex": 0.06,
+    "black-forest-labs/flux.2-max": 0.06,
+    "black-forest-labs/flux.2-flex": 0.025,
     "black-forest-labs/flux.2-pro": 0.03,
     "black-forest-labs/flux.2-klein-4b": 0.014,
     "fal-ai/flux-2/klein/4b": 0.0025,

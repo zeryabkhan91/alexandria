@@ -169,6 +169,13 @@ STARTUP_HEALTH: dict[str, Any] = {
     "warnings": [],
     "checks": [],
 }
+_STARTUP_STATE_LOCK = threading.Lock()
+_STARTUP_STATE: dict[str, Any] = {
+    "status": "idle",
+    "started_at": "",
+    "completed_at": "",
+    "error": "",
+}
 JOBS_DB_PATH = PROJECT_ROOT / os.getenv("JOBS_DB_PATH", "data/jobs.sqlite3")
 STATE_DB_PATH = PROJECT_ROOT / os.getenv("STATE_DB_PATH", "data/state.sqlite3")
 JOB_WORKER_COUNT = max(1, int(os.getenv("JOB_WORKERS", "2")))
@@ -190,6 +197,7 @@ READ_RATE_LIMIT_PER_MINUTE = max(60, int(os.getenv("WEB_READ_RATE_LIMIT_PER_MINU
 DATA_CACHE_MAX_ENTRIES = max(100, int(os.getenv("DATA_CACHE_MAX_ENTRIES", "1000")))
 SSE_MAX_CONNECTIONS_PER_CLIENT = max(1, int(os.getenv("SSE_MAX_CONNECTIONS_PER_CLIENT", "3")))
 ALLOW_SYNC_GENERATION = str(os.getenv("ALLOW_SYNC_GENERATION", "0")).strip().lower() in {"1", "true", "yes", "on"}
+REQUEST_HANDLER_TIMEOUT_SECONDS = max(5.0, float(os.getenv("REQUEST_HANDLER_TIMEOUT_SECONDS", "30")))
 
 
 def _normalize_worker_mode(raw: str | None) -> str:
@@ -211,6 +219,88 @@ _VISUAL_QA_RUNNING: set[str] = set()
 _VISUAL_QA_RUNNING_LOCK = threading.Lock()
 _CATALOG_ENRICHMENT_THREADS: dict[str, threading.Thread] = {}
 _CATALOG_ENRICHMENT_THREADS_LOCK = threading.Lock()
+_JSON_LIST_ROWS_CACHE_LOCK = threading.Lock()
+_JSON_LIST_ROWS_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _set_startup_state(*, status: str, started_at: str | None = None, completed_at: str | None = None, error: str = "") -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with _STARTUP_STATE_LOCK:
+        _STARTUP_STATE["status"] = str(status or "idle").strip() or "idle"
+        if started_at is not None:
+            _STARTUP_STATE["started_at"] = str(started_at or "")
+        elif not str(_STARTUP_STATE.get("started_at", "")).strip():
+            _STARTUP_STATE["started_at"] = now
+        if completed_at is not None:
+            _STARTUP_STATE["completed_at"] = str(completed_at or "")
+        elif _STARTUP_STATE["status"] in {"ready", "failed"}:
+            _STARTUP_STATE["completed_at"] = now
+        _STARTUP_STATE["error"] = str(error or "")
+
+
+def _startup_state_snapshot() -> dict[str, Any]:
+    with _STARTUP_STATE_LOCK:
+        return dict(_STARTUP_STATE)
+
+
+def _set_startup_health(payload: dict[str, Any]) -> None:
+    global STARTUP_HEALTH
+    STARTUP_HEALTH = dict(payload or {})
+
+
+def _startup_healthz_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
+    runtime = runtime or config.get_config()
+    state = _startup_state_snapshot()
+    startup_health = STARTUP_HEALTH if isinstance(STARTUP_HEALTH, dict) else {}
+    status = str(state.get("status", "idle") or "idle")
+    healthy = status != "failed"
+    return {
+        "ok": healthy,
+        "status": "ok" if healthy else "degraded",
+        "healthy": healthy,
+        "version": "2.1.1",
+        "uptime_seconds": int(max(0.0, time.time() - APP_STARTED_AT)),
+        "catalog": runtime.catalog_id,
+        "startup": {
+            "status": status,
+            "started_at": str(state.get("started_at", "") or ""),
+            "completed_at": str(state.get("completed_at", "") or ""),
+            "error": str(state.get("error", "") or ""),
+            "checks_completed": bool(startup_health.get("checked_at")),
+        },
+    }
+
+
+def _json_list_rows_cache_entry(path: Path) -> dict[str, Any]:
+    target = Path(path)
+    key = str(target.resolve())
+    try:
+        stat = target.stat()
+    except OSError:
+        return {"rows": [], "by_number": {}}
+
+    cache_token = (int(stat.st_mtime_ns), int(stat.st_size))
+    with _JSON_LIST_ROWS_CACHE_LOCK:
+        cached = _JSON_LIST_ROWS_CACHE.get(key)
+        if cached and cached.get("token") == cache_token:
+            return cached
+
+    payload = _load_json(target, [])
+    rows = [row for row in payload if isinstance(row, dict)] if isinstance(payload, list) else []
+    by_number: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        number = _safe_int(row.get("number"), 0)
+        if number > 0 and number not in by_number:
+            by_number[number] = row
+    entry = {"token": cache_token, "rows": rows, "by_number": by_number}
+    with _JSON_LIST_ROWS_CACHE_LOCK:
+        _JSON_LIST_ROWS_CACHE[key] = entry
+    return entry
+
+
+def _prime_catalog_file_caches(runtime: config.Config) -> None:
+    _json_list_rows_cache_entry(runtime.book_catalog_path)
+    _json_list_rows_cache_entry(config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir))
 
 
 def _budget_presets_for_runtime(runtime: config.Config) -> list[dict[str, Any]]:
@@ -2761,10 +2851,7 @@ def _load_visual_qa_payload(
     index_path = _visual_qa_index_path_for_runtime(runtime)
     payload = _load_json(index_path, {})
     comparisons = payload.get("comparisons", []) if isinstance(payload, dict) else []
-    has_target_book = False
-    if isinstance(comparisons, list) and book_number is not None and int(book_number) > 0:
-        has_target_book = any(_safe_int(row.get("book_number"), 0) == int(book_number) for row in comparisons if isinstance(row, dict))
-    if force_generate or not isinstance(payload, dict) or not isinstance(comparisons, list) or (book_number and not has_target_book):
+    if force_generate:
         payload = _generate_visual_qa(runtime=runtime, book_number=book_number if book_number and book_number > 0 else None)
         comparisons = payload.get("comparisons", []) if isinstance(payload, dict) else []
 
@@ -2772,16 +2859,11 @@ def _load_visual_qa_payload(
     structural_payload = payload.get("structural_qa", {}) if isinstance(payload, dict) and isinstance(payload.get("structural_qa"), dict) else {}
     if not structural_payload:
         structural_payload = _load_json(_qa_report_path_for_runtime(runtime), {})
-        if force_generate or (book_number and isinstance(structural_payload, dict)):
-            qa_rows = structural_payload.get("results", []) if isinstance(structural_payload, dict) else []
-            has_target = False
-            if isinstance(qa_rows, list) and book_number and int(book_number) > 0:
-                has_target = any(_safe_int(item.get("book_number"), 0) == int(book_number) for item in qa_rows if isinstance(item, dict))
-            if force_generate or (book_number and not has_target):
-                try:
-                    structural_payload = _generate_structural_visual_qa(runtime=runtime, book_number=book_number if book_number and book_number > 0 else None)
-                except Exception as exc:  # pragma: no cover - diagnostics path
-                    logger.warning("Structural visual QA refresh failed: %s", exc)
+        if force_generate and isinstance(structural_payload, dict):
+            try:
+                structural_payload = _generate_structural_visual_qa(runtime=runtime, book_number=book_number if book_number and book_number > 0 else None)
+            except Exception as exc:  # pragma: no cover - diagnostics path
+                logger.warning("Structural visual QA refresh failed: %s", exc)
     structural_rows = structural_payload.get("results", []) if isinstance(structural_payload, dict) else []
     structural_by_book: dict[int, dict[str, Any]] = {}
     if isinstance(structural_rows, list):
@@ -2796,6 +2878,8 @@ def _load_visual_qa_payload(
     for row in rows:
         number = _safe_int(row.get("book_number"), 0)
         if number <= 0:
+            continue
+        if book_number is not None and int(book_number) > 0 and number != int(book_number):
             continue
         path_token = str(row.get("comparison_path", "")).strip()
         comparison_file = _project_path_if_exists(path_token)
@@ -2851,16 +2935,23 @@ def _load_visual_qa_payload(
     summary_raw = payload.get("summary", {}) if isinstance(payload, dict) else {}
     structural_summary_raw = structural_payload.get("summary", {}) if isinstance(structural_payload, dict) else {}
     summary = {
-        "total": _safe_int(summary_raw.get("total"), len(normalized)),
+        "total": len(normalized) if book_number else _safe_int(summary_raw.get("total"), len(normalized)),
         "passed": _safe_int(summary_raw.get("passed"), sum(1 for row in normalized if row.get("verdict") == "PASS")),
         "failed": _safe_int(summary_raw.get("failed"), sum(1 for row in normalized if row.get("verdict") == "FAIL")),
-        "not_compared": _safe_int(summary_raw.get("not_compared"), max(0, _safe_int(summary_raw.get("total"), len(normalized)) - len(normalized))),
+        "not_compared": 0 if book_number else _safe_int(summary_raw.get("not_compared"), max(0, _safe_int(summary_raw.get("total"), len(normalized)) - len(normalized))),
         "generated": _safe_int(summary_raw.get("generated"), len(normalized)),
         "structural_verified": _safe_int(structural_summary_raw.get("verified"), 0),
         "structural_passed": _safe_int(structural_summary_raw.get("passed"), 0),
         "structural_failed": _safe_int(structural_summary_raw.get("failed"), 0),
     }
     missing = payload.get("missing", []) if isinstance(payload, dict) and isinstance(payload.get("missing"), list) else []
+    if book_number is not None and int(book_number) > 0:
+        missing = [row for row in missing if isinstance(row, dict) and _safe_int(row.get("book_number"), 0) == int(book_number)]
+    message = ""
+    if book_number and not normalized:
+        message = "No generated images available for this book. Generate covers first."
+    elif not normalized:
+        message = "No generated images available yet. Generate covers first, then run Visual QA."
     return {
         "ok": True,
         "catalog": runtime.catalog_id,
@@ -2869,13 +2960,14 @@ def _load_visual_qa_payload(
         "summary": summary,
         "missing": missing,
         "structural_qa": structural_payload if isinstance(structural_payload, dict) else {},
+        "message": message,
     }
 
 
 def _visual_qa_image_path(*, runtime: config.Config, book_number: int) -> Path | None:
     if int(book_number) <= 0:
         return None
-    payload = _load_visual_qa_payload(runtime=runtime, force_generate=False, book_number=book_number)
+    payload = _load_json(_visual_qa_index_path_for_runtime(runtime), {})
     rows = payload.get("comparisons", []) if isinstance(payload, dict) else []
     if isinstance(rows, list):
         for row in rows:
@@ -3840,16 +3932,13 @@ def write_review_data(output_dir: Path, *, runtime: config.Config | None = None,
 
 
 def _catalog_folder_name_for_book(catalog_path: Path, book_number: int) -> str:
-    payload = _load_json(catalog_path, [])
-    if not isinstance(payload, list):
-        return ""
-    for row in payload:
-        if not isinstance(row, dict):
-            continue
-        if _safe_int(row.get("number"), 0) != int(book_number):
-            continue
-        return str(row.get("folder_name", "")).strip()
-    return ""
+    entry = _json_list_rows_cache_entry(catalog_path).get("by_number", {}).get(int(book_number), {})
+    return str(entry.get("folder_name", "")).strip() if isinstance(entry, dict) else ""
+
+
+def _catalog_book_row(path: Path, book_number: int) -> dict[str, Any]:
+    entry = _json_list_rows_cache_entry(path).get("by_number", {}).get(int(book_number), {})
+    return entry if isinstance(entry, dict) else {}
 
 
 def _local_cover_available(*, runtime: config.Config, book_number: int) -> bool:
@@ -3879,6 +3968,82 @@ def _first_local_cover_path(*, runtime: config.Config, book_number: int) -> Path
     for suffix in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
         candidates.extend(sorted(folder.glob(suffix)))
     return candidates[0] if candidates else None
+
+
+def _resolve_cover_preview_source_path(
+    *,
+    runtime: config.Config,
+    book_number: int,
+    source: str,
+    selected_cover_id: str = "",
+    drive_folder_id: str = "",
+    input_folder_id: str = "",
+    credentials_path_token: str = "",
+) -> tuple[Path | None, int, dict[str, Any]]:
+    row = _catalog_book_row(runtime.book_catalog_path, int(book_number))
+    if not row:
+        return None, int(HTTPStatus.NOT_FOUND), {"error": f"Book {int(book_number)} not found in catalog."}
+
+    local_path = _first_local_cover_path(runtime=runtime, book_number=int(book_number))
+    if local_path is not None and local_path.exists():
+        return local_path, int(HTTPStatus.OK), {"source": "local"}
+
+    requested_source = str(source or "catalog").strip().lower() or "catalog"
+    effective_drive_folder_id = (
+        str(drive_folder_id or "").strip()
+        or runtime.gdrive_source_folder_id
+        or runtime.gdrive_input_folder_id
+        or runtime.gdrive_output_folder_id
+    )
+    effective_input_folder_id = (
+        str(input_folder_id or "").strip()
+        or runtime.gdrive_source_folder_id
+        or runtime.gdrive_input_folder_id
+    )
+    selected_id = (
+        str(selected_cover_id or "").strip()
+        or str(row.get("cover_jpg_id", "") or "").strip()
+        or str(row.get("drive_cover_id", "") or "").strip()
+    )
+    if not effective_drive_folder_id:
+        return (
+            None,
+            int(HTTPStatus.SERVICE_UNAVAILABLE),
+            {"error": f"No source cover is available for book {int(book_number)}.", "source": requested_source},
+        )
+
+    credentials_path = Path(credentials_path_token) if str(credentials_path_token or "").strip() else _resolve_credentials_path(runtime)
+    if not credentials_path.is_absolute():
+        credentials_path = PROJECT_ROOT / credentials_path
+
+    ensure_result = drive_manager.ensure_local_input_cover(
+        drive_folder_id=effective_drive_folder_id,
+        input_folder_id=effective_input_folder_id,
+        credentials_path=credentials_path,
+        catalog_path=runtime.book_catalog_path,
+        input_root=runtime.input_dir,
+        book_number=int(book_number),
+        selected_cover_id=selected_id,
+    )
+    if not bool(ensure_result.get("ok")):
+        return (
+            None,
+            int(HTTPStatus.SERVICE_UNAVAILABLE),
+            {
+                "error": str(ensure_result.get("error") or f"No source cover is available for book {int(book_number)}."),
+                "source": requested_source,
+            },
+        )
+
+    source_token = str(ensure_result.get("path", "")).strip()
+    resolved_path = Path(source_token) if source_token else _first_local_cover_path(runtime=runtime, book_number=int(book_number))
+    if resolved_path is None or not resolved_path.exists():
+        return (
+            None,
+            int(HTTPStatus.SERVICE_UNAVAILABLE),
+            {"error": f"No source cover is available for book {int(book_number)}.", "source": requested_source},
+        )
+    return resolved_path, int(HTTPStatus.OK), {"source": requested_source, "downloaded": bool(ensure_result.get("downloaded"))}
 
 
 def _has_local_input_covers(*, runtime: config.Config, max_dirs: int = 250) -> bool:
@@ -3932,10 +4097,12 @@ def _iterate_data_dependency_paths(*, runtime: config.Config, prompts_path: Path
         runtime.book_catalog_path,
         prompts_path,
         runtime.prompt_library_path,
+        runtime.cover_templates_path,
         config.intelligent_prompts_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir),
         config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir),
         _prompt_performance_path_for_runtime(runtime),
         _winner_path_for_runtime(runtime),
+        PROJECT_ROOT / "src" / "config.py",
     ]
 
 
@@ -3986,7 +4153,7 @@ def write_iterate_books_data(*, runtime: config.Config | None = None, prompts_pa
 
     prompts = _load_json(prompts_path, {"books": []})
     enriched_catalog_path = config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
-    enriched_catalog = _load_json(enriched_catalog_path, [])
+    enriched_catalog = _json_list_rows_cache_entry(enriched_catalog_path).get("rows", [])
     winners_payload = _load_winner_payload(_winner_path_for_runtime(runtime))
     winner_map = winners_payload.get("selections", {}) if isinstance(winners_payload, dict) else {}
     genre_prompts = _genre_prompt_payload(runtime=runtime)
@@ -4084,7 +4251,7 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
     intelligent_prompts_path = config.intelligent_prompts_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
     enriched_catalog_path = config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
     smart_payload = _load_json(intelligent_prompts_path, {"books": []})
-    enriched_catalog = _load_json(enriched_catalog_path, [])
+    enriched_catalog = _json_list_rows_cache_entry(enriched_catalog_path).get("rows", [])
     prompt_performance = _load_json(_prompt_performance_path_for_runtime(runtime), {"patterns": {}})
     template_rows = _template_rows_for_runtime(runtime=runtime)
     budget_presets = _budget_presets_for_runtime(runtime)
@@ -4239,10 +4406,7 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
 
 
 def _catalog_books_payload(path: Path) -> list[dict[str, Any]]:
-    payload = _load_json(path, [])
-    if not isinstance(payload, list):
-        return []
-    return [row for row in payload if isinstance(row, dict)]
+    return list(_json_list_rows_cache_entry(path).get("rows", []))
 
 
 _KNOWN_DRIVE_COVER_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".pdf", ".ai")
@@ -5786,14 +5950,56 @@ def _backup_health_payload(*, runtime: config.Config) -> dict[str, Any]:
 
 def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
     runtime = runtime or config.get_config()
+    startup_state = _startup_state_snapshot()
+    if str(startup_state.get("status", "")).strip().lower() == "initializing":
+        payload = _startup_healthz_payload(runtime=runtime)
+        payload["status"] = "starting"
+        payload["healthy"] = True
+        payload["startup_checks"] = STARTUP_HEALTH if isinstance(STARTUP_HEALTH, dict) else {}
+        payload["checks"] = {
+            "api_keys": {"status": "pending", "providers_configured": []},
+            "config": {"status": "pending", "files_valid": 0, "files_total": 0},
+            "database": {"status": "pending"},
+            "drive": {"status": "pending"},
+            "storage": {"status": "pending"},
+        }
+        payload["runtime_issues"] = []
+        payload["slo"] = {
+            "window_days": int(getattr(runtime, "slo_window_days", 7) or 7),
+            "targets": {},
+        }
+        payload["slo_alerting"] = {"checked": False, "sent": False, "reason": "startup_initializing", "alerts": []}
+        payload["slo_monitor"] = _slo_background_monitor_snapshot()
+        payload["jobs"] = {
+            "status_counts": job_db_store.status_counts(),
+            "workers_configured": JOB_WORKER_COUNT,
+            "worker_mode": ACTIVE_WORKER_MODE,
+            "worker_service_alive": False,
+            "worker_service": {},
+            "sync_generation_allowed": _sync_generation_allowed(),
+            "slo": {},
+        }
+        payload["providers"] = {}
+        payload["models_configured"] = runtime.all_models
+        payload["quality_summary"] = {
+            "average_score": 0.0,
+            "books_above_threshold": 0,
+            "books_below_threshold": 0,
+            "composite_validation": {"reports": 0, "books_with_invalid": 0, "invalid_variants": 0, "total_variants_checked": 0},
+        }
+        payload["backup"] = {"lastBackup": "", "backupCount": 0, "backupSizeTotalMb": 0.0}
+        payload["disk_usage"] = {"output_covers_mb": 0.0, "tmp_mb": 0.0, "archive_mb": 0.0, "free_gb": round(shutil.disk_usage(PROJECT_ROOT).free / (1024 ** 3), 3)}
+        payload["stats"] = {
+            "books": len(_catalog_books_payload(runtime.book_catalog_path)),
+            "variants": 0,
+            "winners": len(_winner_variant_map(runtime=runtime)),
+            "tests_last_run": 0,
+            "coverage_percent": 0.0,
+        }
+        return payload
+
     worker_status = _worker_runtime_status()
-    book_count = 0
-    try:
-        catalog = json.loads(runtime.book_catalog_path.read_text(encoding="utf-8"))
-        if isinstance(catalog, list):
-            book_count = len(catalog)
-    except Exception:
-        book_count = 0
+    book_count = len(_catalog_books_payload(runtime.book_catalog_path))
 
     dashboard = _build_dashboard_payload(_load_generation_records(runtime=runtime), runtime=runtime)
     summary = dashboard.get("summary", {})
@@ -6031,7 +6237,7 @@ def _enrichment_coverage_payload(*, runtime: config.Config) -> dict[str, Any]:
     source_rows = _catalog_books_payload(runtime.book_catalog_path)
     total_books = len(source_rows)
     enriched_path = config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
-    enriched_rows = _load_json(enriched_path, [])
+    enriched_rows = _json_list_rows_cache_entry(enriched_path).get("rows", [])
     valid_numbers: set[int] = set()
     if isinstance(enriched_rows, list):
         for row in enriched_rows:
@@ -6222,8 +6428,8 @@ def _run_startup_checks(runtime: config.Config) -> dict[str, Any]:
         )
 
     try:
-        catalog_payload = json.loads(runtime.book_catalog_path.read_text(encoding="utf-8"))
-        _record("book_catalog_json", isinstance(catalog_payload, list) and bool(catalog_payload), str(runtime.book_catalog_path))
+        catalog_rows = _catalog_books_payload(runtime.book_catalog_path)
+        _record("book_catalog_json", bool(catalog_rows), str(runtime.book_catalog_path))
     except Exception as exc:
         _record("book_catalog_json", False, f"{runtime.book_catalog_path} ({exc})")
 
@@ -6262,43 +6468,23 @@ def serve_review_webapp(
     ACTIVE_WORKER_MODE = mode
     bind_host = (host or os.getenv("HOST", "0.0.0.0")).strip() or "0.0.0.0"
     default_runtime = config.get_config()
-    config.sync_openrouter_pricing(api_key=default_runtime.openrouter_api_key)
-    config.start_openrouter_pricing_sync(api_key=default_runtime.openrouter_api_key)
     default_runtime.model_cost_usd = config.runtime_model_costs_copy()
     default_runtime.cost_per_image_usd = default_runtime.get_model_cost(default_runtime.ai_model)
-    _bootstrap_state_store_for_runtime(default_runtime)
-    global STARTUP_HEALTH
-    STARTUP_HEALTH = _run_startup_checks(default_runtime)
-    _ensure_builtin_prompts_seeded(runtime=default_runtime, actor="startup")
-    stale_after_seconds, retry_delay_seconds = _job_stale_recovery_config(default_runtime)
-    recovered = job_db_store.recover_stale_running_jobs(
-        stale_after_seconds=stale_after_seconds,
-        retry_delay_seconds=retry_delay_seconds,
+    _set_startup_health(
+        {
+            "checked_at": "",
+            "healthy": True,
+            "issues": [],
+            "warnings": ["Startup initialization in progress."],
+            "checks": [],
+        }
     )
-    if recovered:
-        logger.warning("Recovered stale jobs on startup", extra={"recovered_jobs": recovered})
-    slo_monitor: SLOBackgroundMonitor | None = None
-    slo_monitor_interval_seconds = _slo_monitor_interval_seconds(default_runtime)
-    if slo_monitor_interval_seconds > 0:
-        slo_monitor = SLOBackgroundMonitor(interval_seconds=slo_monitor_interval_seconds)
-        slo_monitor.start()
-        _set_slo_background_monitor(slo_monitor)
-        logger.info(
-            "Background SLO monitor started",
-            extra={"interval_seconds": slo_monitor_interval_seconds},
-        )
-    else:
-        _set_slo_background_monitor(None)
-        logger.info("Background SLO monitor disabled", extra={"interval_seconds": slo_monitor_interval_seconds})
-
-    workers_started = False
-    if mode == "inline":
-        job_worker_pool.start()
-        workers_started = True
-    elif mode == "external":
-        logger.info("Web server running in external worker mode (enqueue/poll only)")
-    else:
-        logger.warning("Web server running with workers disabled")
+    _set_startup_state(status="initializing", started_at=datetime.now(timezone.utc).isoformat(), completed_at="", error="")
+    server_runtime_state: dict[str, Any] = {
+        "slo_monitor": None,
+        "workers_started": False,
+    }
+    server_runtime_state_lock = threading.Lock()
 
     lock = threading.Lock()
 
@@ -6310,6 +6496,13 @@ def serve_review_webapp(
             self._active_runtime: config.Config | None = None
             self._request_id = ""
             super().__init__(*args, directory=str(PROJECT_ROOT), **kwargs)
+
+        def setup(self):
+            try:
+                self.request.settimeout(REQUEST_HANDLER_TIMEOUT_SECONDS)
+            except Exception:
+                pass
+            super().setup()
 
         def _set_active_catalog(self, catalog_id: str | None) -> None:
             self._active_catalog_id = str(catalog_id or "").strip()
@@ -6442,6 +6635,9 @@ def serve_review_webapp(
             runtime_req = config.get_config(requested_catalog or default_runtime.catalog_id)
             self._set_active_runtime(runtime_req)
             client_ip = str(self.client_address[0] if self.client_address else "unknown")
+
+            if path in {"/api/healthz", "/healthz"}:
+                return self._send_json(_startup_healthz_payload(runtime=runtime_req), cache_control="no-store")
 
             if not read_rate_limiter.allow(f"{client_ip}:{path}"):
                 return self._send_error(
@@ -7875,50 +8071,21 @@ def serve_review_webapp(
                 if source not in {"catalog", "drive"}:
                     source = _default_cover_source_for_runtime(runtime_req)
                 selected_cover_id = str(query.get("selected_cover_id", [""])[0] or "").strip()
-                source_path: Path | None = None
-                if source == "drive":
-                    effective_drive_folder_id = (
-                        str(query.get("drive_folder_id", [""])[0] or "").strip()
-                        or runtime_req.gdrive_source_folder_id
-                        or runtime_req.gdrive_input_folder_id
-                        or runtime_req.gdrive_output_folder_id
-                    )
-                    effective_input_folder_id = (
-                        str(query.get("input_folder_id", [""])[0] or "").strip()
-                        or runtime_req.gdrive_source_folder_id
-                        or runtime_req.gdrive_input_folder_id
-                    )
-                    credentials_override = str(query.get("credentials_path", [""])[0] or "").strip()
-                    credentials_path = Path(credentials_override) if credentials_override else _resolve_credentials_path(runtime_req)
-                    if not credentials_path.is_absolute():
-                        credentials_path = PROJECT_ROOT / credentials_path
-                    ensure_result = drive_manager.ensure_local_input_cover(
-                        drive_folder_id=effective_drive_folder_id,
-                        input_folder_id=effective_input_folder_id,
-                        credentials_path=credentials_path,
-                        catalog_path=runtime_req.book_catalog_path,
-                        input_root=runtime_req.input_dir,
-                        book_number=book_number,
-                        selected_cover_id=selected_cover_id,
-                    )
-                    if not bool(ensure_result.get("ok")):
-                        return self._send_error(
-                            code="COVER_PREVIEW_NOT_AVAILABLE",
-                            message=str(ensure_result.get("error") or "Unable to load cover preview from Google Drive."),
-                            details={"book": int(book_number), "source": source},
-                            status=HTTPStatus.NOT_FOUND,
-                            endpoint=path,
-                        )
-                    source_token = str(ensure_result.get("path", "")).strip()
-                    source_path = Path(source_token) if source_token else _first_local_cover_path(runtime=runtime_req, book_number=book_number)
-                else:
-                    source_path = _first_local_cover_path(runtime=runtime_req, book_number=book_number)
+                source_path, resolve_status, resolve_meta = _resolve_cover_preview_source_path(
+                    runtime=runtime_req,
+                    book_number=book_number,
+                    source=source,
+                    selected_cover_id=selected_cover_id,
+                    drive_folder_id=str(query.get("drive_folder_id", [""])[0] or "").strip(),
+                    input_folder_id=str(query.get("input_folder_id", [""])[0] or "").strip(),
+                    credentials_path_token=str(query.get("credentials_path", [""])[0] or "").strip(),
+                )
                 if source_path is None or not source_path.exists():
                     return self._send_error(
                         code="COVER_PREVIEW_NOT_AVAILABLE",
-                        message=f"No local source cover available for book {book_number}.",
+                        message=str(resolve_meta.get("error") or f"No source cover is available for book {book_number}."),
                         details={"book": int(book_number), "source": source},
-                        status=HTTPStatus.NOT_FOUND,
+                        status=HTTPStatus(resolve_status),
                         endpoint=path,
                     )
                 preview_path = _cover_preview_path_for_runtime(runtime=runtime_req, book_number=book_number, source=source)
@@ -7954,16 +8121,37 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                image_path = _visual_qa_image_path(runtime=runtime_req, book_number=book_number)
+                try:
+                    image_path = _visual_qa_image_path(runtime=runtime_req, book_number=book_number)
+                except Exception as exc:
+                    logger.exception("Failed to resolve visual QA image for book %s", book_number)
+                    return self._send_error(
+                        code="VISUAL_QA_IMAGE_ERROR",
+                        message=f"Failed to load visual QA comparison image: {exc}",
+                        details={"book_number": book_number},
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                        endpoint=path,
+                    )
                 if image_path is None or not image_path.exists():
+                    payload = _load_visual_qa_payload(runtime=runtime_req, book_number=book_number)
                     return self._send_error(
                         code="VISUAL_QA_IMAGE_NOT_FOUND",
-                        message=f"No visual QA comparison image found for book {book_number}",
+                        message=str(payload.get("message") or "No generated images available for this book. Generate covers first."),
                         details={"book_number": book_number},
                         status=HTTPStatus.NOT_FOUND,
                         endpoint=path,
                     )
-                return self._send_file(image_path, content_type="image/jpeg", cache_control="no-store")
+                try:
+                    return self._send_file(image_path, content_type="image/jpeg", cache_control="no-store")
+                except Exception as exc:
+                    logger.exception("Failed to serve visual QA image for book %s", book_number)
+                    return self._send_error(
+                        code="VISUAL_QA_IMAGE_ERROR",
+                        message=f"Failed to serve visual QA comparison image: {exc}",
+                        details={"book_number": book_number},
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                        endpoint=path,
+                    )
             if path == "/api/compare":
                 books_raw = str(query.get("books", [""])[0]).strip()
                 books = _parse_books(books_raw) or []
@@ -11537,10 +11725,75 @@ def serve_review_webapp(
             }
             return self._send_json(payload, status=status, headers=headers, catalog_id=runtime_for_error.catalog_id)
 
-    server = ThreadingHTTPServer((bind_host, port), Handler)
+    class StableThreadingHTTPServer(ThreadingHTTPServer):
+        daemon_threads = True
+        request_queue_size = 128
+
+    server = StableThreadingHTTPServer((bind_host, port), Handler)
     shutdown_requested = threading.Event()
     previous_sigint_handler = None
     previous_sigterm_handler = None
+
+    def _background_startup() -> None:
+        local_slo_monitor: SLOBackgroundMonitor | None = None
+        local_workers_started = False
+        try:
+            _bootstrap_state_store_for_runtime(default_runtime)
+            _prime_catalog_file_caches(default_runtime)
+            try:
+                config.sync_openrouter_pricing(api_key=default_runtime.openrouter_api_key)
+            except Exception as exc:
+                logger.warning("OpenRouter pricing sync skipped during startup: %s", exc)
+            config.start_openrouter_pricing_sync(api_key=default_runtime.openrouter_api_key)
+            default_runtime.model_cost_usd = config.runtime_model_costs_copy()
+            default_runtime.cost_per_image_usd = default_runtime.get_model_cost(default_runtime.ai_model)
+            _set_startup_health(_run_startup_checks(default_runtime))
+            _ensure_builtin_prompts_seeded(runtime=default_runtime, actor="startup")
+            stale_after_seconds, retry_delay_seconds = _job_stale_recovery_config(default_runtime)
+            recovered = job_db_store.recover_stale_running_jobs(
+                stale_after_seconds=stale_after_seconds,
+                retry_delay_seconds=retry_delay_seconds,
+            )
+            if recovered:
+                logger.warning("Recovered stale jobs on startup", extra={"recovered_jobs": recovered})
+
+            slo_monitor_interval_seconds = _slo_monitor_interval_seconds(default_runtime)
+            if slo_monitor_interval_seconds > 0:
+                local_slo_monitor = SLOBackgroundMonitor(interval_seconds=slo_monitor_interval_seconds)
+                local_slo_monitor.start()
+                _set_slo_background_monitor(local_slo_monitor)
+                logger.info(
+                    "Background SLO monitor started",
+                    extra={"interval_seconds": slo_monitor_interval_seconds},
+                )
+            else:
+                _set_slo_background_monitor(None)
+                logger.info("Background SLO monitor disabled", extra={"interval_seconds": slo_monitor_interval_seconds})
+
+            if mode == "inline":
+                job_worker_pool.start()
+                local_workers_started = True
+            elif mode == "external":
+                logger.info("Web server running in external worker mode (enqueue/poll only)")
+            else:
+                logger.warning("Web server running with workers disabled")
+
+            with server_runtime_state_lock:
+                server_runtime_state["slo_monitor"] = local_slo_monitor
+                server_runtime_state["workers_started"] = local_workers_started
+            _set_startup_state(status="ready")
+        except Exception as exc:
+            logger.exception("Background startup initialization failed")
+            _set_startup_health(
+                {
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                    "healthy": False,
+                    "issues": [f"startup_initialization_failed: {exc}"],
+                    "warnings": [],
+                    "checks": [],
+                }
+            )
+            _set_startup_state(status="failed", error=str(exc))
 
     def _request_shutdown(signum: int, _frame: Any) -> None:
         if shutdown_requested.is_set():
@@ -11559,6 +11812,7 @@ def serve_review_webapp(
         previous_sigterm_handler = None
 
     shown_host = bind_host if bind_host not in {"0.0.0.0", "::"} else "127.0.0.1"
+    threading.Thread(target=_background_startup, name="startup-init", daemon=True).start()
     logger.info("Review webapp running at http://%s:%d/review", shown_host, port)
     logger.info("Iteration page running at http://%s:%d/iterate", shown_host, port)
     try:
@@ -11577,7 +11831,10 @@ def serve_review_webapp(
             _flush_all_slo_trackers()
         except Exception:  # pragma: no cover - best effort
             pass
-        if slo_monitor is not None:
+        with server_runtime_state_lock:
+            slo_monitor = server_runtime_state.get("slo_monitor")
+            workers_started = bool(server_runtime_state.get("workers_started"))
+        if isinstance(slo_monitor, SLOBackgroundMonitor):
             slo_monitor.stop(timeout_seconds=1.5)
             _set_slo_background_monitor(None)
         if workers_started:
@@ -15674,6 +15931,16 @@ def main() -> int:
         logger.info("Wrote comparison grid to %s", args.grid)
         return 0
 
+    if args.serve:
+        serve_review_webapp(
+            output_dir,
+            port=args.port,
+            host=args.host,
+            reviewer_default=reviewer,
+            worker_mode=_normalize_worker_mode(args.worker_mode),
+        )
+        return 0
+
     books = _parse_books(args.books)
     review_books = build_review_dataset(
         output_dir,
@@ -15695,16 +15962,6 @@ def main() -> int:
     safe_json.atomic_write_json(review_data_path, review_data)
     iterate_data_path = write_iterate_data(runtime=runtime)
     generate_review_gallery(output_dir, runtime=runtime, max_books=args.max_books)
-
-    if args.serve:
-        serve_review_webapp(
-            output_dir,
-            port=args.port,
-            host=args.host,
-            reviewer_default=reviewer,
-            worker_mode=_normalize_worker_mode(args.worker_mode),
-        )
-        return 0
 
     logger.info("Wrote review data: %s", review_data_path)
     logger.info("Wrote iterate data: %s", iterate_data_path)

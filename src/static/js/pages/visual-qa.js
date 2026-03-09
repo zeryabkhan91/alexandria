@@ -10,7 +10,29 @@ const VisualQAState = {
   showFailuresOnly: false,
   loading: false,
   generatedAt: '',
+  message: '',
+  requestedBook: 0,
+  autoOpenBook: false,
 };
+
+function visualQaRouteState() {
+  const hash = String(window.location.hash || '');
+  const queryString = hash.includes('?') ? hash.split('?').slice(1).join('?') : '';
+  const params = new URLSearchParams(queryString);
+  const bookRaw = Number(params.get('book') || 0);
+  const openToken = String(params.get('open') || '').trim().toLowerCase();
+  return {
+    book: Number.isFinite(bookRaw) && bookRaw > 0 ? Math.trunc(bookRaw) : 0,
+    autoOpen: ['1', 'true', 'yes', 'on'].includes(openToken),
+  };
+}
+
+function syncVisualQaRouteState() {
+  const route = visualQaRouteState();
+  VisualQAState.requestedBook = route.book;
+  VisualQAState.autoOpenBook = route.autoOpen;
+  return route;
+}
 
 function rowVerdict(row) {
   if (row && row.structural_passed === true) return 'PASS';
@@ -35,7 +57,8 @@ function renderCards() {
   if (!container) return;
   const rows = filteredRows();
   if (!rows.length) {
-    container.innerHTML = '<div class="text-muted">No comparison grids available yet.</div>';
+    const fallback = VisualQAState.message || 'No comparison grids available yet.';
+    container.innerHTML = `<div class="text-muted">${esc(fallback)}</div>`;
     return;
   }
   container.innerHTML = rows.map((row) => {
@@ -92,18 +115,36 @@ function renderSummary() {
 async function loadVisualQa({ force = false } = {}) {
   if (VisualQAState.loading) return;
   VisualQAState.loading = true;
+  const route = syncVisualQaRouteState();
   const status = document.getElementById('visualQaStatus');
   if (status) status.textContent = force ? 'Generating comparison grids...' : 'Loading comparison grids...';
   try {
-    const suffix = force ? '&force=1' : '';
-    const response = await fetch(`/api/visual-qa?catalog=classics${suffix}`, { cache: 'no-store' });
+    const params = new URLSearchParams({ catalog: 'classics' });
+    if (force) params.set('force', '1');
+    if (route.book > 0) params.set('book_number', String(route.book));
+    const response = await fetch(`/api/visual-qa?${params.toString()}`, { cache: 'no-store' });
     const payload = await response.json();
     VisualQAState.rows = Array.isArray(payload.comparisons) ? payload.comparisons : [];
     VisualQAState.summary = payload.summary || {};
     VisualQAState.generatedAt = String(payload.generated_at || '');
+    VisualQAState.message = String(payload.message || '').trim();
     renderSummary();
     renderCards();
-    if (status) status.textContent = `Loaded ${VisualQAState.rows.length} comparison grid(s).`;
+    if (status) {
+      if (VisualQAState.rows.length > 0) {
+        status.textContent = route.book > 0
+          ? `Loaded ${VisualQAState.rows.length} comparison grid(s) for book ${route.book}.`
+          : `Loaded ${VisualQAState.rows.length} comparison grid(s).`;
+      } else {
+        status.textContent = VisualQAState.message || 'No comparison grids available yet.';
+      }
+    }
+    if (route.autoOpen && route.book > 0) {
+      const row = VisualQAState.rows.find((item) => Number(item.book_number || 0) === route.book && item.has_image);
+      if (row) {
+        window.setTimeout(() => openLightbox(row), 0);
+      }
+    }
   } catch (error) {
     if (status) status.textContent = `Failed to load Visual QA: ${error.message}`;
     window.Toast?.error(`Visual QA load failed: ${error.message}`);
@@ -163,8 +204,12 @@ function openLightbox(row) {
 
 window.Pages['visual-qa'] = {
   async render() {
+    syncVisualQaRouteState();
     const content = document.getElementById('content');
     if (!content) return;
+    const scopedBanner = VisualQAState.requestedBook > 0
+      ? `<div class="text-sm text-muted mb-12">Scoped to book ${VisualQAState.requestedBook} from the Compare action.</div>`
+      : '';
     content.innerHTML = `
       <div class="card">
         <div class="card-header">
@@ -177,6 +222,7 @@ window.Pages['visual-qa'] = {
         </div>
         <div id="visualQaSummary" class="flex gap-8 mb-8"></div>
         <div id="visualQaGeneratedAt" class="text-sm text-muted mb-12">Loading...</div>
+        ${scopedBanner}
         <div id="visualQaStatus" class="text-sm text-muted mb-12">Loading comparison grids...</div>
         <div id="visualQaCards" class="compare-grid"></div>
       </div>
