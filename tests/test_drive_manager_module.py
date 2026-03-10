@@ -482,8 +482,10 @@ def test_list_input_covers_google_api_uses_input_subfolder(monkeypatch, tmp_path
     class _FakeFilesApi:
         def __init__(self) -> None:
             self._last_q = ""
+            self.list_calls: list[dict] = []
 
         def list(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.list_calls.append(kwargs)
             self._last_q = str(kwargs.get("q", ""))
             return self
 
@@ -507,7 +509,8 @@ def test_list_input_covers_google_api_uses_input_subfolder(monkeypatch, tmp_path
         def files(self):  # type: ignore[no-untyped-def]
             return self._files_api
 
-    monkeypatch.setattr(drive_manager.gdrive_sync, "authenticate", lambda _path: _FakeService())
+    service = _FakeService()
+    monkeypatch.setattr(drive_manager.gdrive_sync, "authenticate", lambda _path: service)
     payload = drive_manager.list_input_covers(
         drive_folder_id="drive-root-id",
         input_folder_id="",
@@ -520,6 +523,83 @@ def test_list_input_covers_google_api_uses_input_subfolder(monkeypatch, tmp_path
     assert payload["count"] == 2
     assert payload["covers"][0]["book_number"] == 1
     assert payload["covers"][1]["book_number"] == 2
+    assert service._files_api.list_calls
+    assert all(call.get("supportsAllDrives") is True for call in service._files_api.list_calls)
+    assert all(call.get("includeItemsFromAllDrives") is True for call in service._files_api.list_calls)
+
+
+def test_list_input_covers_google_api_passes_shared_drive_flags(monkeypatch, tmp_path: Path):
+    catalog_path = tmp_path / "book_catalog.json"
+    catalog_path.write_text('[{"number": 1, "title": "A Room with a View"}]', encoding="utf-8")
+
+    class _FakeFilesApi:
+        def __init__(self) -> None:
+            self._last_q = ""
+            self.list_calls: list[dict] = []
+
+        def list(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.list_calls.append(kwargs)
+            self._last_q = str(kwargs.get("q", ""))
+            return self
+
+        def execute(self):  # type: ignore[no-untyped-def]
+            if "mimeType='application/vnd.google-apps.folder'" in self._last_q:
+                return {"files": [{"id": "input-folder", "name": "Input Covers"}]}
+            return {"files": [{"id": "folder-1", "name": "1. A Room with a View", "mimeType": "application/vnd.google-apps.folder"}]}
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self._files_api = _FakeFilesApi()
+
+        def files(self):  # type: ignore[no-untyped-def]
+            return self._files_api
+
+    service = _FakeService()
+    monkeypatch.setattr(drive_manager.gdrive_sync, "authenticate", lambda _path: service)
+
+    payload = drive_manager.list_input_covers(
+        drive_folder_id="drive-root-id",
+        input_folder_id="",
+        credentials_path=tmp_path / "credentials.json",
+        catalog_path=catalog_path,
+        limit=100,
+    )
+
+    assert payload["mode"] == "google_api"
+    assert service._files_api.list_calls
+    assert all(call.get("supportsAllDrives") is True for call in service._files_api.list_calls)
+    assert all(call.get("includeItemsFromAllDrives") is True for call in service._files_api.list_calls)
+
+
+def test_download_drive_file_bytes_passes_shared_drive_flags():
+    class _FakeFilesApi:
+        def __init__(self) -> None:
+            self.get_media_calls: list[dict] = []
+
+        def get_media(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.get_media_calls.append(kwargs)
+            return self
+
+        def execute(self):  # type: ignore[no-untyped-def]
+            return b"payload"
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self._files_api = _FakeFilesApi()
+
+        def files(self):  # type: ignore[no-untyped-def]
+            return self._files_api
+
+    service = _FakeService()
+    content = drive_manager._download_drive_file_bytes(service=service, file_id="file-1")
+
+    assert content == b"payload"
+    assert service._files_api.get_media_calls == [
+        {
+            "fileId": "file-1",
+            "supportsAllDrives": True,
+        }
+    ]
 
 
 def test_list_input_covers_google_api_error_returns_unavailable(monkeypatch, tmp_path: Path):
@@ -781,3 +861,69 @@ def test_ensure_local_input_cover_selected_drive_cover_ignores_existing_local_wh
     )
     assert payload["ok"] is False
     assert "no cover found in google drive for book #1" in str(payload.get("error", "")).lower()
+
+
+def test_ensure_local_input_cover_parent_lookup_uses_shared_drive_flags(monkeypatch, tmp_path: Path):
+    catalog_path = tmp_path / "book_catalog.json"
+    catalog_path.write_text(
+        '[{"number": 1, "folder_name": "1. Book", "title": "Book One"}]',
+        encoding="utf-8",
+    )
+    input_root = tmp_path / "Input Covers"
+
+    class _FakeFilesApi:
+        def __init__(self) -> None:
+            self.get_calls: list[dict] = []
+
+        def get(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.get_calls.append(kwargs)
+            return self
+
+        def execute(self):  # type: ignore[no-untyped-def]
+            return {"parents": ["parent-folder"]}
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self._files_api = _FakeFilesApi()
+
+        def files(self):  # type: ignore[no-untyped-def]
+            return self._files_api
+
+    service = _FakeService()
+    monkeypatch.setattr(drive_manager.gdrive_sync, "authenticate", lambda _path: service)
+    monkeypatch.setattr(
+        drive_manager,
+        "_iter_drive_cover_entries",
+        lambda **_kwargs: (
+            [{"id": "file-1", "book_number": 1, "kind": "file", "name": "1. Book One.jpg", "parents": []}],
+            "input-folder-id",
+        ),
+    )
+    monkeypatch.setattr(
+        drive_manager,
+        "_download_drive_file_bytes",
+        lambda **_kwargs: b"image",
+    )
+    monkeypatch.setattr(
+        drive_manager,
+        "_pick_drive_pdf_from_folder",
+        lambda **_kwargs: None,
+    )
+
+    payload = drive_manager.ensure_local_input_cover(
+        drive_folder_id="drive-root-id",
+        input_folder_id="input-folder-id",
+        credentials_path=tmp_path / "credentials.json",
+        catalog_path=catalog_path,
+        input_root=input_root,
+        book_number=1,
+    )
+
+    assert payload["ok"] is True
+    assert service._files_api.get_calls == [
+        {
+            "fileId": "file-1",
+            "fields": "parents",
+            "supportsAllDrives": True,
+        }
+    ]

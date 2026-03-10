@@ -562,7 +562,12 @@ def _drive_child_folder_id(*, service: Any, parent_id: str, folder_name: str) ->
         f"'{parent_id}' in parents and "
         "mimeType='application/vnd.google-apps.folder' and trashed=false"
     )
-    response = service.files().list(q=query, fields="files(id,name)", pageSize=1).execute()
+    response = service.files().list(
+        q=query,
+        fields="files(id,name)",
+        pageSize=1,
+        **gdrive_sync.DRIVE_LIST_KWARGS,
+    ).execute()
     files = response.get("files", [])
     if isinstance(files, list) and files:
         return str(files[0].get("id", "")).strip()
@@ -580,6 +585,7 @@ def _drive_children(*, service: Any, parent_id: str) -> list[dict[str, Any]]:
             pageSize=1000,
             pageToken=page_token,
             orderBy="name_natural",
+            **gdrive_sync.DRIVE_LIST_KWARGS,
         )
         response = request.execute()
         files = response.get("files", [])
@@ -739,7 +745,7 @@ def _pick_drive_pdf_from_folder(*, service: Any, folder_id: str) -> dict[str, An
 
 
 def _download_drive_file_bytes(*, service: Any, file_id: str) -> bytes:
-    media = service.files().get_media(fileId=file_id).execute()
+    media = service.files().get_media(fileId=file_id, **gdrive_sync.DRIVE_REQUEST_KWARGS).execute()
     if isinstance(media, bytes):
         return media
     if hasattr(media, "read"):
@@ -874,7 +880,11 @@ def ensure_local_input_cover(
         file_id_token = str(candidate_entry.get("id", "")).strip()
         if not parent_id and file_id_token:
             try:
-                row = service.files().get(fileId=file_id_token, fields="parents").execute()
+                row = service.files().get(
+                    fileId=file_id_token,
+                    fields="parents",
+                    **gdrive_sync.DRIVE_REQUEST_KWARGS,
+                ).execute()
                 parent_values = row.get("parents", []) if isinstance(row, dict) else []
                 if isinstance(parent_values, list) and parent_values:
                     parent_id = str(parent_values[0] or "").strip()

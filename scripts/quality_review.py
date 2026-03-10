@@ -148,10 +148,11 @@ DRIVE_SYNC_LOG_PATH = PROJECT_ROOT / "data" / "drive_sync_log.json"
 SETTINGS_STORE_PATH = PROJECT_ROOT / "settings_store.json"
 CGI_CATALOG_CACHE_PATH = PROJECT_ROOT / "catalog_cache.json"
 CGI_CATALOG_MAX_AGE_SECONDS = 3600
-SAVE_RAW_DRIVE_FOLDER_ID = "1SHzAaDU1pN0ECC61KCRtYijv4dp4IR59"
+SAVE_RAW_DRIVE_FOLDER_ID = "0ABLZWLOVzq-qUk9PVA"
 SAVE_RAW_LOCAL_DIRNAME = "Chosen Winner Generated Covers"
 SAVE_RAW_DRIVE_RETRY_ATTEMPTS = max(1, int(os.getenv("SAVE_RAW_DRIVE_RETRY_ATTEMPTS", "2")))
 SAVE_RAW_DRIVE_RETRY_DELAY_SECONDS = max(0.0, float(os.getenv("SAVE_RAW_DRIVE_RETRY_DELAY_SECONDS", "0.5")))
+SAVE_RAW_DRIVE_PROBE_TIMEOUT_SECONDS = max(0.1, float(os.getenv("SAVE_RAW_DRIVE_PROBE_TIMEOUT_SECONDS", "5")))
 SAVE_PROMPT_DRIVE_SUBDIR = "saved_prompts"
 FALLBACK_FAVICON_SVG = (
     b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
@@ -6293,6 +6294,36 @@ def _probe_drive_write_access(*, service: Any, parent_folder_id: str) -> dict[st
         probe_path.unlink(missing_ok=True)
 
 
+def _probe_drive_write_access_with_timeout(
+    *,
+    service: Any,
+    parent_folder_id: str,
+    timeout_seconds: float = SAVE_RAW_DRIVE_PROBE_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    results: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
+
+    def _run_probe() -> None:
+        try:
+            results.put(_probe_drive_write_access(service=service, parent_folder_id=parent_folder_id))
+        except Exception as exc:  # pragma: no cover - defensive
+            results.put({"ok": False, "error": str(exc), "file_id": ""})
+
+    worker = threading.Thread(target=_run_probe, name="drive-write-probe", daemon=True)
+    worker.start()
+    worker.join(timeout=max(0.1, float(timeout_seconds)))
+    if worker.is_alive():
+        return {
+            "ok": False,
+            "error": f"timed out after {float(timeout_seconds):.1f}s",
+            "file_id": "",
+            "timed_out": True,
+        }
+    try:
+        return results.get_nowait()
+    except queue.Empty:
+        return {"ok": False, "error": "probe returned no result", "file_id": ""}
+
+
 def _run_startup_checks(runtime: config.Config) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     issues: list[str] = []
@@ -6377,17 +6408,20 @@ def _run_startup_checks(runtime: config.Config) -> dict[str, Any]:
                     "Google Drive connected. Covers will be downloaded on demand from folder %s.",
                     drive_source_folder,
                 )
-                write_probe = _probe_drive_write_access(service=service, parent_folder_id=SAVE_RAW_DRIVE_FOLDER_ID)
-                write_detail = (
-                    f"Save Raw Drive uploads verified for folder {SAVE_RAW_DRIVE_FOLDER_ID}."
-                    if bool(write_probe.get("ok", False))
-                    else (
-                        "Drive upload will fail — service account "
-                        f"{str(credentials_meta.get('client_email', '') or '(unknown)')} lacks write access to "
-                        f"folder {SAVE_RAW_DRIVE_FOLDER_ID}. Share the folder with the service account as Editor. "
+                write_probe = _probe_drive_write_access_with_timeout(
+                    service=service,
+                    parent_folder_id=SAVE_RAW_DRIVE_FOLDER_ID,
+                )
+                write_detail = "Drive upload: OK (Shared Drive)"
+                if bool(write_probe.get("ok", False)):
+                    logger.info("%s for folder %s.", write_detail, SAVE_RAW_DRIVE_FOLDER_ID)
+                else:
+                    write_detail = (
+                        "Drive upload failed — check Shared Drive permissions for service account "
+                        f"{str(credentials_meta.get('client_email', '') or '(unknown)')} on folder "
+                        f"{SAVE_RAW_DRIVE_FOLDER_ID}. "
                         f"({str(write_probe.get('error', '') or 'write probe failed')})"
                     )
-                )
                 _record(
                     "save_raw_drive_write_access",
                     bool(write_probe.get("ok", False)),

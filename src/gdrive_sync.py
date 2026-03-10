@@ -38,6 +38,11 @@ logger = get_logger(__name__)
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 SYNC_STATE_PATH = config.gdrive_sync_state_path()
 ProgressCallback = Callable[[dict[str, Any]], None]
+DRIVE_REQUEST_KWARGS = {"supportsAllDrives": True}
+DRIVE_LIST_KWARGS = {
+    "supportsAllDrives": True,
+    "includeItemsFromAllDrives": True,
+}
 
 
 def authenticate(credentials_path: Path | None = None):
@@ -297,6 +302,7 @@ def get_sync_status(drive_folder_id: str, credentials_path: Path) -> dict[str, A
         q=f"'{drive_folder_id}' in parents and trashed=false",
         fields="files(id, name, mimeType)",
         pageSize=1000,
+        **DRIVE_LIST_KWARGS,
     ).execute()
 
     files = response.get("files", [])
@@ -404,7 +410,12 @@ def _ensure_remote_folder(
         f"name='{_escape_query(folder_name)}' and '{parent_id}' in parents "
         "and mimeType='application/vnd.google-apps.folder' and trashed=false"
     )
-    resp = service.files().list(q=q, fields="files(id, name)", pageSize=1).execute()
+    resp = service.files().list(
+        q=q,
+        fields="files(id, name)",
+        pageSize=1,
+        **DRIVE_LIST_KWARGS,
+    ).execute()
     files = resp.get("files", [])
     if files:
         folder_id = files[0]["id"]
@@ -416,7 +427,7 @@ def _ensure_remote_folder(
         "mimeType": "application/vnd.google-apps.folder",
         "parents": [parent_id],
     }
-    created = service.files().create(body=metadata, fields="id").execute()
+    created = service.files().create(body=metadata, fields="id", **DRIVE_REQUEST_KWARGS).execute()
     folder_id = created["id"]
     cache[key] = folder_id
     return folder_id
@@ -432,7 +443,17 @@ def _upload_file(*, service, parent_id: str, local_path: Path, incremental: bool
         f"name='{_escape_query(local_path.name)}' and '{parent_id}' in parents "
         "and trashed=false"
     )
-    existing = service.files().list(q=q, fields="files(id, name, size, md5Checksum)", pageSize=1).execute().get("files", [])
+    existing = (
+        service.files()
+        .list(
+            q=q,
+            fields="files(id, name, size, md5Checksum)",
+            pageSize=1,
+            **DRIVE_LIST_KWARGS,
+        )
+        .execute()
+        .get("files", [])
+    )
 
     if existing:
         remote = existing[0]
@@ -460,7 +481,7 @@ def _upload_file(*, service, parent_id: str, local_path: Path, incremental: bool
             return "skipped"
 
         media = _media_file_upload(local_path=local_path, mime_type=mime_type)
-        service.files().update(fileId=remote["id"], media_body=media).execute()
+        service.files().update(fileId=remote["id"], media_body=media, **DRIVE_REQUEST_KWARGS).execute()
         state[rel_key] = {
             "id": remote["id"],
             "size": local_size,
@@ -471,7 +492,12 @@ def _upload_file(*, service, parent_id: str, local_path: Path, incremental: bool
 
     metadata = {"name": local_path.name, "parents": [parent_id]}
     media = _media_file_upload(local_path=local_path, mime_type=mime_type)
-    created = service.files().create(body=metadata, media_body=media, fields="id").execute()
+    created = service.files().create(
+        body=metadata,
+        media_body=media,
+        fields="id",
+        **DRIVE_REQUEST_KWARGS,
+    ).execute()
     state[rel_key] = {
         "id": created["id"],
         "size": local_size,

@@ -1188,10 +1188,60 @@ def test_save_raw_drive_status_payload_reports_parent_folder_access(
     assert payload["ok"] is True
     assert payload["connected"] is True
     assert payload["parent_folder_access"] is True
+    assert payload["parent_folder_id"] == "0ABLZWLOVzq-qUk9PVA"
     assert payload["write_access"] is True
     assert payload["retry_supported"] is True
     assert payload["service_account_email"] == "alexandria-bot@example.iam.gserviceaccount.com"
     assert payload["parent_folder_url"].startswith("https://drive.google.com/drive/folders/")
+
+
+def test_probe_drive_write_access_with_timeout_returns_quickly(monkeypatch: pytest.MonkeyPatch):
+    def _slow_probe(**_kwargs):  # type: ignore[no-untyped-def]
+        time.sleep(0.2)
+        return {"ok": True, "error": "", "file_id": "late"}
+
+    monkeypatch.setattr(qr, "_probe_drive_write_access", _slow_probe)
+
+    started = time.perf_counter()
+    payload = qr._probe_drive_write_access_with_timeout(
+        service=object(),
+        parent_folder_id="folder-1",
+        timeout_seconds=0.01,
+    )
+    elapsed = time.perf_counter() - started
+
+    assert payload["ok"] is False
+    assert payload["timed_out"] is True
+    assert "timed out after 0.0s" in str(payload["error"])
+    assert elapsed < 0.15
+
+
+def test_run_startup_checks_logs_shared_drive_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):
+    cfg = replace(_build_runtime_for_startup_checks(tmp_path), gdrive_source_folder_id="source-folder")
+    monkeypatch.setattr(
+        qr,
+        "_drive_service_for_runtime",
+        lambda _runtime: (
+            object(),
+            Path("/tmp/credentials.json"),
+            "service_account_env",
+            {"client_email": "alexandria-bot@example.iam.gserviceaccount.com", "source": "env", "loaded": True},
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        qr,
+        "_probe_drive_write_access_with_timeout",
+        lambda **_kwargs: {"ok": True, "error": "", "file_id": "probe-file"},
+    )
+
+    with caplog.at_level("INFO"):
+        report = qr._run_startup_checks(cfg)
+
+    drive_check = next(row for row in report["checks"] if row["name"] == "save_raw_drive_write_access")
+    assert drive_check["ok"] is True
+    assert drive_check["detail"] == "Drive upload: OK (Shared Drive)"
+    assert "Drive upload: OK (Shared Drive)" in caplog.text
 
 
 def test_sync_catalog_from_drive_queues_auto_enrichment_for_new_books(

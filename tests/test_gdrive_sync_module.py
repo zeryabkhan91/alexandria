@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -184,10 +185,12 @@ def test_ensure_remote_folder_and_upload_file_paths(tmp_path: Path, monkeypatch)
     class FakeFilesApi:
         def __init__(self):
             self.list_payload = {"files": []}
+            self.listed = []
             self.created = []
             self.updated = []
 
-        def list(self, **_kwargs):  # type: ignore[no-untyped-def]
+        def list(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.listed.append(kwargs)
             return FakeRequest(self.list_payload)
 
         def create(self, **kwargs):  # type: ignore[no-untyped-def]
@@ -248,6 +251,11 @@ def test_ensure_remote_folder_and_upload_file_paths(tmp_path: Path, monkeypatch)
     status = gs._upload_file(service=service, parent_id="root", local_path=local_file, incremental=False, state=state)
     assert status == "uploaded"
     assert service._files.created
+    assert service._files.listed
+    assert all(call.get("supportsAllDrives") is True for call in service._files.listed)
+    assert all(call.get("includeItemsFromAllDrives") is True for call in service._files.listed)
+    assert all(call.get("supportsAllDrives") is True for call in service._files.created)
+    assert all(call.get("supportsAllDrives") is True for call in service._files.updated)
 
 
 def test_authenticate_service_account_and_oauth(tmp_path: Path, monkeypatch):
@@ -330,11 +338,16 @@ def test_sync_to_google_api_path_and_get_status(tmp_path: Path, monkeypatch):
         def __init__(self):
             self.items: list[dict] = []
             self._next = 1
+            self.list_calls: list[dict] = []
+            self.create_calls: list[dict] = []
+            self.update_calls: list[dict] = []
 
         def files(self):  # type: ignore[no-untyped-def]
             return self
 
-        def list(self, q=None, fields=None, pageSize=None):  # type: ignore[no-untyped-def]
+        def list(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.list_calls.append(kwargs)
+            q = kwargs.get("q")
             if q and "mimeType='application/vnd.google-apps.folder'" in q:
                 return _Request({"files": []})
             if q and "name='file.jpg'" in q:
@@ -343,16 +356,19 @@ def test_sync_to_google_api_path_and_get_status(tmp_path: Path, monkeypatch):
                 return _Request({"files": self.items})
             return _Request({"files": []})
 
-        def create(self, body=None, media_body=None, fields=None):  # type: ignore[no-untyped-def]
+        def create(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.create_calls.append(kwargs)
             item_id = f"id-{self._next}"
             self._next += 1
-            mime = (body or {}).get("mimeType", "application/octet-stream")
-            name = (body or {}).get("name", "")
+            body = kwargs.get("body") or {}
+            mime = body.get("mimeType", "application/octet-stream")
+            name = body.get("name", "")
             self.items.append({"id": item_id, "name": name, "mimeType": mime})
             return _Request({"id": item_id})
 
-        def update(self, fileId=None, media_body=None):  # type: ignore[no-untyped-def]
-            return _Request({"id": fileId})
+        def update(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.update_calls.append(kwargs)
+            return _Request({"id": kwargs.get("fileId")})
 
     service = _Service()
     monkeypatch.setattr(gs, "authenticate", lambda _path: service)
@@ -371,6 +387,12 @@ def test_sync_to_google_api_path_and_get_status(tmp_path: Path, monkeypatch):
     status = gs.get_sync_status("drive-root", credentials)
     assert status["mode"] == "google_api"
     assert status["item_count"] >= 1
+    assert service.list_calls
+    assert all(call.get("supportsAllDrives") is True for call in service.list_calls)
+    assert all(call.get("includeItemsFromAllDrives") is True for call in service.list_calls)
+    assert service.create_calls
+    assert all(call.get("supportsAllDrives") is True for call in service.create_calls)
+    assert all(call.get("supportsAllDrives") is True for call in service.update_calls)
 
 
 def test_sync_to_google_api_progress_callback_called(tmp_path: Path, monkeypatch):
@@ -387,21 +409,29 @@ def test_sync_to_google_api_progress_callback_called(tmp_path: Path, monkeypatch
             return self._payload
 
     class _Service:
+        def __init__(self):
+            self.list_calls: list[dict] = []
+            self.create_calls: list[dict] = []
+
         def files(self):  # type: ignore[no-untyped-def]
             return self
 
-        def list(self, q=None, fields=None, pageSize=None):  # type: ignore[no-untyped-def]
+        def list(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.list_calls.append(kwargs)
+            q = kwargs.get("q")
             if q and "mimeType='application/vnd.google-apps.folder'" in q:
                 return _Request({"files": [{"id": "folder-id"}]})
             return _Request({"files": []})
 
-        def create(self, body=None, media_body=None, fields=None):  # type: ignore[no-untyped-def]
+        def create(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.create_calls.append(kwargs)
             return _Request({"id": "new-id"})
 
-        def update(self, fileId=None, media_body=None):  # type: ignore[no-untyped-def]
-            return _Request({"id": fileId})
+        def update(self, **kwargs):  # type: ignore[no-untyped-def]
+            return _Request({"id": kwargs.get("fileId")})
 
-    monkeypatch.setattr(gs, "authenticate", lambda _path: _Service())
+    service = _Service()
+    monkeypatch.setattr(gs, "authenticate", lambda _path: service)
     monkeypatch.setattr(gs, "MediaFileUpload", lambda path, mimetype=None, resumable=False: {"path": path}, raising=False)
 
     events: list[dict] = []
@@ -414,6 +444,70 @@ def test_sync_to_google_api_progress_callback_called(tmp_path: Path, monkeypatch
     )
     assert summary["uploaded"] == 1
     assert len(events) == 1
+    assert service.list_calls
+    assert all(call.get("supportsAllDrives") is True for call in service.list_calls)
+    assert all(call.get("includeItemsFromAllDrives") is True for call in service.list_calls)
+    assert service.create_calls
+    assert all(call.get("supportsAllDrives") is True for call in service.create_calls)
+
+
+def test_shared_drive_live_create_list_delete_round_trip(tmp_path: Path):
+    if str(os.getenv("RUN_LIVE_GDRIVE_TESTS", "")).strip().lower() not in {"1", "true", "yes", "on"}:
+        pytest.skip("Set RUN_LIVE_GDRIVE_TESTS=1 to run live Google Drive verification.")
+    if not gs.GOOGLE_API_AVAILABLE:
+        pytest.skip("Google Drive dependencies are not installed.")
+
+    credentials_env = str(os.getenv("GOOGLE_CREDENTIALS_JSON", "")).strip()
+    credentials_path_env = str(os.getenv("GOOGLE_CREDENTIALS_PATH", "")).strip()
+    if not credentials_env and not credentials_path_env:
+        pytest.skip("Google Drive credentials are not configured.")
+
+    folder_id = str(os.getenv("PROMPT32_SHARED_DRIVE_FOLDER_ID", "0ABLZWLOVzq-qUk9PVA")).strip()
+    credentials_path = Path(credentials_path_env) if credentials_path_env else None
+    service = gs.authenticate(credentials_path)
+
+    probe_name = "test_upload_prompt32.txt"
+    probe_body = b"PROMPT-32 verification"
+    probe_path = tmp_path / probe_name
+    probe_path.write_bytes(probe_body)
+    media = gs.MediaFileUpload(str(probe_path), mimetype="text/plain")
+    created_id = ""
+    try:
+        created = service.files().create(
+            body={"name": probe_name, "parents": [folder_id]},
+            media_body=media,
+            fields="id,name",
+            **gs.DRIVE_REQUEST_KWARGS,
+        ).execute()
+        created_id = str(created.get("id", "") or "").strip()
+        assert created_id
+
+        listed = service.files().list(
+            q=(
+                f"name='{gs._escape_query(probe_name)}' and "
+                f"'{folder_id}' in parents and trashed=false"
+            ),
+            fields="files(id,name)",
+            pageSize=20,
+            **gs.DRIVE_LIST_KWARGS,
+        ).execute()
+        files = listed.get("files", []) if isinstance(listed, dict) else []
+        assert any(str(row.get("id", "")).strip() == created_id for row in files if isinstance(row, dict))
+    finally:
+        if created_id:
+            service.files().delete(fileId=created_id, **gs.DRIVE_REQUEST_KWARGS).execute()
+
+    listed_after_delete = service.files().list(
+        q=(
+            f"name='{gs._escape_query(probe_name)}' and "
+            f"'{folder_id}' in parents and trashed=false"
+        ),
+        fields="files(id,name)",
+        pageSize=20,
+        **gs.DRIVE_LIST_KWARGS,
+    ).execute()
+    files_after_delete = listed_after_delete.get("files", []) if isinstance(listed_after_delete, dict) else []
+    assert all(str(row.get("id", "")).strip() != created_id for row in files_after_delete if isinstance(row, dict))
 
 
 def test_main_status_winners_only_and_selected_files(tmp_path: Path, monkeypatch):
