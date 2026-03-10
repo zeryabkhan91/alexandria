@@ -1898,6 +1898,8 @@ def _serialize_generation_results(
                     model_token=model_token,
                     composite_source=candidate,
                     job_token=raw_job_token,
+                    raw_art_source=(PROJECT_ROOT / str(persisted_raw_path)) if persisted_raw_path else (Path(row.image_path) if Path(row.image_path).exists() else None),
+                    raw_art_path_token=str(persisted_raw_path or image_rel or "").strip(),
                 )
         composed_pdf_path = None
         composed_ai_path = None
@@ -1918,7 +1920,7 @@ def _serialize_generation_results(
                 "prompt": row.prompt,
                 "image_path": image_rel,
                 "raw_art_path": persisted_raw_path,
-                "composited_path": composed,
+                "composited_path": persisted_composite_path or composed,
                 "saved_composited_path": persisted_composite_path,
                 "composited_pdf_path": composed_pdf_path,
                 "composited_ai_path": composed_ai_path,
@@ -1963,6 +1965,8 @@ def _persist_composite_image(
     model_token: str,
     composite_source: Path,
     job_token: str,
+    raw_art_source: Path | None = None,
+    raw_art_path_token: str = "",
 ) -> str | None:
     if not composite_source.exists():
         return None
@@ -1971,11 +1975,163 @@ def _persist_composite_image(
     composite_dest = composite_dir / f"{job_token}_variant_{int(variant)}_{model_token}.jpg"
     try:
         shutil.copy2(str(composite_source), str(composite_dest))
+        _write_saved_composite_manifest(
+            composite_path=composite_dest,
+            job_token=job_token,
+            book_number=book_number,
+            variant=variant,
+            model_token=model_token,
+            raw_art_source=raw_art_source,
+            raw_art_path_token=raw_art_path_token,
+        )
         logger.info("Persisted composite image to %s", composite_dest)
         return _to_project_relative(composite_dest)
     except Exception as exc:
         logger.warning("Failed to persist composite image: %s", exc)
         return None
+
+
+def _saved_composite_manifest_path(composite_path: Path) -> Path:
+    return Path(f"{composite_path}.manifest.json")
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_saved_composite_manifest(
+    *,
+    composite_path: Path,
+    job_token: str,
+    book_number: int,
+    variant: int,
+    model_token: str,
+    raw_art_source: Path | None,
+    raw_art_path_token: str,
+) -> None:
+    safe_json.atomic_write_json(
+        _saved_composite_manifest_path(composite_path),
+        {
+            "job_token": str(job_token or "").strip(),
+            "book_number": int(book_number),
+            "variant": int(variant),
+            "model_token": str(model_token or "").strip(),
+            "saved_composite_path": _to_project_relative(composite_path),
+            "saved_composite_sha256": _file_sha256(composite_path),
+            "raw_art_path": str(raw_art_path_token or "").strip(),
+            "raw_art_sha256": _file_sha256(raw_art_source) if raw_art_source is not None and raw_art_source.exists() else "",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+def _saved_composite_destination_for_row(*, runtime: config.Config, row: dict[str, Any]) -> Path | None:
+    configured = _project_path_if_exists(row.get("saved_composited_path"))
+    if configured is not None:
+        return configured
+    book_number = _safe_int(row.get("book_number"), 0)
+    variant = _safe_int(row.get("variant"), 0)
+    if book_number <= 0 or variant <= 0:
+        return None
+    composite_dir = runtime.output_dir / "saved_composites" / str(book_number)
+    composite_dir.mkdir(parents=True, exist_ok=True)
+    model_token = str(row.get("model", "unknown") or "unknown").replace("/", "_").replace(" ", "_")
+    job_token = _generation_artifact_job_token(row=row)
+    return composite_dir / f"{job_token}_variant_{int(variant)}_{model_token}.jpg"
+
+
+def _saved_composite_manifest_matches_row(*, runtime: config.Config, row: dict[str, Any], composite_path: Path) -> bool:
+    payload = _load_json(_saved_composite_manifest_path(composite_path), {})
+    if not isinstance(payload, dict) or not payload:
+        return False
+    try:
+        if str(payload.get("saved_composite_sha256", "") or "").strip() != _file_sha256(composite_path):
+            return False
+    except Exception:
+        return False
+    expected_job_token = _generation_artifact_job_token(row=row)
+    if expected_job_token and str(payload.get("job_token", "") or "").strip() != expected_job_token:
+        return False
+    expected_variant = _safe_int(row.get("variant"), 0)
+    if expected_variant > 0 and _safe_int(payload.get("variant"), 0) != expected_variant:
+        return False
+    expected_model = str(row.get("model", "") or "").strip().replace("/", "_").replace(" ", "_")
+    if expected_model and str(payload.get("model_token", "") or "").strip() != expected_model:
+        return False
+    expected_raw_rel = str(row.get("raw_art_path", "") or "").strip()
+    manifest_raw_rel = str(payload.get("raw_art_path", "") or "").strip()
+    if expected_raw_rel and manifest_raw_rel != expected_raw_rel:
+        return False
+    raw_art = _resolve_durable_raw_image_path(runtime=runtime, row=row)
+    if raw_art is not None and raw_art.exists():
+        if str(payload.get("raw_art_sha256", "") or "").strip() != _file_sha256(raw_art):
+            return False
+    return True
+
+
+def _rebuild_saved_composite_from_raw_art(*, runtime: config.Config, row: dict[str, Any], output_path: Path) -> Path | None:
+    raw_art = _resolve_durable_raw_image_path(runtime=runtime, row=row)
+    book_number = _safe_int(row.get("book_number"), 0)
+    variant = _safe_int(row.get("variant"), 0)
+    if raw_art is None or not raw_art.exists() or book_number <= 0 or variant <= 0:
+        return None
+    cover_path = _first_local_cover_path(runtime=runtime, book_number=book_number)
+    if cover_path is None or not cover_path.exists():
+        cover_path, _status, _meta = _resolve_cover_preview_source_path(
+            runtime=runtime,
+            book_number=book_number,
+            source="catalog",
+        )
+    if cover_path is None or not cover_path.exists():
+        return None
+    regions = _load_json(config.cover_regions_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir), {})
+    region = cover_compositor._region_for_book(regions, book_number)  # type: ignore[attr-defined]
+    source_pdf = pdf_compositor.find_source_pdf_for_book(
+        input_dir=runtime.input_dir,
+        book_number=book_number,
+        catalog_path=runtime.book_catalog_path,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    rebuilt = cover_compositor.composite_single(
+        cover_path=cover_path,
+        illustration_path=raw_art,
+        region=region,
+        output_path=output_path,
+        source_pdf_path=source_pdf,
+    )
+    _write_saved_composite_manifest(
+        composite_path=rebuilt,
+        job_token=_generation_artifact_job_token(row=row),
+        book_number=book_number,
+        variant=variant,
+        model_token=str(row.get("model", "unknown") or "unknown").replace("/", "_").replace(" ", "_"),
+        raw_art_source=raw_art,
+        raw_art_path_token=str(row.get("raw_art_path", "") or "").strip(),
+    )
+    return rebuilt
+
+
+def _ensure_saved_composite_for_row(*, runtime: config.Config, row: dict[str, Any]) -> Path | None:
+    composite_path = _project_path_if_exists(row.get("saved_composited_path"))
+    if composite_path is not None and composite_path.exists():
+        if _saved_composite_manifest_matches_row(runtime=runtime, row=row, composite_path=composite_path):
+            return composite_path
+        if _resolve_durable_raw_image_path(runtime=runtime, row=row) is None:
+            return composite_path
+    destination = composite_path or _saved_composite_destination_for_row(runtime=runtime, row=row)
+    if destination is None:
+        return composite_path if composite_path is not None and composite_path.exists() else None
+    rebuilt = _rebuild_saved_composite_from_raw_art(runtime=runtime, row=row, output_path=destination)
+    if rebuilt is not None and rebuilt.exists():
+        row["saved_composited_path"] = _to_project_relative(rebuilt)
+        return rebuilt
+    if composite_path is not None and composite_path.exists() and _resolve_durable_raw_image_path(runtime=runtime, row=row) is None:
+        return composite_path
+    return None
 
 
 def _hydrate_serialized_result_paths(*, runtime: config.Config, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1984,23 +2140,17 @@ def _hydrate_serialized_result_paths(*, runtime: config.Config, rows: list[dict[
         if not isinstance(row, dict):
             continue
         payload = dict(row)
-        model_token = str(payload.get("model", "unknown") or "unknown").replace("/", "_").replace(" ", "_")
-        saved_composite = _project_path_if_exists(payload.get("saved_composited_path"))
+        saved_composite = _ensure_saved_composite_for_row(runtime=runtime, row=payload)
+        if saved_composite is not None and saved_composite.exists():
+            payload["saved_composited_path"] = _to_project_relative(saved_composite)
+            payload["composited_path"] = _to_project_relative(saved_composite)
         image_path_raw = str(payload.get("image_path", "")).strip()
         if image_path_raw:
             image_path = PROJECT_ROOT / image_path_raw
             candidate = _resolve_composited_candidate(image_path, runtime=runtime)
             if candidate and candidate.exists():
-                payload["composited_path"] = _to_project_relative(candidate)
                 if saved_composite is None or not saved_composite.exists():
-                    payload["saved_composited_path"] = _persist_composite_image(
-                        runtime=runtime,
-                        book_number=_safe_int(payload.get("book_number"), 0),
-                        variant=_safe_int(payload.get("variant"), 0),
-                        model_token=model_token,
-                        composite_source=candidate,
-                        job_token=_generation_artifact_job_token(row=payload),
-                    )
+                    payload["composited_path"] = _to_project_relative(candidate)
                 pdf_candidate = _resolve_composited_companion(candidate, ".pdf")
                 if pdf_candidate and pdf_candidate.exists():
                     payload["composited_pdf_path"] = _to_project_relative(pdf_candidate)
@@ -2011,14 +2161,7 @@ def _hydrate_serialized_result_paths(*, runtime: config.Config, rows: list[dict[
                 existing_composite = _project_path_if_exists(payload.get("composited_path"))
                 if existing_composite is not None:
                     if saved_composite is None or not saved_composite.exists():
-                        payload["saved_composited_path"] = _persist_composite_image(
-                            runtime=runtime,
-                            book_number=_safe_int(payload.get("book_number"), 0),
-                            variant=_safe_int(payload.get("variant"), 0),
-                            model_token=model_token,
-                            composite_source=existing_composite,
-                            job_token=_generation_artifact_job_token(row=payload),
-                        )
+                        payload["composited_path"] = _to_project_relative(existing_composite)
                     pdf_candidate = _resolve_composited_companion(existing_composite, ".pdf")
                     if pdf_candidate and pdf_candidate.exists():
                         payload["composited_pdf_path"] = _to_project_relative(pdf_candidate)
@@ -14514,12 +14657,9 @@ def _resolve_durable_raw_image_path(*, runtime: config.Config, row: dict[str, An
 
 def _resolve_durable_composite_image_path(*, runtime: config.Config, row: dict[str, Any]) -> Path | None:
     composite_root = runtime.output_dir / "saved_composites"
-    for token in (row.get("saved_composited_path"), row.get("composited_path")):
-        candidate = _project_path_if_exists(token)
-        if candidate is None or not candidate.exists():
-            continue
-        if _is_descendant_path(candidate, composite_root):
-            return candidate
+    candidate = _ensure_saved_composite_for_row(runtime=runtime, row=row)
+    if candidate is not None and candidate.exists() and _is_descendant_path(candidate, composite_root):
+        return candidate
     return None
 
 
@@ -14549,7 +14689,7 @@ def _resolve_composite_image_path_for_job(*, runtime: config.Config, job: job_st
     row = _primary_job_result_row(job)
     if not isinstance(row, dict):
         return None
-    candidate = _project_path_if_exists(row.get("saved_composited_path"))
+    candidate = _ensure_saved_composite_for_row(runtime=runtime, row=row)
     if candidate is not None and candidate.exists():
         return candidate
     candidate = _project_path_if_exists(row.get("composited_path"))

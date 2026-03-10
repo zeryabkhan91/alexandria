@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 from PIL import Image
 
+from scripts import quality_review as qr
 from src import job_store
 
 
@@ -141,6 +142,15 @@ def _seed_completed_save_raw_job(
 ) -> None:
     store = job_store.JobStore(jobs_db_path)
     now = datetime.now(timezone.utc).isoformat()
+    qr._write_saved_composite_manifest(
+        composite_path=saved_composited_path,
+        job_token=job_id,
+        book_number=book_number,
+        variant=variant,
+        model_token=str(model or "unknown").replace("/", "_").replace(" ", "_"),
+        raw_art_source=raw_art_path,
+        raw_art_path_token=str(raw_art_path),
+    )
     store.create_or_get_job(
         job_id=job_id,
         idempotency_key=f"idem-{job_id}",

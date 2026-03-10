@@ -964,6 +964,15 @@ def test_save_raw_helpers_resolve_paths_and_preserve_display_naming(tmp_path: Pa
     comp_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (64, 64), (12, 34, 56)).save(raw_path, format="PNG")
     Image.new("RGB", (64, 64), (56, 34, 12)).save(comp_path, format="JPEG")
+    qr._write_saved_composite_manifest(
+        composite_path=comp_path,
+        job_token="job-raw-partial",
+        book_number=7,
+        variant=1,
+        model_token="openrouter_google_gemini-3-pro-image-preview",
+        raw_art_source=raw_path,
+        raw_art_path_token=qr._to_project_relative(raw_path),
+    )
 
     job = qr.job_store.JobRecord(
         id="job-1",
@@ -1137,6 +1146,15 @@ def test_save_raw_payload_for_job_returns_partial_when_drive_upload_fails(
     comp_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (64, 64), (12, 34, 56)).save(raw_path, format="PNG")
     Image.new("RGB", (64, 64), (56, 34, 12)).save(comp_path, format="JPEG")
+    qr._write_saved_composite_manifest(
+        composite_path=comp_path,
+        job_token="job-raw-partial",
+        book_number=7,
+        variant=1,
+        model_token="openrouter_google_gemini-3-pro-image-preview",
+        raw_art_source=raw_path,
+        raw_art_path_token=qr._to_project_relative(raw_path),
+    )
     job = qr.job_store.JobRecord(
         id="job-raw-partial",
         idempotency_key="idem-raw-partial",
@@ -1729,7 +1747,7 @@ def test_serialize_generation_results_persists_job_unique_raw_and_composite_arti
     assert (qr.PROJECT_ROOT / str(second[0]["saved_composited_path"])).exists()
 
 
-def test_hydrate_serialized_result_paths_persists_saved_composite_after_compositing(tmp_path: Path):
+def test_hydrate_serialized_result_paths_persists_saved_composite_after_compositing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg = _build_runtime_for_startup_checks(tmp_path)
     model = "openrouter/google/gemini-3-pro-image-preview"
     model_dir = cfg.tmp_dir / "generated" / "1" / qr.image_generator._model_to_directory(model)  # type: ignore[attr-defined]
@@ -1746,6 +1764,13 @@ def test_hydrate_serialized_result_paths_persists_saved_composite_after_composit
     raw_dir.mkdir(parents=True, exist_ok=True)
     raw_path = raw_dir / "job-hydrate_variant_1_openrouter_google_gemini-3-pro-image-preview.png"
     Image.new("RGB", (64, 64), (81, 91, 101)).save(raw_path, format="PNG")
+
+    def _fake_rebuild(*, runtime: config.Config, row: dict[str, Any], output_path: Path) -> Path:
+        del runtime, row
+        Image.new("RGB", (64, 64), (81, 91, 101)).save(output_path, format="PNG")
+        return output_path
+
+    monkeypatch.setattr(qr, "_rebuild_saved_composite_from_raw_art", _fake_rebuild)
 
     hydrated = qr._hydrate_serialized_result_paths(
         runtime=cfg,
@@ -1764,6 +1789,173 @@ def test_hydrate_serialized_result_paths_persists_saved_composite_after_composit
 
     assert hydrated[0]["saved_composited_path"]
     assert (qr.PROJECT_ROOT / str(hydrated[0]["saved_composited_path"])).exists()
+
+
+def test_hydrate_serialized_result_paths_prefers_verified_saved_composite_over_mutable_tmp(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    model = "openrouter/google/gemini-3-pro-image-preview"
+    model_dir = cfg.tmp_dir / "generated" / "1" / qr.image_generator._model_to_directory(model)  # type: ignore[attr-defined]
+    model_dir.mkdir(parents=True, exist_ok=True)
+    image_path = model_dir / "variant_1.png"
+    Image.new("RGB", (64, 64), (21, 31, 41)).save(image_path, format="PNG")
+
+    composite_dir = cfg.tmp_dir / "composited" / "1" / qr.image_generator._model_to_directory(model)  # type: ignore[attr-defined]
+    composite_dir.mkdir(parents=True, exist_ok=True)
+    mutable_composite = composite_dir / "variant_1.jpg"
+    Image.new("RGB", (64, 64), (200, 10, 10)).save(mutable_composite, format="JPEG")
+
+    raw_dir = cfg.output_dir / "raw_art" / "1"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = raw_dir / "job-hydrate-safe_variant_1_openrouter_google_gemini-3-pro-image-preview.png"
+    Image.new("RGB", (64, 64), (81, 91, 101)).save(raw_path, format="PNG")
+
+    stable_source = tmp_path / "stable-source.jpg"
+    Image.new("RGB", (64, 64), (12, 140, 220)).save(stable_source, format="JPEG")
+    saved_rel = qr._persist_composite_image(
+        runtime=cfg,
+        book_number=1,
+        variant=1,
+        model_token="openrouter_google_gemini-3-pro-image-preview",
+        composite_source=stable_source,
+        job_token="job-hydrate-safe",
+        raw_art_source=raw_path,
+        raw_art_path_token=qr._to_project_relative(raw_path),
+    )
+    assert saved_rel
+
+    hydrated = qr._hydrate_serialized_result_paths(
+        runtime=cfg,
+        rows=[
+            {
+                "book_number": 1,
+                "variant": 1,
+                "model": model,
+                "image_path": qr._to_project_relative(image_path),
+                "raw_art_path": qr._to_project_relative(raw_path),
+                "composited_path": qr._to_project_relative(mutable_composite),
+                "saved_composited_path": saved_rel,
+            }
+        ],
+    )
+
+    saved_path = qr.PROJECT_ROOT / str(hydrated[0]["saved_composited_path"])
+    assert hydrated[0]["composited_path"] == str(saved_rel)
+    assert qr._file_sha256(saved_path) == qr._file_sha256(stable_source)
+
+
+def test_hydrate_serialized_result_paths_repairs_untrusted_saved_composite_from_raw_art(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    model = "openrouter/google/gemini-3-pro-image-preview"
+    model_dir = cfg.tmp_dir / "generated" / "1" / qr.image_generator._model_to_directory(model)  # type: ignore[attr-defined]
+    model_dir.mkdir(parents=True, exist_ok=True)
+    image_path = model_dir / "variant_1.png"
+    Image.new("RGB", (64, 64), (21, 31, 41)).save(image_path, format="PNG")
+
+    composite_dir = cfg.tmp_dir / "composited" / "1" / qr.image_generator._model_to_directory(model)  # type: ignore[attr-defined]
+    composite_dir.mkdir(parents=True, exist_ok=True)
+    mutable_composite = composite_dir / "variant_1.jpg"
+    Image.new("RGB", (64, 64), (220, 10, 10)).save(mutable_composite, format="JPEG")
+
+    raw_dir = cfg.output_dir / "raw_art" / "1"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = raw_dir / "job-hydrate-repair_variant_1_openrouter_google_gemini-3-pro-image-preview.png"
+    Image.new("RGB", (64, 64), (81, 91, 101)).save(raw_path, format="PNG")
+
+    saved_dir = cfg.output_dir / "saved_composites" / "1"
+    saved_dir.mkdir(parents=True, exist_ok=True)
+    saved_path = saved_dir / "job-hydrate-repair_variant_1_openrouter_google_gemini-3-pro-image-preview.jpg"
+    Image.new("RGB", (64, 64), (10, 10, 220)).save(saved_path, format="JPEG")
+
+    rebuilt = {"called": False}
+
+    def _fake_rebuild(*, runtime: config.Config, row: dict[str, Any], output_path: Path) -> Path:
+        del runtime, row
+        rebuilt["called"] = True
+        Image.new("RGB", (64, 64), (20, 200, 40)).save(output_path, format="PNG")
+        return output_path
+
+    monkeypatch.setattr(qr, "_rebuild_saved_composite_from_raw_art", _fake_rebuild)
+
+    hydrated = qr._hydrate_serialized_result_paths(
+        runtime=cfg,
+        rows=[
+            {
+                "book_number": 1,
+                "variant": 1,
+                "model": model,
+                "image_path": qr._to_project_relative(image_path),
+                "raw_art_path": qr._to_project_relative(raw_path),
+                "composited_path": qr._to_project_relative(mutable_composite),
+                "saved_composited_path": qr._to_project_relative(saved_path),
+            }
+        ],
+    )
+
+    assert hydrated[0]["saved_composited_path"] == qr._to_project_relative(saved_path)
+    assert hydrated[0]["composited_path"] == qr._to_project_relative(saved_path)
+    assert rebuilt["called"] is True
+    with Image.open(saved_path) as image:
+        assert image.getpixel((0, 0)) == (20, 200, 40)
+
+
+def test_save_raw_context_repairs_untrusted_saved_composite_before_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg.book_catalog_path.write_text(
+        json.dumps([{"number": 7, "title": "Temple Dawn", "author": "A. Writer"}]),
+        encoding="utf-8",
+    )
+    raw_path = cfg.output_dir / "raw_art" / "7" / "job-safe-raw_variant_1_openrouter_google_gemini-3-pro-image-preview.png"
+    comp_path = cfg.output_dir / "saved_composites" / "7" / "job-safe-raw_variant_1_openrouter_google_gemini-3-pro-image-preview.jpg"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    comp_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 64), (12, 34, 56)).save(raw_path, format="PNG")
+    Image.new("RGB", (64, 64), (200, 20, 20)).save(comp_path, format="JPEG")
+
+    rebuilt = {"called": False}
+
+    def _fake_rebuild(*, runtime: config.Config, row: dict[str, Any], output_path: Path) -> Path:
+        del runtime, row
+        rebuilt["called"] = True
+        Image.new("RGB", (64, 64), (20, 200, 40)).save(output_path, format="PNG")
+        return output_path
+
+    monkeypatch.setattr(qr, "_rebuild_saved_composite_from_raw_art", _fake_rebuild)
+
+    job = qr.job_store.JobRecord(
+        id="job-safe-raw",
+        idempotency_key="idem-job-safe-raw",
+        job_type="generate_cover",
+        status="completed",
+        catalog_id="classics",
+        book_number=7,
+        payload={},
+        result={
+            "results": [
+                {
+                    "success": True,
+                    "variant": 1,
+                    "model": "openrouter/google/gemini-3-pro-image-preview",
+                    "raw_art_path": qr._to_project_relative(raw_path),
+                    "saved_composited_path": qr._to_project_relative(comp_path),
+                }
+            ]
+        },
+        error={},
+        attempts=1,
+        max_attempts=3,
+        priority=100,
+        retry_after="",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(timezone.utc).isoformat(),
+        finished_at=datetime.now(timezone.utc).isoformat(),
+        worker_id="",
+    )
+
+    context = qr._save_raw_context_for_job(runtime=cfg, job=job)
+    assert rebuilt["called"] is True
+    with Image.open(context["comp_source"]) as image:
+        assert image.getpixel((0, 0)) == (20, 200, 40)
 
 
 def test_seed_builtin_prompts_is_retired_and_idempotent(tmp_path: Path):
