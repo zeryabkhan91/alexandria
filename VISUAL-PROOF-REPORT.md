@@ -1,138 +1,63 @@
-# PROMPT-38 Save Raw Integrity Proof Report
+# VISUAL PROOF REPORT
 
-## Release
+Date: 2026-03-10
 
-- Functional hardening commits:
-  - `388a5ba` (`Harden Save Raw result integrity`)
-  - `d705964` (`Harden Save Raw composite integrity`)
-- Latest Railway deployment: `1d8c66a3-b6d2-4d56-9490-50ebc106c124` (`SUCCESS`)
-- Live app: [https://web-production-900a7.up.railway.app](https://web-production-900a7.up.railway.app)
+Prompt: `PROMPT-38-SCENE-FIRST-PROMPT-RESTRUCTURE`
 
-## What Was Fixed
+Release branch/worktree: `/private/tmp/alexandria-prompt39-scene-first`
 
-The bug had two separate failure classes:
+Functional release commit: `b33e7a8`
 
-1. Save Raw selection ambiguity:
-   - the frontend was not sending an immutable exact selector for the chosen card
-   - the backend could fall back to ambiguous or mutable artifacts
-   - same-book saves could collide in the same Drive package folder
+Latest deployed app:
 
-2. Wrong full-cover reuse:
-   - historical/composited rows could still drift through mutable temp composite paths
-   - this allowed the saved full cover for one result to resolve to another result’s composite
+- [https://web-production-900a7.up.railway.app](https://web-production-900a7.up.railway.app)
 
-The shipped fix closes both classes:
+Latest Railway deployment:
 
-- Save Raw now requires an exact immutable selector (`variant`, `model`, `raw_art_path`, `saved_composited_path`) and fails closed on mismatch/ambiguity.
-- Save Raw package folders are job-scoped and unique per result.
-- Durable saved composites are now trusted only when their provenance manifest matches the job row.
-- If the durable saved composite is missing or untrusted, the backend rebuilds it from that row’s own durable raw art instead of reusing mutable temp composites.
+- `cb98d244-b344-4967-9c5b-8abefde57d0b`
+- status: `SUCCESS`
 
-## Local Verification
+## What was verified live
 
-Passed locally:
+1. `GET /api/health` returned `status=ok`, `healthy=true`, `books_cataloged=2397`.
+2. Live prompt library for `alexandria-base-romantic-realism` contains the new scene-first template starting with `Book cover illustration only` and placing `{SCENE}` in the first block.
+3. On the deployed Iterate page for book `4` (`Emma`), `BASE 4 — Romantic Realism` shows:
+   - specific scene text for Emma
+   - specific mood text
+   - specific era text
+4. Live `POST /api/generate` dry-run for book `4` resolved the full prompt from enrichment without generic placeholders.
+5. A real live generation job completed on production for book `4` with:
+   - job id `7e44b9bf-cbdf-4526-a807-925a183f5264`
+   - model `openrouter/google/gemini-3-pro-image-preview`
+   - `library_prompt_id=alexandria-base-romantic-realism`
+   - `compositor_mode=pdf`
 
-- `python3 -m py_compile scripts/quality_review.py tests/test_quality_review_utils.py tests/test_quality_review_server_smoke.py`
-- `pytest tests/test_quality_review_utils.py tests/test_quality_review_server_smoke.py -q -k 'save_raw or hydrate_serialized_result_paths or verified_saved_composite or untrusted_saved_composite or mismatched_card_selector or unique_packages or pre_normalized_selector'`
+## Live resolved prompt proof
 
-Those focused tests cover:
+Excerpt from the deployed dry-run payload:
 
-- exact result-card selector enforcement
-- ambiguity/mismatch refusal
-- unique package foldering for same-book saves
-- preference for verified durable saved composites over mutable temp outputs
-- automatic repair of untrusted saved composites from the row’s own raw art
+> Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: Emma Woodhouse, standing in the drawing room of Hartfield, confidently declaring her matchmaking plans to her father, Mr. Woodhouse, who sits in a chair looking concerned. The main character is Emma Woodhouse — a young woman with a fair complexion, lively eyes, and dressed in fashionable early 19th-century attire, often in light colors. ... The mood is Witty, light-hearted, and ultimately reflective. Era reference: Early 19th century, specifically the 1810s.
 
-## Live End-to-End Proof
+Saved response artifact:
 
-Live health at proof time:
+- [`prompt38_dry_run_response.json`](/private/tmp/alexandria-prompt39-scene-first/output/playwright/prompt38_dry_run_response.json)
 
-- `status: ok`
-- `healthy: true`
-- `uptime_seconds: 1536`
-- `books_cataloged: 2397`
+## Visual artifacts
 
-Fresh live proof run used two new Emma jobs on the deployed app:
+Combined proof sheet:
 
-- Job A: `44485241-6b37-4f51-9a46-56384a4c1156`
-  - scene intent: Hartfield gardens
-- Job B: `828bd0af-b4d3-4e7f-9594-46d0e519a838`
-  - scene intent: Donwell Abbey grounds
+- [`live-proof-sheet-prompt38.png`](/private/tmp/alexandria-prompt39-scene-first/output/playwright/live-proof-sheet-prompt38.png)
 
-Both jobs were generated on live production with:
+Underlying screenshots:
 
-- book `4`
-- model `openrouter/google/gemini-2.5-flash-image`
-- Drive cover source for Emma
-- `preserve_prompt_text=true`
+- [`page-2026-03-10T17-03-18-469Z.png`](/private/tmp/alexandria-prompt39-scene-first/.playwright-cli/page-2026-03-10T17-03-18-469Z.png)
+- [`live-book4-variant2-raw-proof.png`](/private/tmp/alexandria-prompt39-scene-first/output/playwright/live-book4-variant2-raw-proof.png)
 
-Then live `POST /api/save-raw` was run for both jobs with the exact immutable selector payload.
+## Honest residual issue observed during proof
 
-### Live Save Raw Results
+The live app resolved the scene-first prompt correctly and completed at least one real production Emma job, but two older artifact surfaces are still inconsistent:
 
-Job A:
+1. The result card preview showed `No preview yet` even after completion for one completed card.
+2. `GET /api/variant-download?book=4&variant=2...` and `GET /api/visual-qa/image/4?catalog=classics` did not return the completed generated artifact for this proof run.
 
-- `status: saved`
-- `drive_ok: true`
-- `drive_folder_id: 1YOjW_2sEuB2eSeVCSZjtoVoBSPIv4Iv0`
-- package folder:
-  - `save-raw__44485241-6b37-4f51-9a46-56384a4c1156__variant-1__openrouter__google__gemini-2.5-flash-image`
-
-Job B:
-
-- `status: saved`
-- `drive_ok: true`
-- `drive_folder_id: 1cqx3ZnkPrxciFifDqgLnCzMwgrEhzfLK`
-- package folder:
-  - `save-raw__828bd0af-b4d3-4e7f-9594-46d0e519a838__variant-1__openrouter__google__gemini-2.5-flash-image`
-
-### Live Integrity Assertions
-
-All of these passed on the deployed app:
-
-- source composite hashes are distinct across the two jobs
-- saved package raw JPG hashes are distinct across the two jobs
-- saved package composite JPG hashes are distinct across the two jobs
-- saved package composite hash for Job A exactly matches Job A’s own live source composite hash
-- saved package composite hash for Job B exactly matches Job B’s own live source composite hash
-- Drive folder ids are distinct per result
-- package folder names are distinct per result
-
-Hash proof JSON:
-
-- [summary.json](/private/tmp/alexandria-prompt38-save-raw-integrity/tmp/prompt38_browser_proof/live_postfix/summary.json)
-
-Fresh job metadata:
-
-- [fresh_jobs.json](/private/tmp/alexandria-prompt38-save-raw-integrity/tmp/prompt38_browser_proof/live_postfix/fresh_jobs.json)
-
-## Visual Proof
-
-I visually inspected the actual saved package outputs for both jobs. They are clearly different scenes and they match the corresponding saved full-cover hashes above.
-
-Saved full cover A:
-
-![Saved full cover A](/private/tmp/alexandria-prompt38-save-raw-integrity/tmp/prompt38_browser_proof/live_postfix/job-a-package-composite.jpg)
-
-Saved full cover B:
-
-![Saved full cover B](/private/tmp/alexandria-prompt38-save-raw-integrity/tmp/prompt38_browser_proof/live_postfix/job-b-package-composite.jpg)
-
-Saved raw art A:
-
-![Saved raw art A](/private/tmp/alexandria-prompt38-save-raw-integrity/tmp/prompt38_browser_proof/live_postfix/job-a-package-raw.jpg)
-
-Saved raw art B:
-
-![Saved raw art B](/private/tmp/alexandria-prompt38-save-raw-integrity/tmp/prompt38_browser_proof/live_postfix/job-b-package-raw.jpg)
-
-## Honest Boundaries
-
-I cannot honestly claim a mathematical proof that this can “never” regress. What I can claim from the code and live proof is narrower and defensible:
-
-- the previously observed overwrite/mix-up class through shared package folders is eliminated
-- the previously observed wrong-full-cover reuse through mutable temp composite paths is eliminated
-- Save Raw now fails closed on selector mismatch or ambiguity instead of guessing
-- durable saved composites are now provenance-checked and rebuilt from the row’s own raw art when needed
-
-One additional observation from live proof: the mutable temp generated image path (`tmp/generated/.../variant_1.png`) is still job-unsafe for cross-job reasoning, because later jobs can overwrite it. The Save Raw path no longer trusts that temp path when durable artifacts are required. That is the important protection.
+Those issues did not block prompt-resolution verification, but they are separate runtime artifact-delivery gaps and should not be misrepresented as fixed by PROMPT-38.
