@@ -30,9 +30,7 @@ window.Drive = {
       if (!resp.ok) throw new Error('No CGI cache');
       const data = await resp.json();
       const books = Array.isArray(data.books) ? data.books : [];
-      DB.dbClear('books');
-      books.forEach((book) => DB.dbPut('books', { id: book.number, number: book.number, ...book }));
-      return books;
+      return DB.replaceBooks(books.map((book) => ({ id: book.number, number: book.number, ...book })));
     } catch {
       return DB.loadBooks('classics');
     }
@@ -73,15 +71,15 @@ window.Drive = {
     let books = [];
     const syncedBooks = Array.isArray(this._lastCatalogSyncSummary.books) ? this._lastCatalogSyncSummary.books : [];
     if (syncedBooks.length) {
-      DB.dbClear('books');
-      syncedBooks.forEach((book) => {
-        if (!book || typeof book !== 'object') return;
-        const id = book.id ?? book.number ?? book.book_number;
-        const number = book.number ?? book.book_number ?? id;
-        if (id === undefined || id === null) return;
-        DB.dbPut('books', { id, number, ...book });
-      });
-      books = DB.dbGetAll('books');
+      books = DB.replaceBooks(
+        syncedBooks.map((book) => {
+          if (!book || typeof book !== 'object') return null;
+          const id = book.id ?? book.number ?? book.book_number;
+          const number = book.number ?? book.book_number ?? id;
+          if (id === undefined || id === null) return null;
+          return { id, number, ...book };
+        }).filter(Boolean),
+      );
     } else {
       books = await DB.loadBooks(catalog);
     }

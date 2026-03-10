@@ -52,6 +52,45 @@ function _normalizeBook(raw) {
   };
 }
 
+function _normalizedTextList(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean);
+}
+
+function _bookHasPromptEnrichment(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  const enrichment = (raw.enrichment && typeof raw.enrichment === 'object') ? raw.enrichment : {};
+  const promptComponents = (raw.prompt_components && typeof raw.prompt_components === 'object') ? raw.prompt_components : {};
+  const era = enrichment.era;
+  const eraValues = Array.isArray(era) ? _normalizedTextList(era) : [String(era ?? '').trim()].filter(Boolean);
+  return (
+    _normalizedTextList(enrichment.iconic_scenes).length > 0
+    || Boolean(String(enrichment.emotional_tone ?? enrichment.mood ?? '').trim())
+    || eraValues.length > 0
+    || _normalizedTextList(promptComponents.title_keywords).length > 0
+    || Boolean(String(raw.composed_prompt ?? '').trim())
+  );
+}
+
+function _mergeBookRecord(existing, incoming) {
+  const merged = { ...(existing || {}), ...(incoming || {}) };
+  if (!_bookHasPromptEnrichment(existing) || _bookHasPromptEnrichment(incoming)) {
+    return merged;
+  }
+  if (existing?.enrichment && typeof existing.enrichment === 'object') merged.enrichment = existing.enrichment;
+  if (existing?.prompt_components && typeof existing.prompt_components === 'object') merged.prompt_components = existing.prompt_components;
+  if (String(existing?.composed_prompt ?? '').trim()) merged.composed_prompt = existing.composed_prompt;
+  if (!String(incoming?.default_prompt ?? '').trim() && String(existing?.default_prompt ?? '').trim()) {
+    merged.default_prompt = existing.default_prompt;
+  }
+  if (!String(incoming?.genre ?? '').trim() && String(existing?.genre ?? '').trim()) {
+    merged.genre = existing.genre;
+  }
+  return merged;
+}
+
 async function _loadServerSettings() {
   try {
     const resp = await fetch(CGI_SETTINGS, { cache: 'no-store' });
@@ -105,6 +144,14 @@ window.DB = {
     if (cfg.autoIncrement && !copy[cfg.keyPath]) {
       copy[cfg.keyPath] = _nextId(storeName);
     }
+    if (storeName === 'books') {
+      const normalized = _normalizeBook(copy);
+      if (!normalized || normalized[cfg.keyPath] === undefined || normalized[cfg.keyPath] === null) return null;
+      const existing = _stores.books[normalized[cfg.keyPath]] || null;
+      const merged = _mergeBookRecord(existing, normalized);
+      _stores.books[merged[cfg.keyPath]] = merged;
+      return merged;
+    }
     _stores[storeName][copy[cfg.keyPath]] = copy;
     return copy;
   },
@@ -124,6 +171,23 @@ window.DB = {
   dbClear(storeName) {
     _stores[storeName] = {};
     if (_autoIncrements[storeName] !== undefined) _autoIncrements[storeName] = 1;
+  },
+
+  replaceBooks(rows) {
+    const next = {};
+    const current = _stores.books || {};
+    (Array.isArray(rows) ? rows : []).forEach((raw) => {
+      const normalized = _normalizeBook(raw);
+      if (!normalized || normalized.id === undefined || normalized.id === null) return;
+      const existing = current[normalized.id] || null;
+      next[normalized.id] = _mergeBookRecord(existing, normalized);
+    });
+    _stores.books = next;
+    return this.dbGetAll('books');
+  },
+
+  bookHasPromptEnrichment(book) {
+    return _bookHasPromptEnrichment(book);
   },
 
   dbGetByIndex(storeName, indexName, value) {
@@ -148,14 +212,7 @@ window.DB = {
     const resp = await fetch(`/api/iterate-data?catalog=${encodeURIComponent(catalog)}&view=books&limit=9999&offset=0`, { cache: 'no-store' });
     const data = await resp.json();
     const books = Array.isArray(data.books) ? data.books : [];
-    this.dbClear('books');
-    books.forEach((book) => {
-      const normalized = _normalizeBook(book);
-      if (normalized?.id !== undefined && normalized?.id !== null) {
-        this.dbPut('books', normalized);
-      }
-    });
-    return this.dbGetAll('books');
+    return this.replaceBooks(books);
   },
 
   async loadPrompts(catalog = 'classics') {

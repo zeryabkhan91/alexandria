@@ -55,7 +55,9 @@ window.__BATCH_TEST_HOOKS__.buildBatchJob = ({ book, model, variant }) => buildB
 window.Pages.batch = {
   async render() {
     let books = DB.dbGetAll('books');
-    if (!books.length) books = await DB.loadBooks('classics');
+    if (!books.length || books.some((book) => !DB.bookHasPromptEnrichment(book))) {
+      books = await DB.loadBooks('classics');
+    }
     const modelOptions = OpenRouter.MODELS.map((m) => `<option value="${m.id}">${m.label}</option>`).join('');
 
     const content = document.getElementById('content');

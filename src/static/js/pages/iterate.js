@@ -1098,7 +1098,9 @@ window.Pages.iterate = {
     const catalogId = 'classics';
     await OpenRouter.init().catch(() => OpenRouter.MODELS);
     let books = DB.dbGetAll('books');
-    if (!books.length) books = await DB.loadBooks(catalogId);
+    if (!books.length || books.some((book) => !DB.bookHasPromptEnrichment(book))) {
+      books = await DB.loadBooks(catalogId);
+    }
     if (!books.length) {
       try {
         books = await Drive.syncCatalog({ catalog: catalogId, force: true, limit: 20000 });
