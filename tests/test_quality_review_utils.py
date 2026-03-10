@@ -3011,9 +3011,44 @@ def test_ensure_prompt_book_context_rotates_scene_anchor_for_variant():
         variant_index=1,
     )
 
-    assert "Primary narrative anchor:" in resolved
+    assert "CRITICAL SCENE REQUIREMENT" in resolved
     assert "Brobdingnag" in resolved
     assert "Lilliput" not in resolved
+
+
+def test_is_generic_enrichment_detects_placeholder_payload():
+    assert qr._is_generic_enrichment(
+        {
+            "iconic_scenes": ["Iconic turning point in the story with classical dramatic tension"],
+            "protagonist": "Central protagonist",
+            "era": "Historically grounded era",
+        }
+    ) is True
+
+    assert qr._is_generic_enrichment(
+        {
+            "iconic_scenes": ["Emma Woodhouse humiliates Miss Bates on Box Hill before Mr. Knightley intervenes"],
+            "protagonist": "Emma Woodhouse",
+            "era": "Regency England",
+        }
+    ) is False
+
+
+def test_alexandria_placeholder_replacements_fall_back_to_book_motif_when_enrichment_is_generic():
+    replacements = qr._alexandria_placeholder_replacements(
+        {
+            "title": "Moby Dick; Or, The Whale",
+            "author": "Herman Melville",
+            "enrichment": {
+                "iconic_scenes": ["Iconic turning point in the story with period costume"],
+                "protagonist": "Central protagonist",
+                "visual_motifs": ["circular medallion-ready composition"],
+            },
+        }
+    )
+
+    assert "Captain Ahab" in replacements["SCENE"]
+    assert "Iconic turning point" not in replacements["SCENE"]
 
 
 def test_execute_generation_payload_preserves_precomposed_prompt_when_compose_prompt_disabled(tmp_path: Path, monkeypatch):

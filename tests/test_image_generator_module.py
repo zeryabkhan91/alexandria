@@ -793,7 +793,7 @@ def test_validate_prompt_relevance_prepends_title_when_missing():
         book_author="Herman Melville",
     ).lower()
     assert "book cover illustration for 'moby dick; or, the whale'" in prompt
-    assert "primary scene anchor:" in prompt
+    assert "critical scene requirement" in prompt
     assert "melville" in prompt
 
 
@@ -828,9 +828,42 @@ def test_validate_prompt_relevance_uses_variant_scene_anchor_from_enrichment(tmp
         variant_index=1,
     )
 
-    assert "Primary scene anchor:" in prompt
+    assert "CRITICAL SCENE REQUIREMENT" in prompt
     assert "Brobdingnag" in prompt
     assert "Lilliput" not in prompt
+
+
+def test_validate_prompt_relevance_falls_back_to_motif_when_enrichment_is_generic(tmp_path: Path):
+    runtime = _Runtime(tmp_path)
+    enriched_path = ig.config.enriched_catalog_path(config_dir=runtime.config_dir)
+    enriched_path.write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        "number": 9,
+                        "enrichment": {
+                            "iconic_scenes": ["Iconic turning point in the story with classical dramatic tension"],
+                            "protagonist": "Central protagonist",
+                            "era": "Historically grounded era",
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    prompt = ig._validate_prompt_relevance(
+        "Painterly obsession on a storm-dark sea.",
+        book_title="Moby Dick; Or, The Whale",
+        book_author="Herman Melville",
+        runtime=runtime,
+        book_number=9,
+    )
+
+    assert "Captain Ahab" in prompt
+    assert "Iconic turning point" not in prompt
 
 
 def test_generate_all_models_applies_model_specific_diversity(tmp_path: Path, monkeypatch):

@@ -40,6 +40,99 @@ ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT = (
     "no dividers."
 )
 
+ALEXANDRIA_SCENE_FIRST_PROMPT_TEMPLATES: dict[str, str] = {
+    "alexandria-base-classical-devotion": (
+        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
+        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
+        "clearly recognizable and faithful to the source material. Rendered in a classical golden-age book "
+        "illustration style — warm oil-painting tones, rich earth colours, period-accurate costumes, careful "
+        "attention to historical architecture and landscape. The mood is {MOOD}. Era reference: {ERA}. Circular "
+        "vignette composition with soft edges. Square format, high resolution, print-ready."
+    ),
+    "alexandria-base-philosophical-gravitas": (
+        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
+        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
+        "clearly recognizable and faithful to the source material. Rendered in a contemplative chiaroscuro "
+        "style — deep shadows, selective warm highlights, muted palette of burnt umber, ochre, and grey, with "
+        "a single focal light source creating dramatic atmosphere. The mood is {MOOD}. Era reference: {ERA}. "
+        "Circular vignette composition with soft edges. Square format, high resolution, print-ready."
+    ),
+    "alexandria-base-gothic-atmosphere": (
+        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
+        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
+        "clearly recognizable and faithful to the source material. Rendered in a dark atmospheric Gothic "
+        "illustration style — moonlit shadows, mist, deep indigo and crimson tones, expressionist contrast, "
+        "and dramatic silhouettes against turbulent skies. The mood is {MOOD}. Era reference: {ERA}. Circular "
+        "vignette composition with soft edges. Square format, high resolution, print-ready."
+    ),
+    "alexandria-base-romantic-realism": (
+        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
+        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
+        "clearly recognizable and faithful to the source material. Rendered in 19th-century Romantic realism "
+        "style — warm earth tones, dramatic skies, detailed period clothing, painterly brushwork, and emotionally "
+        "resonant composition. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition with "
+        "soft edges. Square format, high resolution, print-ready."
+    ),
+    "alexandria-base-esoteric-mysticism": (
+        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
+        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
+        "clearly recognizable and faithful to the source material. Rendered in an esoteric mystical illustration "
+        "style — celestial motifs, sacred geometry accents, deep midnight blue and gold palette, luminous ethereal "
+        "lighting, and symbolic depth. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition "
+        "with soft edges. Square format, high resolution, print-ready."
+    ),
+    "alexandria-wildcard-edo-meets-alexandria": (
+        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
+        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
+        "clearly recognizable and faithful to the source material. Rendered in dramatic graphic novel engraving "
+        "style — bold parallel crosshatching, heavy black outlines, expressive faces in close-up, deep black "
+        "with warm amber and burnt orange highlights, swirling dramatic sky. The mood is {MOOD}. Era reference: "
+        "{ERA}. Circular vignette composition. Square format, high resolution, print-ready."
+    ),
+    "alexandria-wildcard-pre-raphaelite-garden": (
+        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
+        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
+        "clearly recognizable and faithful to the source material. Rendered in bold 1930s vintage travel "
+        "poster style — flat unblended colour blocks with clean outlines, layered depth planes, limited palette "
+        "of burgundy, navy, cream, and forest green, geometric confidence. The mood is {MOOD}. Era reference: "
+        "{ERA}. Circular vignette composition. Square format, high resolution, print-ready."
+    ),
+    "alexandria-wildcard-illuminated-manuscript": (
+        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
+        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
+        "clearly recognizable and faithful to the source material. Rendered in medieval illuminated manuscript "
+        "style — gold leaf accents, ultramarine blue and vermilion, intricate marginalia patterns, flat "
+        "perspective with symbolic scale, and rich decorative detail. The mood is {MOOD}. Era reference: {ERA}. "
+        "Circular vignette composition. Square format, high resolution, print-ready."
+    ),
+    "alexandria-wildcard-celestial-cartography": (
+        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
+        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
+        "clearly recognizable and faithful to the source material. Rendered in scientific cartographic "
+        "illustration style — compass roses, parchment tones, precise linework, sepia and aged-gold palette, "
+        "navigational chart aesthetics, and hand-drawn map detail. The mood is {MOOD}. Era reference: {ERA}. "
+        "Circular vignette composition. Square format, high resolution, print-ready."
+    ),
+    "alexandria-wildcard-temple-of-knowledge": (
+        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
+        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
+        "clearly recognizable and faithful to the source material. Rendered in monumental architectural "
+        "illustration style — classical columns, dramatic perspective, warm lamplight on stone, scrolls and "
+        "books as decorative elements, sepia and amber palette with selective gold highlights. The mood is "
+        "{MOOD}. Era reference: {ERA}. Circular vignette composition. Square format, high resolution, print-ready."
+    ),
+}
+
 ALEXANDRIA_PROMPT_SPECS: tuple[dict[str, object], ...] = (
     {
         "id": "alexandria-base-classical-devotion",
@@ -609,16 +702,25 @@ class PromptLibrary:
         for spec in ALEXANDRIA_PROMPT_SPECS:
             prompt_id = str(spec.get("id", "")).strip()
             name = str(spec.get("name", "")).strip()
+            target_template = ALEXANDRIA_SCENE_FIRST_PROMPT_TEMPLATES.get(
+                prompt_id,
+                str(spec.get("prompt_template", "")).strip(),
+            )
             if not prompt_id or not name:
                 continue
             current = self._prompts.get(prompt_id) or existing_by_name.get(name.lower())
             if current is not None:
+                if str(current.prompt_template or "").strip() != target_template:
+                    current.prompt_template = target_template
+                    current.updated_at = _utc_now()
+                    self._prompts[current.id] = current
+                    changed = True
                 continue
             created_at = _utc_now()
             prompt = LibraryPrompt(
                 id=prompt_id,
                 name=name,
-                prompt_template=str(spec.get("prompt_template", "")).strip(),
+                prompt_template=target_template,
                 style_anchors=[],
                 negative_prompt=ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT,
                 source_book="builtin",

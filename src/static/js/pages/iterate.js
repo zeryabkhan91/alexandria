@@ -389,37 +389,88 @@ function _bookEnrichment(book) {
   return (book && typeof book.enrichment === 'object' && book.enrichment) ? book.enrichment : {};
 }
 
-function defaultSceneForBook(book) {
+const GENERIC_ENRICHMENT_MARKERS = [
+  'iconic turning point',
+  'central protagonist',
+  'atmospheric setting moment',
+  'defining confrontation involving',
+  'historically grounded era',
+  'classical dramatic tension',
+  'period costume and historically grounded',
+  'symbolic object tied to the story',
+  'circular medallion-ready composition',
+  'dramatic emotional conflict',
+];
+const GENERIC_ENRICHMENT_PATTERN = new RegExp(GENERIC_ENRICHMENT_MARKERS.join('|'), 'i');
+
+function normalizeEnrichmentText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function isGenericEnrichmentText(value) {
+  const text = normalizeEnrichmentText(value);
+  return Boolean(text) && GENERIC_ENRICHMENT_PATTERN.test(text);
+}
+
+function specificEnrichmentText(value, minLength = 1) {
+  const text = normalizeEnrichmentText(value);
+  if (!text || text.length < minLength || isGenericEnrichmentText(text)) return '';
+  return text;
+}
+
+function filteredIconicScenes(book) {
   const enrichment = _bookEnrichment(book);
-  const iconicScenes = Array.isArray(enrichment.iconic_scenes) ? enrichment.iconic_scenes : [];
-  const firstScene = iconicScenes.find((item) => String(item || '').trim());
-  return String(
-    book?.scene
-    || enrichment.scene
-    || firstScene
-    || book?.description
-    || book?.default_prompt
-    || `A pivotal dramatic moment from the literary work "${book?.title || 'an ancient text'}"${book?.author ? ` by ${book.author}` : ''}, depicting the central emotional conflict with period-accurate setting, costume, and atmosphere`
-  ).trim();
+  return (Array.isArray(enrichment.iconic_scenes) ? enrichment.iconic_scenes : [])
+    .map((item) => normalizeEnrichmentText(item))
+    .filter((item) => item.length > 30 && !isGenericEnrichmentText(item));
+}
+
+function specificProtagonistForBook(book) {
+  const enrichment = _bookEnrichment(book);
+  return specificEnrichmentText(enrichment.protagonist || book?.protagonist || '', 6);
+}
+
+function appendProtagonistToScene(scene, protagonist, leadIn = 'The main character is') {
+  const baseScene = normalizeEnrichmentText(scene);
+  const hero = specificEnrichmentText(protagonist, 6);
+  if (!baseScene || !hero) return baseScene;
+  if (baseScene.toLowerCase().includes(hero.toLowerCase())) return baseScene;
+  return `${baseScene}. ${leadIn} ${hero}`;
+}
+
+function defaultSceneForBook(book) {
+  const specificScenes = filteredIconicScenes(book);
+  if (specificScenes.length) return specificScenes[0];
+  return (
+    specificEnrichmentText(book?.scene || '', 20)
+    || specificEnrichmentText(_bookEnrichment(book).scene || '', 20)
+    || specificEnrichmentText(book?.description || '', 20)
+    || specificEnrichmentText(book?.default_prompt || '', 20)
+    || `a scene from "${book?.title || 'an ancient text'}"`
+  );
 }
 
 function defaultMoodForBook(book) {
   const enrichment = _bookEnrichment(book);
-  return String(
-    book?.mood
-    || enrichment.emotional_tone
-    || enrichment.mood
+  return (
+    specificEnrichmentText(book?.mood || '', 6)
+    || specificEnrichmentText(enrichment.emotional_tone || '', 6)
+    || specificEnrichmentText(enrichment.mood || '', 6)
     || 'classical, timeless, evocative'
-  ).trim();
+  );
 }
 
 function defaultEraForBook(book) {
   const enrichment = _bookEnrichment(book);
   if (Array.isArray(enrichment.era)) {
-    const first = enrichment.era.find((item) => String(item || '').trim());
+    const first = enrichment.era.map((item) => specificEnrichmentText(item, 6)).find(Boolean);
     return String(first || '').trim();
   }
-  return String(book?.era || enrichment.era || '').trim();
+  return (
+    specificEnrichmentText(book?.era || '', 6)
+    || specificEnrichmentText(enrichment.era || '', 6)
+    || ''
+  );
 }
 
 function buildScenePool(book, count) {
@@ -428,25 +479,22 @@ function buildScenePool(book, count) {
   const promptComponents = (book && typeof book.prompt_components === 'object' && book.prompt_components) ? book.prompt_components : {};
   const pool = [];
   const seen = new Set();
-  const genericPattern = /iconic turning point|central protagonist|atmospheric setting moment|dramatic emotional conflict/i;
   const pushUnique = (value) => {
-    const trimmed = String(value || '').replace(/\s+/g, ' ').trim();
-    if (!trimmed || trimmed.length < 20 || genericPattern.test(trimmed)) return;
+    const trimmed = normalizeEnrichmentText(value);
+    if (!trimmed || trimmed.length < 20 || isGenericEnrichmentText(trimmed)) return;
     const token = trimmed.toLowerCase();
     if (seen.has(token)) return;
     seen.add(token);
     pool.push(trimmed);
   };
 
-  if (Array.isArray(enrichment.iconic_scenes)) {
-    enrichment.iconic_scenes.forEach((scene) => pushUnique(scene));
-  }
+  filteredIconicScenes(book).forEach((scene) => pushUnique(scene));
 
-  const protagonist = String(enrichment.protagonist || '').trim();
-  const settingPrimary = String(enrichment.setting_primary || '').trim();
+  const protagonist = specificProtagonistForBook(book);
+  const settingPrimary = specificEnrichmentText(enrichment.setting_primary || '', 8);
   const settingDetails = Array.isArray(enrichment.setting_details)
-    ? enrichment.setting_details.map((item) => String(item || '').trim()).filter(Boolean).join(', ')
-    : String(enrichment.setting_details || '').trim();
+    ? enrichment.setting_details.map((item) => specificEnrichmentText(item, 3)).filter(Boolean).join(', ')
+    : specificEnrichmentText(enrichment.setting_details || '', 3);
 
   if (protagonist) {
     pushUnique(
@@ -461,7 +509,7 @@ function buildScenePool(book, count) {
   const motifs = Array.isArray(enrichment.visual_motifs) ? enrichment.visual_motifs.filter(Boolean) : [];
   const symbols = Array.isArray(enrichment.symbolic_elements) ? enrichment.symbolic_elements.filter(Boolean) : [];
   const symbolicPool = [...motifs, ...symbols]
-    .map((item) => String(item || '').trim())
+    .map((item) => specificEnrichmentText(item, 3))
     .filter(Boolean)
     .slice(0, 4);
   if (symbolicPool.length >= 2) {
@@ -469,7 +517,7 @@ function buildScenePool(book, count) {
   }
 
   const keyCharacters = Array.isArray(enrichment.key_characters)
-    ? enrichment.key_characters.map((item) => String(item || '').trim()).filter(Boolean)
+    ? enrichment.key_characters.map((item) => specificEnrichmentText(item, 3)).filter(Boolean)
     : [];
   if (keyCharacters.length >= 2) {
     pushUnique(`${keyCharacters.slice(0, 3).join(', ')} — a dramatic ensemble scene from the story`);
@@ -527,16 +575,19 @@ const GENERIC_SCENE_PATTERN = /A pivotal dramatic moment from the literary work\
 const GENERIC_MOOD_PATTERN = /classical,\s+timeless,\s+evocative/gi;
 
 function applyPromptPlaceholders(promptText, book, sceneOverride, moodOverride, eraOverride) {
+  const enrichment = _bookEnrichment(book);
   const scene = String(sceneOverride || defaultSceneForBook(book)).trim();
   const mood = String(moodOverride || defaultMoodForBook(book)).trim();
   const era = String(eraOverride || defaultEraForBook(book)).trim();
+  const protagonist = specificProtagonistForBook({ ...book, enrichment });
+  const enhancedScene = appendProtagonistToScene(scene, protagonist);
   const replaced = String(promptText || '')
     .replaceAll('{title}', String(book?.title || ''))
     .replaceAll('{author}', String(book?.author || ''))
     .replaceAll('{TITLE}', String(book?.title || ''))
     .replaceAll('{AUTHOR}', String(book?.author || ''))
     .replaceAll('{SUBTITLE}', String(book?.subtitle || ''))
-    .replaceAll('{SCENE}', scene)
+    .replaceAll('{SCENE}', enhancedScene)
     .replaceAll('{MOOD}', mood)
     .replaceAll('{ERA}', era);
   return cleanupResolvedPrompt(replaced);
@@ -558,15 +609,13 @@ function resolvePrompt(templateObj, book, customPrompt, sceneVal, moodVal, eraVa
 function ensureEnrichedPrompt(promptText, book, sceneOverride = '') {
   const prompt = String(promptText || '').trim();
   const enrichment = _bookEnrichment(book);
-  const populatedScenes = (Array.isArray(enrichment.iconic_scenes) ? enrichment.iconic_scenes : [])
-    .map((item) => String(item || '').trim())
-    .filter(Boolean);
-  const selectedScene = String(sceneOverride || populatedScenes[0] || '').trim();
+  const populatedScenes = filteredIconicScenes(book);
+  const protagonist = specificProtagonistForBook(book);
+  const selectedScene = appendProtagonistToScene(String(sceneOverride || populatedScenes[0] || defaultSceneForBook(book)).trim(), protagonist);
   const sceneSentence = selectedScene.replace(/[.!?]+$/g, '');
-  const protagonist = String(enrichment.protagonist || '').trim();
-  const setting = String(enrichment.setting_primary || '').trim();
-  const emotionalTone = String(enrichment.emotional_tone || enrichment.mood || '').trim();
-  const era = String(enrichment.era || '').trim();
+  const setting = specificEnrichmentText(enrichment.setting_primary || '', 8);
+  const emotionalTone = specificEnrichmentText(enrichment.emotional_tone || enrichment.mood || '', 6);
+  const era = String(defaultEraForBook(book) || '').trim();
 
   let result = emotionalTone ? prompt.replace(GENERIC_MOOD_PATTERN, emotionalTone) : prompt;
   if (!selectedScene) {
@@ -634,6 +683,10 @@ window.__ITERATE_TEST_HOOKS__ = window.__ITERATE_TEST_HOOKS__ || {};
 window.__ITERATE_TEST_HOOKS__.buildGenerationJobPrompt = buildGenerationJobPrompt;
 window.__ITERATE_TEST_HOOKS__.ensureEnrichedPrompt = ({ promptText, book, sceneOverride }) => ensureEnrichedPrompt(promptText, book, sceneOverride);
 window.__ITERATE_TEST_HOOKS__.defaultMoodForBook = (book) => defaultMoodForBook(book);
+window.__ITERATE_TEST_HOOKS__.defaultSceneForBook = (book) => defaultSceneForBook(book);
+window.__ITERATE_TEST_HOOKS__.applyPromptPlaceholders = ({ promptText, book, sceneOverride, moodOverride, eraOverride }) => (
+  applyPromptPlaceholders(promptText, book, sceneOverride, moodOverride, eraOverride)
+);
 window.__ITERATE_TEST_HOOKS__.buildScenePool = ({ book, count, ...rawBook }) => {
   const targetBook = book && typeof book === 'object' ? book : rawBook;
   return buildScenePool(targetBook, count);

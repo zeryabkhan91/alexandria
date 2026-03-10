@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updated_at": "2026-03-09T05:44:03.566558+00:00",
+  "updated_at": "2026-03-10T16:48:18.223589+00:00",
   "style_anchors": [
     {
       "name": "allegorical_symbolic",
@@ -122,7 +122,7 @@
     {
       "id": "alexandria-wildcard-temple-of-knowledge",
       "name": "WILDCARD 5 — Temple of Knowledge",
-      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book illustration combining Egyptian artistic traditions with richly coloured Orientalist illustration style: {SCENE}. Bold outlines and ceremonial profile views characteristic of pharaonic art, with rich saturated colour, atmospheric lighting, and illustrative depth. Dense architectural detail — carved relief patterns (non-readable), papyrus columns with visible paint traces, lotus capitals, sandstone textures. Warm saturated palette of desert gold, lapis lazuli blue, terracotta, and malachite green, with dramatic shaft-of-light illumination from temple openings. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. Richly detailed book illustration depicting ancient wisdom, as though illustrating the Great Library of Alexandria at the height of its glory. Square format, high resolution, print-ready.",
+      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in monumental architectural illustration style — classical columns, dramatic perspective, warm lamplight on stone, scrolls and books as decorative elements, sepia and amber palette with selective gold highlights. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition. Square format, high resolution, print-ready.",
       "style_anchors": [],
       "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
       "source_book": "builtin",
@@ -148,7 +148,7 @@
     {
       "id": "alexandria-wildcard-celestial-cartography",
       "name": "WILDCARD 4 — Celestial Cartography",
-      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book illustration in the style of a 17th-century scientific engraving hand-coloured with rich pigments: {SCENE}. The composition follows the visual language of antique maps and nautical charts — compass roses, cartographic grid lines rendered as fine copper-plate engraving, territorial boundaries as decorative ribbon banners. Figures appear as explorers, scholars, or navigators studying instruments — astrolabes, sextants, celestial globes, armillary spheres — all rendered with mechanical precision showing individual gears and calibration marks. Colour palette of aged parchment cream, sepia ink, ocean teal, and strategic accents of vermillion and gold leaf, distinctly warm and earthly rather than cosmic. Fine crosshatching textures throughout. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. The scientific precision of a Blaeu atlas plate coloured by a master cartographer. Square format, high resolution, print-ready.",
+      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in scientific cartographic illustration style — compass roses, parchment tones, precise linework, sepia and aged-gold palette, navigational chart aesthetics, and hand-drawn map detail. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition. Square format, high resolution, print-ready.",
       "style_anchors": [],
       "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
       "source_book": "builtin",
@@ -174,7 +174,7 @@
     {
       "id": "alexandria-wildcard-illuminated-manuscript",
       "name": "WILDCARD 3 — Illuminated Manuscript",
-      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book illustration in the style of a hand-painted medieval miniature with gold leaf highlights: {SCENE}. Vivid opaque colours on burnished gold ground with the obsessive decorative density of the Book of Kells or Très Riches Heures du Duc de Berry. Figures in three-quarter view with stylised gestures, wearing intricately patterned robes with individually drawn embroidery. Every surface filled with meaningful pattern — tessellated floors, brocade fabrics, tooled leather, carved stone. Rich saturated lapis lazuli blues, vermillion reds, malachite greens, and hammered gold dominate. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. Ancient, sacred, illustrated as though by a master illuminator in a 9th-century monastery scriptorium. Square format, high resolution, print-ready.",
+      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in medieval illuminated manuscript style — gold leaf accents, ultramarine blue and vermilion, intricate marginalia patterns, flat perspective with symbolic scale, and rich decorative detail. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition. Square format, high resolution, print-ready.",
       "style_anchors": [],
       "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
       "source_book": "builtin",
@@ -198,63 +198,9 @@
       "updated_at": "2026-03-08T09:39:50.801660+00:00"
     },
     {
-      "id": "alexandria-wildcard-pre-raphaelite-garden",
-      "name": "WILDCARD 2 — Vintage Travel Poster",
-      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book illustration in the bold flat-colour style of a 1930s vintage travel poster: {SCENE}. The composition uses layered depth planes — detailed foreground elements (trees, figures, objects), a prominent mid-ground focal structure (building, monument, landscape feature), and a dramatic backdrop (mountains, skyline, horizon). All shapes rendered with clean bold outlines and filled with flat unblended colour blocks — no gradients, no soft shading, pure colour areas with sharp edges. Simplified but recognisable forms with geometric confidence. Colour palette strictly limited to 5-7 bold colours: deep burgundy, navy blue, warm cream, burnt orange, forest green, and selective gold accents. Strong geometric composition with clear visual hierarchy. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. The bold graphic confidence of a WPA-era National Park poster or Art Deco railway advertisement with rich narrative detail. Square format, high resolution, print-ready.",
-      "style_anchors": [],
-      "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
-      "source_book": "builtin",
-      "source_model": "openrouter/google/gemini-3-pro-image-preview",
-      "quality_score": 1.0,
-      "saved_by": "system",
-      "created_at": "2026-03-08T09:39:50.801657+00:00",
-      "notes": "Alexandria wildcard prompt. Mucha framing plus Pre-Raphaelite colour for lush literary covers.",
-      "tags": [
-        "vintage-poster",
-        "travel-poster",
-        "flat-colour",
-        "WPA",
-        "bold",
-        "geometric"
-      ],
-      "category": "builtin",
-      "version": 1,
-      "usage_count": 0,
-      "win_count": 0,
-      "last_used_at": "",
-      "updated_at": "2026-03-08T09:39:50.801657+00:00"
-    },
-    {
-      "id": "alexandria-wildcard-edo-meets-alexandria",
-      "name": "WILDCARD 1 — Dramatic Graphic Novel",
-      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book illustration in a dramatic graphic novel engraving style: {SCENE}. The composition uses bold parallel crosshatching and line engraving across all figures and surfaces — visible ink strokes creating form, depth, and shadow through dense directional linework. Characters rendered in dramatic close-up with expressive faces, strong silhouettes, and heavy black outlines. Background layers narrative context — architectural landmarks, crowds, dramatic events — rendered as bold silhouettes against a turbulent sky. Colour palette strictly limited to deep black, warm amber, burnt orange, and selective gold highlights with intense contrast between light and shadow. The sky dominates with swirling dramatic clouds in orange and amber. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. The bold graphic intensity of a revolutionary poster crossed with the narrative density of a European graphic novel master engraving. Square format, high resolution, print-ready.",
-      "style_anchors": [],
-      "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
-      "source_book": "builtin",
-      "source_model": "openrouter/google/gemini-3-pro-image-preview",
-      "quality_score": 1.0,
-      "saved_by": "system",
-      "created_at": "2026-03-08T09:39:50.801651+00:00",
-      "notes": "Alexandria wildcard prompt. Japanese woodblock elegance fused with classical oil storytelling.",
-      "tags": [
-        "graphic-novel",
-        "crosshatch",
-        "dramatic",
-        "poster-art",
-        "amber",
-        "bold-lines"
-      ],
-      "category": "builtin",
-      "version": 1,
-      "usage_count": 0,
-      "win_count": 0,
-      "last_used_at": "",
-      "updated_at": "2026-03-08T09:39:50.801651+00:00"
-    },
-    {
       "id": "alexandria-base-esoteric-mysticism",
       "name": "BASE 5 — Esoteric Mysticism",
-      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book illustration in a mystical, visionary style with saturated jewel-tone colours and bold linework: {SCENE}. Dense with arcane visual detail — alchemical apparatus with individual glass vessels, celestial phenomena with visible star patterns and swirling cosmic clouds, mechanical gears and astronomical instruments rendered in precise metallic detail. Central figure emanating or receiving divine cosmic light — bold golden rays, concentric celestial spheres, deep blue swirling energy. Rich saturated jewel-tone palette — deep sapphire blue, molten gold, emerald, amethyst — against profound darkness. Every surface has illustrated texture: oxidised bronze, cracked leather, hammered gold, weathered parchment. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. Richly detailed mystical book illustration, as though revealing forbidden knowledge the viewer was never meant to see. Square format, high resolution, print-ready.",
+      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in an esoteric mystical illustration style — celestial motifs, sacred geometry accents, deep midnight blue and gold palette, luminous ethereal lighting, and symbolic depth. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition with soft edges. Square format, high resolution, print-ready.",
       "style_anchors": [],
       "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
       "source_book": "builtin",
@@ -281,7 +227,7 @@
     {
       "id": "alexandria-base-romantic-realism",
       "name": "BASE 4 — Romantic Realism",
-      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book illustration in the golden-age illustration style with saturated colours, warm romantic lighting, and defined linework: {SCENE}. Every element densely rendered with illustrative precision — individual flower petals and stamens, visible fabric embroidery patterns, architectural details, leaves and blossoms on trees, ripples and reflections in water. Figures in period-accurate clothing with visible textile textures, positioned in the SPECIFIC recognisable location from the book. Sweeping landscape or intimate interior filled with environmental storytelling — objects, flora, and setting that could only belong to THIS story. Rich, warm, saturated colour palette with dramatic sky — golden sunsets in amber and rose, twilight in deep blue and violet, or storm-charged atmospheres in dark teal. The scene captures the central emotional moment of the book. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. Lush, detailed book illustration with the romantic intensity of a premium illustrated classics edition. Square format, high resolution, print-ready.",
+      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in 19th-century Romantic realism style — warm earth tones, dramatic skies, detailed period clothing, painterly brushwork, and emotionally resonant composition. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition with soft edges. Square format, high resolution, print-ready.",
       "style_anchors": [],
       "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
       "source_book": "builtin",
@@ -308,7 +254,7 @@
     {
       "id": "alexandria-base-gothic-atmosphere",
       "name": "BASE 3 — Gothic Atmosphere",
-      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book illustration in a dark, atmospheric illustration style with saturated colours and dramatic contrast: {SCENE}. Densely atmospheric — every element contributes to mounting dread. Moonlight casting long shadows through crumbling Gothic architecture with individually rendered stones and cracks. Mist curling in detailed tendrils around ancient gravestones. Spectral light bleeding through illustrated stained glass. Figures caught in moments of terror or dark revelation, faces lit by a single dramatic light source. Palette of deep blacks, midnight blues, sickly verdigris greens, with vivid accents of blood-red, ghostly white, or sickly yellow. Dead vines, thorns, and poisonous flowers rendered in obsessive illustrative detail. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. Dark, richly detailed book illustration with the atmospheric intensity of a Victorian penny dreadful frontispiece. Square format, high resolution, print-ready.",
+      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in a dark atmospheric Gothic illustration style — moonlit shadows, mist, deep indigo and crimson tones, expressionist contrast, and dramatic silhouettes against turbulent skies. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition with soft edges. Square format, high resolution, print-ready.",
       "style_anchors": [],
       "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
       "source_book": "builtin",
@@ -335,7 +281,7 @@
     {
       "id": "alexandria-base-philosophical-gravitas",
       "name": "BASE 2 — Philosophical Gravitas",
-      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book illustration in the golden-age illustration style with saturated colours and defined linework: {SCENE}. Dense period-specific environmental detail rendered with illustrative precision — ancient weathered stone architecture with visible cracks and moss, scattered manuscripts and bamboo scrolls, gnarled trees with individually drawn leaves, distant landscapes fading into atmospheric haze. Figures in historically accurate robes or period dress positioned in contemplative stillness, their expressions conveying deep thought. Warm earth tones — rich ochre, sienna, umber, deep olive green — with strategic golden light illuminating the central figure. The environment tells the story as much as the figures — every object in the scene is meaningful to the text. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. Detailed, hand-painted book illustration quality. Square format, high resolution, print-ready.",
+      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in a contemplative chiaroscuro style — deep shadows, selective warm highlights, muted palette of burnt umber, ochre, and grey, with a single focal light source creating dramatic atmosphere. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition with soft edges. Square format, high resolution, print-ready.",
       "style_anchors": [],
       "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
       "source_book": "builtin",
@@ -362,7 +308,7 @@
     {
       "id": "alexandria-base-classical-devotion",
       "name": "BASE 1 — Classical Devotion",
-      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book illustration in the golden-age illustration style with saturated colours and defined linework: {SCENE}. Sacred atmosphere with luminous divine light rendered as bold golden beams breaking through deep blue celestial clouds. Figures in detailed period-accurate religious vestments with visible fabric embroidery and textile patterns. Every surface richly detailed — individual stone blocks in temple walls, carved relief on sacred objects, folds of robes with visible drape weight. Background filled with meaningful religious symbolism specific to the text — relics, celestial spheres, architectural fragments of ancient temples. Deep saturated palette of burnished gold, sapphire blue, warm candlelit amber, and crimson against deep navy tones. Circular vignette composition. The overall mood is {MOOD}. Era reference: {ERA}. Detailed, hand-painted quality with the richness and precision of a premium illustrated Bible. Square format, high resolution, print-ready.",
+      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in a classical golden-age book illustration style — warm oil-painting tones, rich earth colours, period-accurate costumes, careful attention to historical architecture and landscape. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition with soft edges. Square format, high resolution, print-ready.",
       "style_anchors": [],
       "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
       "source_book": "builtin",
@@ -385,6 +331,60 @@
       "win_count": 0,
       "last_used_at": "",
       "updated_at": "2026-03-08T09:39:50.801614+00:00"
+    },
+    {
+      "id": "alexandria-wildcard-pre-raphaelite-garden",
+      "name": "WILDCARD 2 — Vintage Travel Poster",
+      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in bold 1930s vintage travel poster style — flat unblended colour blocks with clean outlines, layered depth planes, limited palette of burgundy, navy, cream, and forest green, geometric confidence. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition. Square format, high resolution, print-ready.",
+      "style_anchors": [],
+      "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
+      "source_book": "builtin",
+      "source_model": "openrouter/google/gemini-3-pro-image-preview",
+      "quality_score": 1.0,
+      "saved_by": "system",
+      "created_at": "2026-03-08T09:39:50.801657+00:00",
+      "notes": "Alexandria wildcard prompt. Mucha framing plus Pre-Raphaelite colour for lush literary covers.",
+      "tags": [
+        "vintage-poster",
+        "travel-poster",
+        "flat-colour",
+        "WPA",
+        "bold",
+        "geometric"
+      ],
+      "category": "builtin",
+      "version": 1,
+      "usage_count": 0,
+      "win_count": 0,
+      "last_used_at": "",
+      "updated_at": "2026-03-08T09:39:50.801657+00:00"
+    },
+    {
+      "id": "alexandria-wildcard-edo-meets-alexandria",
+      "name": "WILDCARD 1 — Dramatic Graphic Novel",
+      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in dramatic graphic novel engraving style — bold parallel crosshatching, heavy black outlines, expressive faces in close-up, deep black with warm amber and burnt orange highlights, swirling dramatic sky. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition. Square format, high resolution, print-ready.",
+      "style_anchors": [],
+      "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers.",
+      "source_book": "builtin",
+      "source_model": "openrouter/google/gemini-3-pro-image-preview",
+      "quality_score": 1.0,
+      "saved_by": "system",
+      "created_at": "2026-03-08T09:39:50.801651+00:00",
+      "notes": "Alexandria wildcard prompt. Japanese woodblock elegance fused with classical oil storytelling.",
+      "tags": [
+        "graphic-novel",
+        "crosshatch",
+        "dramatic",
+        "poster-art",
+        "amber",
+        "bold-lines"
+      ],
+      "category": "builtin",
+      "version": 1,
+      "usage_count": 0,
+      "win_count": 0,
+      "last_used_at": "",
+      "updated_at": "2026-03-08T09:39:50.801651+00:00"
     },
     {
       "id": "3cb72b01-44c2-48bf-8aaf-c1d5f9923822",

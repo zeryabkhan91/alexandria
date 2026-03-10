@@ -82,6 +82,30 @@ def _run_iterate_default_mood(book: dict) -> str:
     return _run_iterate_hook("defaultMoodForBook", book)
 
 
+def _run_iterate_default_scene(book: dict) -> str:
+    return _run_iterate_hook("defaultSceneForBook", book)
+
+
+def _run_iterate_apply_prompt_placeholders(
+    *,
+    prompt_text: str,
+    book: dict,
+    scene_override: str = "",
+    mood_override: str = "",
+    era_override: str = "",
+) -> str:
+    return _run_iterate_hook(
+        "applyPromptPlaceholders",
+        {
+            "promptText": prompt_text,
+            "book": book,
+            "sceneOverride": scene_override,
+            "moodOverride": mood_override,
+            "eraOverride": era_override,
+        },
+    )
+
+
 def _run_iterate_ensure_enriched_prompt(prompt_text: str, book: dict, scene_override: str = "") -> str:
     return _run_iterate_hook("ensureEnrichedPrompt", {"promptText": prompt_text, "book": book, "sceneOverride": scene_override})
 
@@ -204,7 +228,7 @@ def test_iterate_prompt_builder_uses_evocative_scene_fallback_when_scene_missing
         }
     )
 
-    assert 'A pivotal dramatic moment from the literary work "A Room with a View" by E. M. Forster' in result["prompt"]
+    assert 'a scene from "A Room with a View"' in result["prompt"]
     assert "centered and fully contained" not in result["prompt"]
 
 
@@ -302,6 +326,65 @@ def test_default_mood_for_book_prefers_emotional_tone():
     assert result == "restless wonder and romantic longing"
 
 
+def test_default_scene_for_book_filters_generic_placeholder_scenes():
+    result = _run_iterate_default_scene(
+        {
+            "title": "Emma",
+            "enrichment": {
+                "iconic_scenes": [
+                    "Iconic turning point in the story with period-accurate costume",
+                    "Emma Woodhouse confronting Mr. Knightley on the Box Hill hillside after the insult to Miss Bates",
+                ],
+            },
+        }
+    )
+
+    assert "Iconic turning point" not in result
+    assert "Emma Woodhouse confronting Mr. Knightley" in result
+
+
+def test_apply_prompt_placeholders_appends_specific_protagonist_to_scene():
+    result = _run_iterate_apply_prompt_placeholders(
+        prompt_text="Book cover illustration only — {SCENE}. The mood is {MOOD}. Era reference: {ERA}.",
+        book={
+            "title": "Emma",
+            "author": "Jane Austen",
+            "enrichment": {
+                "protagonist": "Emma Woodhouse",
+                "iconic_scenes": [
+                    "Emma stands in the drawing room at Hartfield while planning a match for Harriet Smith",
+                ],
+                "emotional_tone": "witty romantic tension",
+                "era": "Regency England",
+            },
+        },
+    )
+
+    assert "Emma stands in the drawing room at Hartfield" in result
+    assert "The main character is Emma Woodhouse" in result
+
+
+def test_build_scene_pool_filters_generic_placeholder_scenes():
+    result = _run_iterate_hook(
+        "buildScenePool",
+        {
+            "title": "Emma",
+            "enrichment": {
+                "iconic_scenes": [
+                    "Iconic turning point in the story with classical dramatic tension",
+                    "Emma Woodhouse at Box Hill while Mr. Knightley rebukes her cruelty toward Miss Bates",
+                ],
+                "protagonist": "Central protagonist",
+                "setting_primary": "Highbury drawing rooms",
+            },
+            "count": 2,
+        },
+    )
+
+    assert all("Iconic turning point" not in scene for scene in result)
+    assert result[0].startswith("Emma Woodhouse at Box Hill")
+
+
 def test_build_scene_pool_uses_title_keywords_when_enrichment_missing():
     result = _run_iterate_hook(
         "buildScenePool",
@@ -373,7 +456,7 @@ def test_build_genre_aware_rotation_defaults_to_romantic_realism_when_genre_unkn
             "book": {
                 "title": "Unknown Text",
                 "enrichment": {
-                    "iconic_scenes": ["A mysterious scene"],
+                    "iconic_scenes": ["A mysterious ritual unfolds beneath torchlight in the ruined citadel courtyard"],
                 },
             },
             "variantCount": 1,
@@ -384,7 +467,7 @@ def test_build_genre_aware_rotation_defaults_to_romantic_realism_when_genre_unkn
     assert result == [
         {
             "promptId": "alexandria-base-romantic-realism",
-            "sceneOverride": "A mysterious scene",
+            "sceneOverride": "A mysterious ritual unfolds beneath torchlight in the ruined citadel courtyard",
         }
     ]
 

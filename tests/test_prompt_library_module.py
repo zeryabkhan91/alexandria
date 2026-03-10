@@ -130,9 +130,9 @@ def test_alexandria_prompts_seeded_first_and_scene_placeholders_allowed(tmp_path
 
     library = pl.PromptLibrary(tmp_path / "prompt_library.json")
     prompts = library.get_prompts()
-    alexandria = [prompt for prompt in prompts if "alexandria" in {tag.lower() for tag in prompt.tags}]
+    alexandria = [prompt for prompt in prompts if prompt.id.startswith("alexandria-")]
     assert len(alexandria) >= 10
-    assert "alexandria" in {tag.lower() for tag in prompts[0].tags}
+    assert prompts[0].id.startswith("alexandria-")
 
     scene_prompt = pl.LibraryPrompt(
         id="scene-based",
@@ -153,6 +153,28 @@ def test_alexandria_prompts_seeded_first_and_scene_placeholders_allowed(tmp_path
     saved = library.get_prompt("scene-based")
     assert saved is not None
     assert "{SCENE}" in saved.prompt_template
+
+
+def test_seeded_alexandria_builtins_are_scene_first(tmp_path: Path, monkeypatch):
+    templates_path = tmp_path / "prompt_templates.json"
+    templates_path.write_text(json.dumps(_templates_payload()), encoding="utf-8")
+    monkeypatch.setattr(pl.config, "PROMPT_TEMPLATES_PATH", templates_path)
+
+    library = pl.PromptLibrary(tmp_path / "prompt_library.json")
+    prompts = {
+        prompt.id: prompt
+        for prompt in library.get_prompts()
+        if prompt.id.startswith("alexandria-")
+    }
+
+    assert len(prompts) >= 10
+    for prompt_id, prompt in prompts.items():
+        template = prompt.prompt_template
+        assert template.startswith("Book cover illustration only")
+        assert "{SCENE}" in template
+        assert template.index("{SCENE}") < 250, prompt_id
+        assert "{MOOD}" in template
+        assert "{ERA}" in template
 
 
 def test_build_prompt_best_prompts_add_anchor(tmp_path: Path, monkeypatch):

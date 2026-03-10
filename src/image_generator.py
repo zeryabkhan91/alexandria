@@ -131,10 +131,23 @@ GENERIC_SCENE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 GENERIC_MOOD_PATTERN = re.compile(r"classical,\s+timeless,\s+evocative", re.IGNORECASE)
-GENERIC_SCENE_FALLBACK_PATTERN = re.compile(
-    r"iconic turning point|central protagonist|atmospheric setting moment|dramatic emotional conflict",
+GENERIC_ENRICHMENT_MARKERS: tuple[str, ...] = (
+    "iconic turning point",
+    "central protagonist",
+    "atmospheric setting moment",
+    "defining confrontation involving",
+    "historically grounded era",
+    "classical dramatic tension",
+    "period costume and historically grounded",
+    "symbolic object tied to the story",
+    "circular medallion-ready composition",
+    "dramatic emotional conflict",
+)
+GENERIC_ENRICHMENT_PATTERN = re.compile(
+    "|".join(re.escape(marker) for marker in GENERIC_ENRICHMENT_MARKERS),
     re.IGNORECASE,
 )
+GENERIC_SCENE_FALLBACK_PATTERN = GENERIC_ENRICHMENT_PATTERN
 MAX_CONTENT_VIOLATION_SCORE = 0.24
 TEXT_ARTIFACT_HARD_SCORE_FLOOR = 0.20
 TEXT_ARTIFACT_HARD_TEXT_PENALTY = 0.62
@@ -189,6 +202,112 @@ _PROMPT_REMOVAL_PATTERNS: tuple[str, ...] = (
     r"\bmedallion(?:\s+zone|\s+opening|\s+window)?\b",
     r"\bgilt ornament language\b",
 )
+
+
+def _clean_enrichment_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _is_generic_enrichment_text(value: Any) -> bool:
+    text = _clean_enrichment_text(value)
+    return bool(text) and bool(GENERIC_ENRICHMENT_PATTERN.search(text))
+
+
+def _specific_enrichment_text(value: Any, *, min_length: int = 1) -> str:
+    text = _clean_enrichment_text(value)
+    if not text or len(text) < int(min_length) or _is_generic_enrichment_text(text):
+        return ""
+    return text
+
+
+def _specific_enrichment_list(values: Any, *, min_length: int = 1) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _specific_enrichment_text(value, min_length=min_length)
+        if not text:
+            continue
+        token = text.lower()
+        if token in seen:
+            continue
+        seen.add(token)
+        cleaned.append(text)
+    return cleaned
+
+
+def _specific_era_text(value: Any) -> str:
+    if isinstance(value, list):
+        for item in value:
+            text = _specific_enrichment_text(item, min_length=6)
+            if text:
+                return text
+        return ""
+    return _specific_enrichment_text(value, min_length=6)
+
+
+def _specific_protagonist(enrichment: dict[str, Any]) -> str:
+    return _specific_enrichment_text(enrichment.get("protagonist", ""), min_length=6)
+
+
+def _filtered_enrichment_scenes(enrichment: dict[str, Any]) -> list[str]:
+    return _specific_enrichment_list(enrichment.get("iconic_scenes", []), min_length=30)
+
+
+def _motif_scene_for_title_author(title: str, author: str) -> str:
+    try:
+        motif = prompt_generator._motif_for_book({"title": title, "author": author})  # type: ignore[attr-defined]
+        return _clean_enrichment_text(getattr(motif, "iconic_scene", "") or "")
+    except Exception:
+        return ""
+
+
+def _append_protagonist_to_scene(scene: str, protagonist: str, *, lead_in: str = "The main character is") -> str:
+    base_scene = _clean_enrichment_text(scene)
+    hero = _specific_enrichment_text(protagonist, min_length=6)
+    if not base_scene or not hero:
+        return base_scene
+    if hero.lower() in base_scene.lower():
+        return base_scene
+    return f"{base_scene}. {lead_in} {hero}"
+
+
+def _is_generic_enrichment(enrichment: dict[str, Any]) -> bool:
+    if not isinstance(enrichment, dict) or not enrichment:
+        return True
+    placeholder_hits = False
+    for key in (
+        "iconic_scenes",
+        "scene",
+        "protagonist",
+        "setting_primary",
+        "setting_details",
+        "emotional_tone",
+        "mood",
+        "era",
+        "visual_motifs",
+        "symbolic_elements",
+        "key_characters",
+    ):
+        value = enrichment.get(key)
+        if isinstance(value, list):
+            if any(_is_generic_enrichment_text(item) for item in value):
+                placeholder_hits = True
+                break
+        elif _is_generic_enrichment_text(value):
+            placeholder_hits = True
+            break
+    has_specific_data = any(
+        (
+            bool(_filtered_enrichment_scenes(enrichment)),
+            bool(_specific_protagonist(enrichment)),
+            bool(_specific_enrichment_text(enrichment.get("setting_primary", ""), min_length=8)),
+            bool(_specific_enrichment_list(enrichment.get("visual_motifs", []), min_length=3)),
+            bool(_specific_enrichment_list(enrichment.get("symbolic_elements", []), min_length=3)),
+        )
+    )
+    return bool(placeholder_hits and not has_specific_data)
 
 
 def _host_matches_allowlist(host: str, pattern: str) -> bool:
@@ -259,26 +378,29 @@ def _validate_prompt_relevance(
         return base_prompt
 
     scene_anchor = ""
+    protagonist = ""
     if runtime is not None and int(book_number or 0) > 0:
         enrichment = _enriched_book_lookup(runtime).get(int(book_number), {})
         if isinstance(enrichment, dict):
+            protagonist = _specific_protagonist(enrichment)
             scene_anchor = _scene_for_variant(
                 enrichment=enrichment,
                 title=title,
+                author=author,
                 variant_index=max(0, int(variant_index)),
             )
     if not scene_anchor:
-        try:
-            motif = prompt_generator._motif_for_book({"title": title, "author": author})  # type: ignore[attr-defined]
-            scene_anchor = str(getattr(motif, "iconic_scene", "") or "").strip()
-        except Exception:
-            scene_anchor = ""
+        scene_anchor = _motif_scene_for_title_author(title, author)
 
     prefix_parts = [f"Book cover illustration for '{title}'"]
     if author:
         prefix_parts[0] = f"{prefix_parts[0]} by {author}"
     if scene_anchor:
-        prefix_parts.append(f"Primary scene anchor: {scene_anchor}")
+        prefix_parts.append(
+            f"CRITICAL SCENE REQUIREMENT — the illustration must specifically depict: {scene_anchor.rstrip(' .!?')}."
+        )
+        if protagonist and protagonist.lower() not in scene_anchor.lower():
+            prefix_parts.append(f"The main character shown is {protagonist}.")
     prefix = ". ".join(prefix_parts).strip().rstrip(".") + "."
     logger.warning("Prompt lacked explicit book reference. Prepending title/scene anchor for '%s'.", title)
     if not base_prompt:
@@ -495,14 +617,17 @@ def _scene_pool_for_enrichment(
     *,
     enrichment: dict[str, Any],
     title: str,
+    author: str = "",
     count: int = 1,
 ) -> list[str]:
     total = max(1, int(count or 1))
     pool: list[str] = []
     seen: set[str] = set()
+    generic_enrichment = _is_generic_enrichment(enrichment)
+    motif_scene = _motif_scene_for_title_author(title, author)
 
     def _push_unique(value: Any) -> None:
-        trimmed = re.sub(r"\s+", " ", str(value or "")).strip()
+        trimmed = _clean_enrichment_text(value)
         if not trimmed or len(trimmed) < 20 or GENERIC_SCENE_FALLBACK_PATTERN.search(trimmed):
             return
         token = trimmed.lower()
@@ -511,17 +636,24 @@ def _scene_pool_for_enrichment(
         seen.add(token)
         pool.append(trimmed)
 
-    iconic_scenes = enrichment.get("iconic_scenes", []) if isinstance(enrichment.get("iconic_scenes"), list) else []
-    for scene in iconic_scenes:
+    if generic_enrichment and motif_scene:
+        _push_unique(motif_scene)
+
+    for scene in _filtered_enrichment_scenes(enrichment):
         _push_unique(scene)
 
-    protagonist = str(enrichment.get("protagonist", "") or "").strip()
-    setting = str(enrichment.get("setting_primary", "") or "").strip()
+    protagonist = _specific_protagonist(enrichment)
+    setting = _specific_enrichment_text(enrichment.get("setting_primary", ""), min_length=8)
     raw_setting_details = enrichment.get("setting_details", "")
     if isinstance(raw_setting_details, list):
-        setting_details = ", ".join(str(item or "").strip() for item in raw_setting_details if str(item or "").strip())
+        detail_parts: list[str] = []
+        for item in raw_setting_details:
+            detail = _specific_enrichment_text(item, min_length=3)
+            if detail:
+                detail_parts.append(detail)
+        setting_details = ", ".join(detail_parts)
     else:
-        setting_details = str(raw_setting_details or "").strip()
+        setting_details = _specific_enrichment_text(raw_setting_details, min_length=3)
     if protagonist:
         _push_unique(
             f"{protagonist} in a pivotal moment"
@@ -530,18 +662,16 @@ def _scene_pool_for_enrichment(
     if setting:
         _push_unique(f"{setting}{f', {setting_details}' if setting_details else ''} — establishing atmosphere of the story's world")
 
-    motifs = enrichment.get("visual_motifs", []) if isinstance(enrichment.get("visual_motifs"), list) else []
-    symbols = enrichment.get("symbolic_elements", []) if isinstance(enrichment.get("symbolic_elements"), list) else []
-    symbolic_pool = [
-        str(item or "").strip()
-        for item in [*motifs, *symbols]
-        if str(item or "").strip()
-    ][:4]
+    motifs = _specific_enrichment_list(enrichment.get("visual_motifs", []), min_length=3)
+    symbols = _specific_enrichment_list(enrichment.get("symbolic_elements", []), min_length=3)
+    symbolic_pool = [*motifs, *symbols][:4]
     if len(symbolic_pool) >= 2:
         _push_unique(f"symbolic arrangement of {', '.join(symbolic_pool)} — visual metaphor for the story's themes")
 
+    if not pool and motif_scene:
+        _push_unique(motif_scene)
     if not pool:
-        _push_unique(f'a pivotal scene from "{title or "the story"}"')
+        _push_unique(f'a scene from "{title or "the story"}"')
 
     variation_prefixes = [
         "",
@@ -566,13 +696,19 @@ def _scene_for_variant(
     *,
     enrichment: dict[str, Any],
     title: str,
+    author: str = "",
     variant_index: int = 0,
     scene_override: str = "",
 ) -> str:
     override = re.sub(r"\s+", " ", str(scene_override or "")).strip()
     if override:
         return override
-    pool = _scene_pool_for_enrichment(enrichment=enrichment, title=title, count=max(1, int(variant_index) + 1))
+    pool = _scene_pool_for_enrichment(
+        enrichment=enrichment,
+        title=title,
+        author=author,
+        count=max(1, int(variant_index) + 1),
+    )
     if not pool:
         return ""
     clamped_index = max(0, int(variant_index))
@@ -593,22 +729,22 @@ def _ensure_prompt_enrichment(
     enrichment = _enriched_book_lookup(runtime).get(int(book_number), {})
     if not isinstance(enrichment, dict):
         enrichment = {}
-    populated_scenes = [
-        str(item or "").strip()
-        for item in (enrichment.get("iconic_scenes", []) if isinstance(enrichment.get("iconic_scenes"), list) else [])
-        if str(item or "").strip()
-    ]
-    first_scene = _scene_for_variant(
-        enrichment=enrichment,
-        title=title,
-        variant_index=variant_index,
-        scene_override=scene_override,
+    protagonist = _specific_protagonist(enrichment)
+    populated_scenes = [_append_protagonist_to_scene(scene, protagonist) for scene in _filtered_enrichment_scenes(enrichment)]
+    first_scene = _append_protagonist_to_scene(
+        _scene_for_variant(
+            enrichment=enrichment,
+            title=title,
+            author=author,
+            variant_index=variant_index,
+            scene_override=scene_override,
+        ),
+        protagonist,
     )
     scene_sentence = first_scene.rstrip(" .!?")
-    protagonist = str(enrichment.get("protagonist", "") or "").strip()
-    setting = str(enrichment.get("setting_primary", "") or "").strip()
-    emotional_tone = str(enrichment.get("emotional_tone", "") or enrichment.get("mood", "") or "").strip()
-    era = str(enrichment.get("era", "") or "").strip()
+    setting = _specific_enrichment_text(enrichment.get("setting_primary", ""), min_length=8)
+    emotional_tone = _specific_enrichment_text(enrichment.get("emotional_tone", "") or enrichment.get("mood", ""), min_length=6)
+    era = _specific_era_text(enrichment.get("era", ""))
 
     if emotional_tone and text:
         text = GENERIC_MOOD_PATTERN.sub(emotional_tone, text)
@@ -622,7 +758,7 @@ def _ensure_prompt_enrichment(
         scene_present = any(scene[:30].lower() in lowered for scene in populated_scenes[:3] if scene[:30].strip())
     if not scene_present:
         parts = [f"The illustration must depict: {scene_sentence or first_scene}."]
-        if protagonist:
+        if protagonist and protagonist.lower() not in first_scene.lower():
             parts.append(f"Character: {protagonist}.")
         if setting:
             parts.append(f"Setting: {setting}.")
