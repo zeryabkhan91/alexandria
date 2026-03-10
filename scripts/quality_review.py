@@ -11229,6 +11229,7 @@ def serve_review_webapp(
                 template_id = str(body.get("template_id", body.get("templateId", "")) or "").strip()
                 compose_prompt = bool(body.get("compose_prompt", True))
                 preserve_prompt_text = bool(body.get("preserve_prompt_text", False))
+                scene_description = str(body.get("scene_description", "") or "").strip()
                 template_ok, template_details = _validate_template_id(runtime=runtime_req, template_id=template_id)
                 if not template_ok:
                     return self._send_error(
