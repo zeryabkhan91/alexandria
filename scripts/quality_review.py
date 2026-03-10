@@ -6290,7 +6290,11 @@ def _probe_drive_write_access(*, service: Any, parent_folder_id: str) -> dict[st
         last_delete_exc: Exception | None = None
         for attempt in range(1, SAVE_RAW_DRIVE_PROBE_DELETE_ATTEMPTS + 1):
             try:
-                service.files().delete(fileId=created_file_id, supportsAllDrives=True).execute()
+                service.files().update(
+                    fileId=created_file_id,
+                    body={"trashed": True},
+                    supportsAllDrives=True,
+                ).execute()
                 last_delete_exc = None
                 break
             except Exception as exc:
