@@ -758,6 +758,7 @@ def test_quality_review_server_iterate_books_view_filters_by_number():
         assert "smart_prompts" not in first
         assert isinstance(first.get("prompt_components", {}).get("title_keywords", []), list)
         assert int(payload["books"][0].get("number", 0)) == 3
+        assert str(first.get("enrichment", {}).get("emotional_tone", "")).strip()
     finally:
         _stop_server(process)
 

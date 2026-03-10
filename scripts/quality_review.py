@@ -4135,6 +4135,7 @@ def _compact_iterate_enrichment(enrichment: dict[str, Any]) -> dict[str, Any]:
         "tags",
         "scene",
         "iconic_scenes",
+        "emotional_tone",
         "mood",
         "tones",
         "era",
