@@ -31,6 +31,7 @@ except Exception:  # pragma: no cover
 
 try:
     from src import config
+    from src import content_relevance
     from src import safe_json
     from src import similarity_detector
     from src import prompt_generator
@@ -38,6 +39,7 @@ try:
     from src.prompt_library import PromptLibrary
 except ModuleNotFoundError:  # pragma: no cover
     import config  # type: ignore
+    import content_relevance  # type: ignore
     import safe_json  # type: ignore
     import similarity_detector  # type: ignore
     import prompt_generator  # type: ignore
@@ -507,13 +509,49 @@ class GenerationResult:
 class GenerationError(Exception):
     """Terminal generation error."""
 
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class RetryableGenerationError(GenerationError):
     """Generation error that should be retried."""
 
     def __init__(self, message: str, status_code: int | None = None):
-        super().__init__(message)
-        self.status_code = status_code
+        super().__init__(message, status_code=status_code)
+
+
+def _summarize_error_payload(payload: str, *, limit: int = 240) -> str:
+    text = str(payload or "").strip()
+    if not text:
+        return ""
+    try:
+        body = json.loads(text)
+    except json.JSONDecodeError:
+        return text[:limit]
+
+    queue: list[Any] = [
+        body.get("error"),
+        body.get("message"),
+        body.get("detail"),
+        body.get("details"),
+    ]
+    while queue:
+        item = queue.pop(0)
+        if isinstance(item, dict):
+            for key in ("message", "detail", "error", "details", "reason"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()[:limit]
+                if isinstance(value, (dict, list)):
+                    queue.append(value)
+        elif isinstance(item, list):
+            queue.extend(item)
+        elif isinstance(item, str) and item.strip():
+            return item.strip()[:limit]
+
+    compact = json.dumps(body, ensure_ascii=True)
+    return compact[:limit]
 
 
 def _generation_failure_status_code(exc: Exception) -> int | None:
@@ -996,11 +1034,14 @@ class OpenAIProvider(BaseProvider):
         )
         if response.status_code in RETRYABLE_STATUS_CODES:
             raise RetryableGenerationError(
-                f"OpenAI temporary error {response.status_code}: {response.text[:240]}",
+                f"OpenAI temporary error {response.status_code}: {_summarize_error_payload(response.text, limit=240)}",
                 status_code=response.status_code,
             )
         if response.status_code >= 400:
-            raise GenerationError(f"OpenAI error {response.status_code}: {response.text[:300]}")
+            raise GenerationError(
+                f"OpenAI error {response.status_code}: {_summarize_error_payload(response.text, limit=300)}",
+                status_code=response.status_code,
+            )
 
         body = response.json()
         candidate = (body.get("data") or [{}])[0]
@@ -1075,7 +1116,7 @@ class OpenRouterProvider(BaseProvider):
                     retry_after = float(10 * attempt)
                 if attempt >= 3:
                     raise RetryableGenerationError(
-                        f"OpenRouter rate-limited after retries (429): {response.text[:240]}",
+                        f"OpenRouter rate-limited after retries (429): {_summarize_error_payload(response.text, limit=240)}",
                         status_code=429,
                     )
                 logger.warning("OpenRouter 429; retrying in %.1fs (attempt %d/3)", retry_after, attempt)
@@ -1086,11 +1127,14 @@ class OpenRouterProvider(BaseProvider):
         assert response is not None
         if response.status_code in RETRYABLE_STATUS_CODES:
             raise RetryableGenerationError(
-                f"OpenRouter temporary error {response.status_code}: {response.text[:240]}",
+                f"OpenRouter temporary error {response.status_code}: {_summarize_error_payload(response.text, limit=240)}",
                 status_code=response.status_code,
             )
         if response.status_code >= 400:
-            raise GenerationError(f"OpenRouter error {response.status_code}: {response.text[:300]}")
+            raise GenerationError(
+                f"OpenRouter error {response.status_code}: {_summarize_error_payload(response.text, limit=300)}",
+                status_code=response.status_code,
+            )
 
         body = response.json()
 
@@ -1197,11 +1241,14 @@ class FalProvider(BaseProvider):
         )
         if response.status_code in RETRYABLE_STATUS_CODES:
             raise RetryableGenerationError(
-                f"fal.ai temporary error {response.status_code}: {response.text[:240]}",
+                f"fal.ai temporary error {response.status_code}: {_summarize_error_payload(response.text, limit=240)}",
                 status_code=response.status_code,
             )
         if response.status_code >= 400:
-            raise GenerationError(f"fal.ai error {response.status_code}: {response.text[:300]}")
+            raise GenerationError(
+                f"fal.ai error {response.status_code}: {_summarize_error_payload(response.text, limit=300)}",
+                status_code=response.status_code,
+            )
 
         body = response.json()
         images = body.get("images") or body.get("output", {}).get("images") or []
@@ -1348,11 +1395,14 @@ class GoogleCloudProvider(BaseProvider):
 
         if response.status_code in RETRYABLE_STATUS_CODES:
             raise RetryableGenerationError(
-                f"Google temporary error {response.status_code}: {response.text[:240]}",
+                f"Google temporary error {response.status_code}: {_summarize_error_payload(response.text, limit=240)}",
                 status_code=response.status_code,
             )
         if response.status_code >= 400:
-            raise GenerationError(f"Google error {response.status_code}: {response.text[:300]}")
+            raise GenerationError(
+                f"Google error {response.status_code}: {_summarize_error_payload(response.text, limit=300)}",
+                status_code=response.status_code,
+            )
 
         body = response.json()
         candidates = body.get("candidates", [])
@@ -1667,9 +1717,22 @@ def generate_image(
     runtime = config.get_config()
 
     negative_prompt = _merge_negative_prompt(negative_prompt)
+    requested_provider = str(params.get("provider", "") or "").strip().lower()
     model_prefix = _model_provider_prefix(runtime, model)
-    provider = model_prefix or params.get("provider") or runtime.resolve_model_provider(model)
-    provider = str(provider).lower()
+    provider_candidates = _model_provider_chain(
+        runtime,
+        model=model,
+        primary=requested_provider or runtime.resolve_model_provider(model),
+    )
+    if requested_provider and requested_provider in provider_candidates:
+        provider = requested_provider
+    elif model_prefix and model_prefix in provider_candidates:
+        provider = model_prefix
+    elif provider_candidates:
+        provider = provider_candidates[0]
+    else:
+        provider = requested_provider or model_prefix or runtime.resolve_model_provider(model)
+    provider = str(provider).strip().lower()
     provider_model = _resolve_provider_model_name(provider=provider, model=model, runtime=runtime)
     width = int(params.get("width", runtime.image_width))
     height = int(params.get("height", runtime.image_height))
@@ -2187,6 +2250,7 @@ def generate_single_book(
             library_matches[0].prompt_template,
             title=title,
             author=author,
+            book=book_entry,
         )
         if not negative_prompt:
             selected_negative_prompt = library_matches[0].negative_prompt
@@ -2428,11 +2492,7 @@ def _generate_one(
     start = time.perf_counter()
     last_error: str | None = None
     last_failure_meta: dict[str, Any] | None = None
-    model_prefix = _model_provider_prefix(runtime, model)
-    if model_prefix:
-        provider_chain = [model_prefix]
-    else:
-        provider_chain = _provider_fallback_chain(runtime, primary=provider)
+    provider_chain = _model_provider_chain(runtime, model=model, primary=provider)
     provider_index = 0
     active_provider = provider_chain[provider_index]
     consecutive_provider_failures = 0
@@ -2610,6 +2670,21 @@ def _generate_one(
                 )
                 continue
             consecutive_provider_failures += 1
+            if _should_immediately_failover(active_provider, exc) and provider_index < (len(provider_chain) - 1):
+                previous_provider = active_provider
+                provider_index += 1
+                active_provider = provider_chain[provider_index]
+                consecutive_provider_failures = 0
+                logger.warning(
+                    "Immediate provider failover triggered for book %s model %s variant %s after provider credits/auth issue: %s -> %s (%s)",
+                    book_number,
+                    model,
+                    variant,
+                    previous_provider,
+                    active_provider,
+                    exc,
+                )
+                continue
             if consecutive_provider_failures >= 3 and provider_index < (len(provider_chain) - 1):
                 previous_provider = active_provider
                 provider_index += 1
@@ -2688,6 +2763,51 @@ def _provider_request_delay(runtime: config.Config, provider: str) -> float:
     return float(runtime.provider_request_delay.get(provider, runtime.request_delay))
 
 
+def _canonical_model_family(runtime: config.Config, model: str) -> str:
+    token = runtime.resolve_model_alias(model).strip()
+    if not token:
+        return ""
+    parts = [part.strip() for part in token.split("/") if part.strip()]
+    while len(parts) > 1 and parts[0].lower() in runtime.provider_keys:
+        parts.pop(0)
+    return "/".join(parts)
+
+
+def _model_provider_chain(runtime: config.Config, *, model: str, primary: str) -> list[str]:
+    token = runtime.resolve_model_alias(model).strip()
+    explicit_provider = _model_provider_prefix(runtime, token)
+    if not explicit_provider:
+        return _provider_fallback_chain(runtime, primary=primary)
+
+    any_key = runtime.has_any_api_key()
+
+    def _provider_enabled(provider: str) -> bool:
+        if not any_key:
+            return True
+        return bool(runtime.get_api_key(provider).strip())
+
+    providers: list[str] = []
+
+    def _append(provider: str | None) -> None:
+        candidate = str(provider or "").strip().lower()
+        if not candidate or candidate in providers or not _provider_enabled(candidate):
+            return
+        providers.append(candidate)
+
+    _append(explicit_provider)
+    family = _canonical_model_family(runtime, token)
+    for candidate_model in [token, *runtime.all_models]:
+        candidate_token = runtime.resolve_model_alias(candidate_model).strip()
+        if not candidate_token:
+            continue
+        if _canonical_model_family(runtime, candidate_token) != family:
+            continue
+        _append(_model_provider_prefix(runtime, candidate_token) or runtime.resolve_model_provider(candidate_token))
+    if not providers and explicit_provider:
+        providers.append(explicit_provider)
+    return providers
+
+
 def _provider_fallback_chain(runtime: config.Config, *, primary: str) -> list[str]:
     primary_token = str(primary or "").strip().lower()
     any_key = runtime.has_any_api_key()
@@ -2736,16 +2856,35 @@ def _create_provider_instance(
 
 
 def _resolve_provider_model_name(provider: str, model: str, runtime: config.Config | None = None) -> str:
-    """Strip provider prefix from provider/model notation."""
+    """Strip provider prefix from provider/model notation, including nested provider families."""
     cfg = runtime or config.get_config()
     token = cfg.resolve_model_alias(model)
     if "/" not in token:
         return token
 
-    prefix, suffix = token.split("/", 1)
-    if prefix.lower() == provider.lower() and suffix:
-        return suffix
+    parts = [part.strip() for part in token.split("/") if part.strip()]
+    for index, part in enumerate(parts):
+        if part.lower() != provider.lower():
+            continue
+        suffix = "/".join(parts[index + 1 :]).strip()
+        if suffix:
+            return suffix
     return token
+
+
+def _should_immediately_failover(provider: str, exc: Exception) -> bool:
+    token = str(provider or "").strip().lower()
+    if token != "openrouter":
+        return False
+    status_code = getattr(exc, "status_code", None)
+    error_text = str(exc).lower()
+    return bool(
+        status_code == 402
+        or "error 402" in error_text
+        or '"code":402' in error_text
+        or "requires more credits" in error_text
+        or "insufficient credits" in error_text
+    )
 
 
 def _merge_negative_prompt(negative_prompt: str | None) -> str:
@@ -2758,13 +2897,28 @@ def _merge_negative_prompt(negative_prompt: str | None) -> str:
     return f"{custom} {baseline}".strip()
 
 
-def _apply_library_prompt_tokens(template: str, *, title: str, author: str) -> str:
-    return (
+def _apply_library_prompt_tokens(
+    template: str,
+    *,
+    title: str,
+    author: str,
+    book: dict[str, Any] | None = None,
+) -> str:
+    context = content_relevance.resolve_prompt_context(book or {"title": title, "author": author})
+    prompt = (
         str(template or "")
         .replace("{title}", str(title or ""))
         .replace("{author}", str(author or ""))
         .replace("{TITLE}", str(title or ""))
         .replace("{AUTHOR}", str(author or ""))
+        .replace("{SCENE}", str(context.get("scene_with_protagonist", "") or context.get("scene", "")))
+        .replace("{MOOD}", str(context.get("mood", "")))
+        .replace("{ERA}", str(context.get("era", "")))
+    )
+    return content_relevance.ensure_prompt_book_context(
+        prompt=prompt,
+        book=book or {"title": title, "author": author},
+        require_scene_anchor=True,
     )
 
 
