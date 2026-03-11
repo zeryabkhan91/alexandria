@@ -2936,14 +2936,7 @@ def _model_provider_prefix(runtime: config.Config, model: str) -> str | None:
 
 
 def _post_process_image(image: Image.Image, width: int, height: int) -> Image.Image:
-    processed = image.convert("RGBA").resize((width, height), Image.LANCZOS)
-
-    mask = Image.new("L", (width, height), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((0, 0, width - 1, height - 1), fill=255)
-    processed.putalpha(mask)
-
-    return processed
+    return image.convert("RGBA").resize((width, height), Image.LANCZOS)
 
 
 def _clip(value: float) -> float:
