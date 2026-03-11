@@ -2246,12 +2246,13 @@ def generate_single_book(
         library_matches = [prompt for prompt in prompt_library.get_prompts() if prompt.id == library_prompt_id]
         if not library_matches:
             raise KeyError(f"Prompt id '{library_prompt_id}' not found in prompt library")
-        selected_prompt = _apply_library_prompt_tokens(
-            library_matches[0].prompt_template,
-            title=title,
-            author=author,
-            book=book_entry,
-        )
+        if not (preserve_prompt_text and str(selected_prompt or "").strip()):
+            selected_prompt = _apply_library_prompt_tokens(
+                library_matches[0].prompt_template,
+                title=title,
+                author=author,
+                book=book_entry,
+            )
         if not negative_prompt:
             selected_negative_prompt = library_matches[0].negative_prompt
 

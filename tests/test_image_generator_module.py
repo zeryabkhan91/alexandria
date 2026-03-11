@@ -1707,6 +1707,43 @@ def test_generate_single_book_forwards_preserve_prompt_text(tmp_path: Path, monk
     assert captured["preserve_prompt_text"] is True
 
 
+def test_generate_single_book_preserve_prompt_text_keeps_resolved_prompt_even_with_library_id(tmp_path: Path, monkeypatch):
+    runtime = _Runtime(tmp_path)
+    monkeypatch.setattr(ig.config, "get_config", lambda: runtime)
+    prompts_path = tmp_path / "book_prompts.json"
+    _write_prompts(prompts_path)
+    captured: dict[str, object] = {}
+
+    class _PromptLib:
+        def __init__(self, _path):
+            pass
+
+        def get_prompts(self):  # type: ignore[no-untyped-def]
+            return [SimpleNamespace(id="p1", prompt_template="prompt for {title}", negative_prompt="library neg")]
+
+    def _capture_generate_all_models(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(ig, "PromptLibrary", _PromptLib)
+    monkeypatch.setattr(ig, "generate_all_models", _capture_generate_all_models)
+    ig.generate_single_book(
+        book_number=1,
+        prompts_path=prompts_path,
+        output_dir=tmp_path / "generated",
+        models=["openrouter/google/gemini-3-pro-image-preview"],
+        variants=1,
+        prompt_text="Book cover illustration only - no text. Exact resolved scene prompt.",
+        library_prompt_id="p1",
+        dry_run=True,
+        preserve_prompt_text=True,
+    )
+
+    assert captured["prompt"] == "Book cover illustration only - no text. Exact resolved scene prompt."
+    assert captured["negative_prompt"] == "library neg"
+    assert captured["preserve_prompt_text"] is True
+
+
 def test_generate_batch_dry_run_failure_append_and_scope_limit(tmp_path: Path, monkeypatch):
     runtime = _Runtime(tmp_path)
     runtime.variants_per_cover = 2
