@@ -40,7 +40,24 @@ ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT = (
     "no dividers."
 )
 
-def _scene_first_prompt(style_label: str, style_description: str) -> str:
+ALEXANDRIA_BASE_NEGATIVE_PROMPT = (
+    f"{ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT} "
+    "No circular vignette, no medallion composition, no ornamental frame, no decorative border, "
+    "no floral border frame, no scrollwork frame."
+)
+
+
+def _scene_first_prompt(style_label: str, style_description: str, *, full_canvas: bool = False) -> str:
+    if full_canvas:
+        return (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "No border, no frame, no ornamental elements, no medallion, no decorative edges. "
+            "This illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and "
+            "setting element in this scene must be clearly recognizable and faithful to the source material. "
+            f"Rendered in {style_label} style — {style_description}. "
+            "The mood is {MOOD}. Era reference: {ERA}. Full scene composition filling the entire canvas, "
+            "no circular framing. Square format, high resolution, print-ready."
+        )
     return (
         "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
         "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
@@ -56,11 +73,30 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
     {
         "id": "alexandria-base-classical-devotion",
         "name": "BASE 1 — Classical Devotion",
-        "style_label": "classical golden-age book illustration",
+        "style_label": "Art Nouveau Pre-Raphaelite illustration",
         "style_description": (
-            "warm oil-painting tones, rich earth colours, period-accurate costumes, careful attention to "
-            "historical architecture and landscape"
+            "deep midnight navy blue background tones, warm burnished gold and antique brass highlights, rich "
+            "cobalt and cerulean blue mid-tones, earth ochre and burnt sienna for landscapes, fine botanical "
+            "detail in every flower and leaf, flowing lines and romantic composition, figures in hyper-detailed "
+            "period clothing with flowing hair and emotional poses, lush pastoral settings with castles and rivers "
+            "and wildflower gardens, painterly brushwork with visible gilded texture like an illuminated manuscript"
         ),
+        "prompt_template": (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "No border, no frame, no ornamental elements, no medallion, no decorative edges. "
+            "This illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and "
+            "setting element in this scene must be clearly recognizable and faithful to the source material. "
+            "Rendered in Art Nouveau Pre-Raphaelite illustration style — deep midnight navy blue background tones, "
+            "warm burnished gold and antique brass highlights, rich cobalt and cerulean blue mid-tones, earth "
+            "ochre and burnt sienna for landscapes, fine botanical detail in every flower and leaf, flowing lines "
+            "and romantic composition, figures in hyper-detailed period clothing with flowing hair and emotional "
+            "poses, lush pastoral settings with castles and rivers and wildflower gardens, painterly brushwork "
+            "with visible gilded texture like an illuminated manuscript. The mood is {MOOD}. Era reference: "
+            "{ERA}. Full scene composition filling the entire canvas, no circular framing. Square format, high "
+            "resolution, print-ready."
+        ),
+        "full_canvas": True,
+        "negative_prompt": ALEXANDRIA_BASE_NEGATIVE_PROMPT,
         "notes": "Alexandria base prompt. Best for: Religious, Apocryphal, Biblical.",
         "tags": ["alexandria", "base", "classical-devotion", "religious", "apocryphal", "biblical"],
         "category": "builtin",
@@ -73,6 +109,8 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
             "deep shadows, selective warm highlights, muted burnt umber and ochre palette, single focal light "
             "source, grave reflective atmosphere"
         ),
+        "full_canvas": True,
+        "negative_prompt": ALEXANDRIA_BASE_NEGATIVE_PROMPT,
         "notes": "Alexandria base prompt. Best for: Philosophy, Self-Help, Strategy.",
         "tags": ["alexandria", "base", "philosophical-gravitas", "philosophy", "self-help", "strategy"],
         "category": "builtin",
@@ -85,6 +123,8 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
             "moonlit shadows, drifting mist, deep indigo and crimson tones, expressionist contrast, dramatic "
             "silhouettes against turbulent skies"
         ),
+        "full_canvas": True,
+        "negative_prompt": ALEXANDRIA_BASE_NEGATIVE_PROMPT,
         "notes": "Alexandria base prompt. Best for: Horror, Gothic, Supernatural.",
         "tags": ["alexandria", "base", "gothic-atmosphere", "horror", "gothic", "supernatural"],
         "category": "builtin",
@@ -92,11 +132,30 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
     {
         "id": "alexandria-base-romantic-realism",
         "name": "BASE 4 — Romantic Realism",
-        "style_label": "19th-century Romantic realism",
+        "style_label": "romantic Pre-Raphaelite realism with Art Nouveau influence",
         "style_description": (
-            "warm earth tones, dramatic skies, detailed period clothing, painterly brushwork, emotionally "
-            "resonant composition"
+            "deep navy and midnight blue shadows, warm gold and amber light sources, rich crimson and ivory in "
+            "clothing, detailed historical costumes with embroidery and flowing fabric, botanical precision in "
+            "every plant and flower, dramatic skies with swirling clouds in blues and golds, lush gardens and "
+            "medieval architecture in the background, figures with flowing auburn or golden hair in emotional "
+            "intimate compositions, painterly brushwork like a gilded 19th-century illustration"
         ),
+        "prompt_template": (
+            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
+            "No border, no frame, no ornamental elements, no medallion, no decorative edges. "
+            "This illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and "
+            "setting element in this scene must be clearly recognizable and faithful to the source material. "
+            "Rendered in romantic Pre-Raphaelite realism with Art Nouveau influence — deep navy and midnight blue "
+            "shadows, warm gold and amber light sources, rich crimson and ivory in clothing, detailed historical "
+            "costumes with embroidery and flowing fabric, botanical precision in every plant and flower, dramatic "
+            "skies with swirling clouds in blues and golds, lush gardens and medieval architecture in the "
+            "background, figures with flowing auburn or golden hair in emotional intimate compositions, painterly "
+            "brushwork like a gilded 19th-century illustration. The mood is {MOOD}. Era reference: {ERA}. Full "
+            "scene composition filling the entire canvas, no circular framing. Square format, high resolution, "
+            "print-ready."
+        ),
+        "full_canvas": True,
+        "negative_prompt": ALEXANDRIA_BASE_NEGATIVE_PROMPT,
         "notes": "Alexandria base prompt. Best for: Classical Literature, Novels, Drama.",
         "tags": ["alexandria", "base", "romantic-realism", "literature", "novels", "drama"],
         "category": "builtin",
@@ -109,6 +168,8 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
             "celestial motifs, sacred geometry accents, deep midnight blue and gold palette, luminous ethereal "
             "lighting, symbolic depth"
         ),
+        "full_canvas": True,
+        "negative_prompt": ALEXANDRIA_BASE_NEGATIVE_PROMPT,
         "notes": "Alexandria base prompt. Best for: Occult, Mystical, Forbidden Texts.",
         "tags": ["alexandria", "base", "esoteric-mysticism", "occult", "mystical", "esoteric"],
         "category": "builtin",
@@ -479,10 +540,12 @@ ALEXANDRIA_PROMPT_SPECS: tuple[dict[str, object], ...] = tuple(
     {
         "id": str(spec["id"]),
         "name": str(spec["name"]),
-        "prompt_template": _scene_first_prompt(
+        "prompt_template": str(spec.get("prompt_template") or _scene_first_prompt(
             str(spec["style_label"]),
             str(spec["style_description"]),
-        ),
+            full_canvas=bool(spec.get("full_canvas")),
+        )),
+        "negative_prompt": str(spec.get("negative_prompt") or ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT),
         "notes": str(spec["notes"]),
         "tags": list(spec["tags"]),
         "category": str(spec["category"]),
@@ -867,6 +930,7 @@ class PromptLibrary:
                 prompt_id,
                 str(spec.get("prompt_template", "")).strip(),
             )
+            target_negative_prompt = str(spec.get("negative_prompt") or ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT).strip()
             target_notes = str(spec.get("notes", "")).strip()
             target_tags = list(spec.get("tags", [])) if isinstance(spec.get("tags", []), list) else ["alexandria"]
             target_category = str(spec.get("category", "builtin") or "builtin").strip()
@@ -890,8 +954,8 @@ class PromptLibrary:
                 if str(current.category or "").strip() != target_category:
                     current.category = target_category
                     current_changed = True
-                if str(current.negative_prompt or "").strip() != ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT:
-                    current.negative_prompt = ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT
+                if str(current.negative_prompt or "").strip() != target_negative_prompt:
+                    current.negative_prompt = target_negative_prompt
                     current_changed = True
                 if str(current.source_book or "").strip() != "builtin":
                     current.source_book = "builtin"
@@ -910,7 +974,7 @@ class PromptLibrary:
                 name=name,
                 prompt_template=target_template,
                 style_anchors=[],
-                negative_prompt=ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT,
+                negative_prompt=target_negative_prompt,
                 source_book="builtin",
                 source_model="openrouter/google/gemini-3-pro-image-preview",
                 quality_score=1.0,

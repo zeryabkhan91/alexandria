@@ -174,7 +174,8 @@ ALEXANDRIA_NEGATIVE_PROMPT = (
     "no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, "
     "no blurry illustration, no off-centre composition, no white or light backgrounds. "
     "No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, "
-    "no corner ornaments, no dividers."
+    "no corner ornaments, no dividers. No circular vignette, no medallion composition, no ornamental frame, "
+    "no decorative border, no floral border frame, no scrollwork frame."
 )
 _PROMPT_REMOVAL_PATTERNS: tuple[str, ...] = (
     r"(?<!no )\bcircular\s+medallion(?:\s+illustration)?\b",
@@ -361,7 +362,7 @@ def _looks_like_scene_first_prompt(prompt: str) -> bool:
         return False
     first_320 = text[:320]
     return "{scene}" in first_320 or (
-        "this circular medallion illustration" in first_320
+        ("this circular medallion illustration" in first_320 or "this illustration" in first_320)
         and ("must depict" in first_320 or "scene:" in first_320 or "illustration must" in first_320)
     )
 

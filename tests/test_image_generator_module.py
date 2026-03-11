@@ -197,6 +197,7 @@ def test_negative_prompt_merge_and_nano_alias_resolution(tmp_path: Path, monkeyp
     merged = ig._merge_negative_prompt("custom negative")
     assert "custom negative" in merged
     assert ig.ALEXANDRIA_NEGATIVE_PROMPT in merged
+    assert "No circular vignette, no medallion composition" in merged
     assert ig._resolve_provider_model_name("openrouter", "nano-banana-pro") == "google/gemini-3-pro-image-preview"
 
 
@@ -875,13 +876,13 @@ def test_validate_prompt_relevance_preserves_scene_first_prompt_order():
     prompt = ig._validate_prompt_relevance(
         (
             "Book cover illustration only - no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements. "
-            "This circular medallion illustration MUST depict the following specific scene: "
+            "No border, no frame, no ornamental elements, no medallion, no decorative edges. "
+            "This illustration MUST depict the following specific scene: "
             "Emma Woodhouse and Harriet Smith walk through the gardens of Hartfield at sunset. "
             "Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. "
             "Rendered in Romantic Realism style - luminous regency atmosphere. "
             "The mood is witty romantic self-discovery. Era reference: Regency England. "
-            "Circular vignette composition with soft edges. Square format, high resolution, print-ready."
+            "Full scene composition filling the entire canvas, no circular framing. Square format, high resolution, print-ready."
         ),
         book_title="Emma",
         book_author="Jane Austen",

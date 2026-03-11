@@ -183,6 +183,44 @@ def test_seeded_alexandria_builtins_are_scene_first(tmp_path: Path, monkeypatch)
         assert "{ERA}" in template
 
 
+def test_seeded_alexandria_base_prompts_use_full_canvas_no_medallion_language(tmp_path: Path, monkeypatch):
+    templates_path = tmp_path / "prompt_templates.json"
+    templates_path.write_text(json.dumps(_templates_payload()), encoding="utf-8")
+    monkeypatch.setattr(pl.config, "PROMPT_TEMPLATES_PATH", templates_path)
+
+    library = pl.PromptLibrary(tmp_path / "prompt_library.json")
+    prompts = {
+        prompt.id: prompt
+        for prompt in library.get_prompts()
+        if prompt.id.startswith("alexandria-base-")
+    }
+
+    assert set(prompts) == {
+        "alexandria-base-classical-devotion",
+        "alexandria-base-philosophical-gravitas",
+        "alexandria-base-gothic-atmosphere",
+        "alexandria-base-romantic-realism",
+        "alexandria-base-esoteric-mysticism",
+    }
+
+    for prompt in prompts.values():
+        assert "No border, no frame, no ornamental elements, no medallion, no decorative edges." in prompt.prompt_template
+        assert "This illustration MUST depict the following specific scene: {SCENE}." in prompt.prompt_template
+        assert "Full scene composition filling the entire canvas, no circular framing." in prompt.prompt_template
+        assert "This circular medallion illustration" not in prompt.prompt_template
+        assert "Circular vignette composition with soft edges." not in prompt.prompt_template
+        assert (
+            "No circular vignette, no medallion composition, no ornamental frame, no decorative border, "
+            "no floral border frame, no scrollwork frame."
+        ) in prompt.negative_prompt
+
+    assert "Art Nouveau Pre-Raphaelite illustration style" in prompts["alexandria-base-classical-devotion"].prompt_template
+    assert (
+        "romantic Pre-Raphaelite realism with Art Nouveau influence"
+        in prompts["alexandria-base-romantic-realism"].prompt_template
+    )
+
+
 def test_build_prompt_best_prompts_add_anchor(tmp_path: Path, monkeypatch):
     templates_path = tmp_path / "prompt_templates.json"
     templates_path.write_text(json.dumps(_templates_payload()), encoding="utf-8")
