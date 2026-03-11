@@ -48,24 +48,15 @@ ALEXANDRIA_BASE_NEGATIVE_PROMPT = (
 
 
 def _scene_first_prompt(style_label: str, style_description: str, *, full_canvas: bool = False) -> str:
-    if full_canvas:
-        return (
-            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements, no medallion, no decorative edges. "
-            "This illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and "
-            "setting element in this scene must be clearly recognizable and faithful to the source material. "
-            f"Rendered in {style_label} style — {style_description}. "
-            "The mood is {MOOD}. Era reference: {ERA}. Full scene composition filling the entire canvas, "
-            "no circular framing. Square format, high resolution, print-ready."
-        )
+    del full_canvas
     return (
         "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
-        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
-        "clearly recognizable and faithful to the source material. "
+        "No border, no frame, no ornamental elements, no medallion, no decorative edges. "
+        "This illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and "
+        "setting element in this scene must be clearly recognizable and faithful to the source material. "
         f"Rendered in {style_label} style — {style_description}. "
-        "The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition with soft edges. Square format, "
-        "high resolution, print-ready."
+        "The mood is {MOOD}. Era reference: {ERA}. Full scene composition filling the entire canvas, "
+        "no circular framing. Square format, high resolution, print-ready."
     )
 
 
@@ -545,7 +536,7 @@ ALEXANDRIA_PROMPT_SPECS: tuple[dict[str, object], ...] = tuple(
             str(spec["style_description"]),
             full_canvas=bool(spec.get("full_canvas")),
         )),
-        "negative_prompt": str(spec.get("negative_prompt") or ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT),
+        "negative_prompt": str(spec.get("negative_prompt") or ALEXANDRIA_BASE_NEGATIVE_PROMPT),
         "notes": str(spec["notes"]),
         "tags": list(spec["tags"]),
         "category": str(spec["category"]),
