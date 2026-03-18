@@ -132,9 +132,12 @@ def test_composite_cover_pdf_standard_geometry_fills_shared_radius(tmp_path: Pat
     assert result["overlay_source"] == "region_circle_blend"
     with Image.open(out_jpg) as out:
         arr = out.convert("RGB")
-        edge_px = arr.getpixel((74, 50))
+        edge_px = arr.getpixel((73, 50))
+        outside_px = arr.getpixel((78, 50))
         assert edge_px[1] > edge_px[0]
         assert edge_px[1] > edge_px[2]
+        assert outside_px[0] > outside_px[1]
+        assert outside_px[0] > outside_px[2]
 
 
 def test_composite_cover_pdf_applies_protrusion_overlay(tmp_path: Path, monkeypatch) -> None:

@@ -18,14 +18,12 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 try:
-    from src import art_focus
     from src import config
     from src import frame_geometry
     from src import protrusion_overlay
     from src import safe_json
     from src.logger import get_logger
 except ModuleNotFoundError:  # pragma: no cover
-    import art_focus  # type: ignore
     import config  # type: ignore
     import frame_geometry  # type: ignore
     import protrusion_overlay  # type: ignore
@@ -474,27 +472,30 @@ def _geometry_from_strict_mask(mask: Image.Image | None) -> dict[str, int] | Non
 
 
 def _smart_square_crop(image: Image.Image) -> Image.Image:
-    """Crop image to a square using focus-aware centering."""
+    """Crop image to a square using fixed center alignment."""
     src = image.convert("RGBA")
-    cropped, crop_details = art_focus.crop_square(src)
+    crop_size = int(min(src.size))
+    crop_left = int(max(0, (src.size[0] - crop_size) // 2))
+    crop_top = int(max(0, (src.size[1] - crop_size) // 2))
+    cropped = src.crop((crop_left, crop_top, crop_left + crop_size, crop_top + crop_size))
     logger.info(
         "Cover compositor smart crop: source=%dx%d crop_left=%d crop_top=%d crop_size=%d centering=(%.4f,%.4f) focus=(%.4f,%.4f) confidence=%.6f",
         int(src.size[0]),
         int(src.size[1]),
-        int(crop_details.get("crop_left", 0)),
-        int(crop_details.get("crop_top", 0)),
-        int(crop_details.get("crop_size", min(src.size))),
-        float(crop_details.get("centering_x", 0.5)),
-        float(crop_details.get("centering_y", 0.5)),
-        float(crop_details.get("focus_x", 0.5)),
-        float(crop_details.get("focus_y", 0.5)),
-        float(crop_details.get("confidence", 0.0)),
+        crop_left,
+        crop_top,
+        crop_size,
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.0,
     )
     return cropped
 
 
 def _simple_center_crop(image: Image.Image) -> Image.Image:
-    """Focus-aware square crop used by the deterministic medallion fallback."""
+    """Square crop used by the deterministic medallion fallback."""
     return _smart_square_crop(image)
 
 
@@ -874,12 +875,12 @@ def composite_single(
                 center_x = int(template.center_x)
                 center_y = int(template.center_y)
                 template_frame_hole_radius = int(template.frame_hole_radius)
-                template_art_clip_radius = int(template.art_clip_radius)
+                template_art_clip_radius = int(template.frame_hole_radius)
             else:
                 center_x = FALLBACK_CENTER_X
                 center_y = FALLBACK_CENTER_Y
                 template_frame_hole_radius = FRAME_HOLE_RADIUS
-                template_art_clip_radius = ART_CLIP_RADIUS
+                template_art_clip_radius = FRAME_HOLE_RADIUS
 
             logger.info(
                 "Cover compositor RGBA fallback geometry: cover=%s center=(%d,%d) frame_hole_radius=%d art_clip_radius=%d",

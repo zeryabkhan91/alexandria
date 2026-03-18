@@ -122,6 +122,20 @@ def test_composite_single_rgba_fallback_applies_protrusion_overlay(tmp_path: Pat
         assert result.convert("RGB").getpixel((2864, 1110))[0] > 200
 
 
+def test_smart_square_crop_is_centered() -> None:
+    image = Image.new("RGBA", (8, 4), (0, 0, 0, 255))
+    draw = ImageDraw.Draw(image, "RGBA")
+    draw.rectangle((0, 0, 1, 3), fill=(250, 20, 20, 255))
+    draw.rectangle((2, 0, 5, 3), fill=(20, 250, 20, 255))
+    draw.rectangle((6, 0, 7, 3), fill=(20, 20, 250, 255))
+
+    cropped = cc._smart_square_crop(image)
+
+    assert cropped.size == (4, 4)
+    assert cropped.getpixel((0, 2))[:3] == (20, 250, 20)
+    assert cropped.getpixel((3, 2))[:3] == (20, 250, 20)
+
+
 def test_generate_fit_overlay_and_color_match(tmp_path: Path):
     cover = tmp_path / "cover.jpg"
     ill = tmp_path / "ill.png"

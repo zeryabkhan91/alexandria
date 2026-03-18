@@ -8,6 +8,24 @@ from PIL import Image
 from src import protrusion_overlay as po
 
 
+def test_apply_shared_protrusion_overlay_is_disabled_by_default(tmp_path: Path) -> None:
+    overlay_path = tmp_path / "frame.png"
+    Image.new("RGB", (20, 20), (250, 220, 40)).save(overlay_path, format="PNG")
+
+    base = Image.new("RGB", (100, 100), (20, 30, 80))
+    result, details = po.apply_shared_protrusion_overlay(
+        image=base,
+        center_x=50,
+        center_y=50,
+        cover_size=(100, 100),
+        overlay_path=overlay_path,
+    )
+
+    assert details["applied"] is False
+    assert details["reason"] == "disabled"
+    assert result.tobytes() == base.tobytes()
+
+
 def test_apply_shared_protrusion_overlay_centers_and_masks_black_background(tmp_path: Path, monkeypatch) -> None:
     overlay_path = tmp_path / "frame.png"
     overlay = Image.new("RGB", (20, 40), (0, 0, 0))
@@ -20,6 +38,7 @@ def test_apply_shared_protrusion_overlay_centers_and_masks_black_background(tmp_
     overlay.save(overlay_path, format="PNG")
 
     monkeypatch.setattr(po.frame_geometry, "is_standard_medallion_cover", lambda _size: True)
+    monkeypatch.setattr(po, "ENABLE_SHARED_PROTRUSION_OVERLAY", True)
     monkeypatch.setattr(
         po.frame_geometry,
         "resolve_standard_medallion_geometry",

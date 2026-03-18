@@ -18,11 +18,9 @@ import pikepdf
 from PIL import Image, ImageOps
 
 try:
-    from src import art_focus
     from src import frame_geometry
     from src import protrusion_overlay
 except ModuleNotFoundError:  # pragma: no cover
-    import art_focus  # type: ignore
     import frame_geometry  # type: ignore
     import protrusion_overlay  # type: ignore
 
@@ -298,6 +296,7 @@ def _resolve_target_radii(
                 int(expected_output_size[1]),
             )
             inner, outer = frame_geometry.template_geometry_to_im0(mapping, expected_output_size)
+            effective_radius = int(inner)
             logger.info(
                 "PDF swap radii: source=%s mode=template_mapping expected_output_size=%s im0_center=(%.2f,%.2f) jpg_scale=%.6f hole_radius=%d art_radius=%d",
                 source_pdf_path.name,
@@ -305,10 +304,10 @@ def _resolve_target_radii(
                 float(mapping["im0_cx"]),
                 float(mapping["im0_cy"]),
                 float(frame_geometry.average_jpg_scale(mapping)),
-                int(inner),
-                int(outer),
+                effective_radius,
+                effective_radius,
             )
-            return inner, outer
+            return effective_radius, effective_radius
         except Exception as exc:
             logger.warning("Template radius mapping failed for %s: %s", source_pdf_path.name, exc)
 
@@ -334,11 +333,14 @@ def _load_ai_art(
 ) -> Image.Image:
     with Image.open(ai_art_path) as source:
         prepared = _strip_border(source.convert("RGB"), border_trim_ratio=border_trim_ratio)
-        fitted, fit_details = art_focus.fit_image(
+        fitted = ImageOps.fit(
             prepared,
             size,
-            mode=mode,
+            method=Image.LANCZOS,
+            centering=(0.5, 0.5),
         )
+        if fitted.mode != mode:
+            fitted = fitted.convert(mode)
         logger.info(
             "PDF swap art fit: ai_art=%s source=%dx%d prepared=%dx%d target=%dx%d centering=(%.4f,%.4f) focus=(%.4f,%.4f) confidence=%.6f",
             ai_art_path.name,
@@ -348,11 +350,11 @@ def _load_ai_art(
             int(prepared.size[1]),
             int(size[0]),
             int(size[1]),
-            float(fit_details.get("centering_x", 0.5)),
-            float(fit_details.get("centering_y", 0.5)),
-            float(fit_details.get("focus_x", 0.5)),
-            float(fit_details.get("focus_y", 0.5)),
-            float(fit_details.get("confidence", 0.0)),
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.0,
         )
         return fitted
 

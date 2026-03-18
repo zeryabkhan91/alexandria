@@ -22,14 +22,12 @@ except ImportError as exc:  # pragma: no cover
     raise RuntimeError("pikepdf is required for PDF compositor") from exc
 
 try:
-    from src import art_focus
     from src import config
     from src import frame_geometry
     from src import protrusion_overlay
     from src import safe_json
     from src.logger import get_logger
 except ModuleNotFoundError:  # pragma: no cover
-    import art_focus  # type: ignore
     import config  # type: ignore
     import frame_geometry  # type: ignore
     import protrusion_overlay  # type: ignore
@@ -334,10 +332,11 @@ def _load_ai_art_rgb(*, ai_art_path: Path, width: int, height: int) -> Image.Ima
             trim_y = int(round(src_h * AI_ART_EDGE_TRIM_RATIO / 2.0))
             if (src_w - 2 * trim_x) >= 64 and (src_h - 2 * trim_y) >= 64:
                 rgb_source = rgb_source.crop((trim_x, trim_y, src_w - trim_x, src_h - trim_y))
-        rgb, fit_details = art_focus.fit_image(
+        rgb = ImageOps.fit(
             rgb_source,
             (int(width), int(height)),
-            mode="RGB",
+            method=Image.LANCZOS,
+            centering=(0.5, 0.5),
         )
         logger.info(
             "JPG compositor art fit: ai_art=%s source=%dx%d prepared=%dx%d target=%dx%d centering=(%.4f,%.4f) focus=(%.4f,%.4f) confidence=%.6f",
@@ -348,11 +347,11 @@ def _load_ai_art_rgb(*, ai_art_path: Path, width: int, height: int) -> Image.Ima
             int(rgb_source.size[1]),
             int(width),
             int(height),
-            float(fit_details.get("centering_x", 0.5)),
-            float(fit_details.get("centering_y", 0.5)),
-            float(fit_details.get("focus_x", 0.5)),
-            float(fit_details.get("focus_y", 0.5)),
-            float(fit_details.get("confidence", 0.0)),
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.0,
         )
         return rgb.convert("RGB")
 
@@ -609,8 +608,8 @@ def composite_cover_pdf(
     )
 
     if geometry is not None:
-        art_radius = int(geometry.art_clip_radius)
-        hole_radius = int(geometry.frame_hole_radius)
+        hole_radius = max(20, int(geometry.frame_hole_radius))
+        art_radius = hole_radius
         art_diameter = max(2, art_radius * 2)
         new_art = _load_ai_art_rgb(ai_art_path=art_path, width=art_diameter, height=art_diameter)
         center_x = int(geometry.center_x)
@@ -635,7 +634,7 @@ def composite_cover_pdf(
             height=int(base_roi.shape[0]),
             center_x=local_center_x,
             center_y=local_center_y,
-            inner_radius=hole_radius,
+            inner_radius=art_radius,
             outer_radius=art_radius,
         )
         strict_mask = _load_strict_window_mask((jpg_w, jpg_h))

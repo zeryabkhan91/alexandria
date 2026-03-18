@@ -53,4 +53,4 @@ def test_resolve_target_radii_uses_shared_template_geometry(monkeypatch: pytest.
     )
 
     assert inner == 910
-    assert outer == 1010
+    assert outer == 910

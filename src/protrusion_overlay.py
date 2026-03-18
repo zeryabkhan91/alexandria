@@ -21,6 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover
 logger = get_logger(__name__)
 
 SHARED_PROTRUSION_OVERLAY_PATH = config.CONFIG_DIR / "frame_overlays" / "Frame_514868_frame.png"
+ENABLE_SHARED_PROTRUSION_OVERLAY = False
 BACKGROUND_THRESHOLD = 4.0
 COMPONENT_ROW_GAP_PX = 12
 COMPONENT_MIN_ROWS = 8
@@ -115,6 +116,17 @@ def apply_shared_protrusion_overlay(
         "scale": 0.0,
         "components": [],
     }
+
+    if not ENABLE_SHARED_PROTRUSION_OVERLAY:
+        details["reason"] = "disabled"
+        logger.info(
+            "Shared protrusion overlay skipped: reason=%s cover_size=%s center=(%d,%d)",
+            details["reason"],
+            target_size,
+            int(center_x),
+            int(center_y),
+        )
+        return image, details
 
     if not frame_geometry.is_standard_medallion_cover(target_size):
         details["reason"] = "non_standard_cover"
