@@ -448,6 +448,23 @@ def _paste_centered_art(
     canvas[dst_y1:dst_y2, dst_x1:dst_x2] = art_arr[src_y1:src_y2, src_x1:src_x2]
 
 
+def _roi_bounds_for_radius(
+    *,
+    width: int,
+    height: int,
+    center_x: int,
+    center_y: int,
+    radius: int,
+) -> tuple[int, int, int, int, int, int]:
+    left = max(0, int(round(center_x - radius)))
+    top = max(0, int(round(center_y - radius)))
+    right = min(width, int(round(center_x + radius)))
+    bottom = min(height, int(round(center_y + radius)))
+    local_center_x = int(center_x - left)
+    local_center_y = int(center_y - top)
+    return left, top, right, bottom, local_center_x, local_center_y
+
+
 def _compute_ring_integrity_metrics(
     *,
     original_arr: np.ndarray,
@@ -457,14 +474,35 @@ def _compute_ring_integrity_metrics(
     art_clip_radius: int,
 ) -> dict[str, float]:
     h, w = original_arr.shape[:2]
-    yy, xx = np.ogrid[:h, :w]
-    dist = np.sqrt((xx - float(center_x)) ** 2 + (yy - float(center_y)) ** 2)
-    ring = (dist >= float(art_clip_radius) + 8.0) & (dist <= float(art_clip_radius) + 60.0)
+    ring_inner = max(0, int(art_clip_radius) + 8)
+    ring_outer = max(ring_inner, int(art_clip_radius) + 60)
+    left, top, right, bottom, local_center_x, local_center_y = _roi_bounds_for_radius(
+        width=w,
+        height=h,
+        center_x=int(center_x),
+        center_y=int(center_y),
+        radius=ring_outer,
+    )
+    if left >= right or top >= bottom:
+        return {"ring_changed_pct": 0.0, "ring_mean_delta": 0.0}
+
+    original_roi = original_arr[top:bottom, left:right]
+    composited_roi = composited_arr[top:bottom, left:right]
+    if original_roi.size <= 0 or composited_roi.size <= 0:
+        return {"ring_changed_pct": 0.0, "ring_mean_delta": 0.0}
+
+    yy, xx = np.ogrid[: original_roi.shape[0], : original_roi.shape[1]]
+    dist2 = ((xx - local_center_x) ** 2) + ((yy - local_center_y) ** 2)
+    ring = (dist2 >= (ring_inner * ring_inner)) & (dist2 <= (ring_outer * ring_outer))
     if not np.any(ring):
         return {"ring_changed_pct": 0.0, "ring_mean_delta": 0.0}
 
-    diff = np.abs(composited_arr.astype(np.float32) - original_arr.astype(np.float32)).max(axis=2)
-    ring_diff = diff[ring]
+    original_ring = original_roi[ring].astype(np.int16, copy=False)
+    composited_ring = composited_roi[ring].astype(np.int16, copy=False)
+    if original_ring.size <= 0 or composited_ring.size <= 0:
+        return {"ring_changed_pct": 0.0, "ring_mean_delta": 0.0}
+
+    ring_diff = np.abs(composited_ring - original_ring).max(axis=1)
     if ring_diff.size <= 0:
         return {"ring_changed_pct": 0.0, "ring_mean_delta": 0.0}
     changed_pct = 100.0 * float(np.sum(ring_diff > RING_PIXEL_DELTA_THRESHOLD)) / float(ring_diff.size)
@@ -535,12 +573,11 @@ def composite_cover_pdf(
     # --- Step 2: Open original JPG ---
     base_jpg = Image.open(jpg_path).convert("RGB")
     jpg_w, jpg_h = base_jpg.size
+    base_arr_u8 = np.asarray(base_jpg, dtype=np.uint8)
 
     # --- Step 3: Map Im0 coordinates to JPG space ---
     mapping = _im0_to_jpg_mapping(transform, jpg_w, jpg_h)
 
-    base_arr = np.asarray(base_jpg, dtype=np.float32)
-    result_arr = base_arr.copy()
     overlay_source = "im0_scaled_blend"
     placement_source = "im0_mapping"
     geometry_path = "im0_mapping"
@@ -560,55 +597,77 @@ def composite_cover_pdf(
         hole_radius = int(geometry.frame_hole_radius)
         art_diameter = max(2, art_radius * 2)
         new_art = _load_ai_art_rgb(ai_art_path=art_path, width=art_diameter, height=art_diameter)
-        art_canvas = np.zeros_like(base_arr)
+        center_x = int(geometry.center_x)
+        center_y = int(geometry.center_y)
+        left, top, right, bottom, local_center_x, local_center_y = _roi_bounds_for_radius(
+            width=jpg_w,
+            height=jpg_h,
+            center_x=center_x,
+            center_y=center_y,
+            radius=art_radius,
+        )
+        base_roi = np.asarray(base_jpg.crop((left, top, right, bottom)), dtype=np.float32)
+        art_canvas = np.zeros_like(base_roi)
         _paste_centered_art(
             canvas=art_canvas,
             art_arr=np.asarray(new_art, dtype=np.float32),
-            center_x=int(geometry.center_x),
-            center_y=int(geometry.center_y),
+            center_x=local_center_x,
+            center_y=local_center_y,
         )
         mask = _build_radial_blend_mask(
-            width=jpg_w,
-            height=jpg_h,
-            center_x=geometry.center_x,
-            center_y=geometry.center_y,
+            width=int(base_roi.shape[1]),
+            height=int(base_roi.shape[0]),
+            center_x=local_center_x,
+            center_y=local_center_y,
             inner_radius=hole_radius,
             outer_radius=art_radius,
         )
         strict_mask = _load_strict_window_mask((jpg_w, jpg_h))
         if strict_mask is not None:
             strict_mask_used = True
-            strict_mask_coverage = float(strict_mask.mean())
-            mask = np.minimum(mask, strict_mask)
+            strict_mask_roi = strict_mask[top:bottom, left:right]
+            strict_mask_coverage = float(strict_mask_roi.mean())
+            mask = np.minimum(mask, strict_mask_roi)
         logger.info(
-            "JPG compositor geometry: book=%s path=%s center=(%d,%d) hole_radius=%d art_radius=%d strict_mask=%s strict_mask_coverage=%.6f regions_path=%s",
+            "JPG compositor geometry: book=%s path=%s center=(%d,%d) hole_radius=%d art_radius=%d roi=(%d,%d,%d,%d) roi_size=%dx%d strict_mask=%s strict_mask_coverage=%.6f regions_path=%s",
             int(book_number or 0),
             geometry_path,
-            int(geometry.center_x),
-            int(geometry.center_y),
+            center_x,
+            center_y,
             int(hole_radius),
             int(art_radius),
+            int(left),
+            int(top),
+            int(right),
+            int(bottom),
+            int(base_roi.shape[1]),
+            int(base_roi.shape[0]),
             "yes" if strict_mask_used else "no",
             float(strict_mask_coverage),
             resolved_regions_path,
         )
         mask_3ch = mask[:, :, np.newaxis]
-        result_arr = (art_canvas * mask_3ch) + (base_arr * (1.0 - mask_3ch))
-        center_x = int(geometry.center_x)
-        center_y = int(geometry.center_y)
+        blended_roi = (art_canvas * mask_3ch) + (base_roi * (1.0 - mask_3ch))
+        result_img = base_jpg.copy()
+        result_img.paste(
+            Image.fromarray(np.clip(blended_roi, 0, 255).astype(np.uint8), "RGB"),
+            (left, top),
+        )
         placement_width = art_diameter
         placement_height = art_diameter
         overlay_source = "region_window_mask_blend" if strict_mask_used else "region_circle_blend"
         placement_source = geometry_path
         validation_metrics = _compute_ring_integrity_metrics(
-            original_arr=base_arr,
-            composited_arr=result_arr,
+            original_arr=base_arr_u8,
+            composited_arr=np.asarray(result_img, dtype=np.uint8),
             center_x=center_x,
             center_y=center_y,
             art_clip_radius=art_radius,
         )
         validation_art_radius = int(art_radius)
     else:
+        base_arr = np.asarray(base_jpg, dtype=np.float32)
+        result_arr = base_arr.copy()
         im0_region_w = int(round(mapping["im0_w_jpg"]))
         im0_region_h = int(round(mapping["im0_h_jpg"]))
         im0_cx = mapping["im0_cx"]
@@ -674,10 +733,9 @@ def composite_cover_pdf(
             art_clip_radius=max(20, int(round(outer_r))),
         )
         validation_art_radius = max(20, int(round(outer_r)))
+        result_img = Image.fromarray(np.clip(result_arr, 0, 255).astype(np.uint8), "RGB")
 
     # --- Step 6: Save result ---
-    result_img = Image.fromarray(np.clip(result_arr, 0, 255).astype(np.uint8), "RGB")
-
     # Ensure expected dimensions
     if result_img.size != EXPECTED_JPG_SIZE:
         result_img = result_img.resize(EXPECTED_JPG_SIZE, Image.LANCZOS)
@@ -704,9 +762,9 @@ def composite_cover_pdf(
         protrusion_details.get("components", []),
     )
 
-    final_arr = np.asarray(result_img, dtype=np.float32)
+    final_arr = np.asarray(result_img, dtype=np.uint8)
     validation_metrics = _compute_ring_integrity_metrics(
-        original_arr=base_arr,
+        original_arr=base_arr_u8,
         composited_arr=final_arr,
         center_x=center_x,
         center_y=center_y,
