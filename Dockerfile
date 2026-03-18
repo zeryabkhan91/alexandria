@@ -14,7 +14,8 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOST=0.0.0.0 \
-    PORT=8001
+    PORT=8001 \
+    JOB_WORKERS=1
 
 WORKDIR /app
 
