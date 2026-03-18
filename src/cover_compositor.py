@@ -19,10 +19,14 @@ from PIL import Image, ImageDraw
 
 try:
     from src import config
+    from src import frame_geometry
+    from src import protrusion_overlay
     from src import safe_json
     from src.logger import get_logger
 except ModuleNotFoundError:  # pragma: no cover
     import config  # type: ignore
+    import frame_geometry  # type: ignore
+    import protrusion_overlay  # type: ignore
     import safe_json  # type: ignore
     from logger import get_logger  # type: ignore
 
@@ -51,8 +55,8 @@ TEMPLATE_PUNCH_RADIUS = 465
 TEMPLATE_FALLBACK_PUNCH_RADIUS = 420
 TEMPLATE_SUPERSAMPLE_FACTOR = 4
 ART_BLEED_PX = 140
-FRAME_HOLE_RADIUS = 540
-ART_CLIP_RADIUS = 600
+FRAME_HOLE_RADIUS = frame_geometry.BASE_FRAME_HOLE_RADIUS
+ART_CLIP_RADIUS = frame_geometry.BASE_ART_CLIP_RADIUS
 NAVY_FILL_RGB = (21, 32, 76)
 FRAME_MASK_PATH = Path(__file__).resolve().parent.parent / "config" / "frame_mask.png"
 FRAME_OVERLAY_DIR = Path(__file__).resolve().parent.parent / "config" / "frame_overlays"
@@ -87,6 +91,14 @@ def _geometry_cache_key(cover_path: Path) -> str:
 
 def _fallback_geometry_for_cover(*, cover: Image.Image, region: "Region") -> dict[str, int]:
     width, height = cover.size
+    if frame_geometry.is_standard_medallion_cover((width, height)):
+        template = frame_geometry.resolve_standard_medallion_geometry((width, height))
+        return {
+            "center_x": int(template.center_x),
+            "center_y": int(template.center_y),
+            "outer_radius": int(template.art_clip_radius),
+            "opening_radius": int(template.frame_hole_radius),
+        }
     if width == FALLBACK_COVER_WIDTH and height == FALLBACK_COVER_HEIGHT:
         center_x = FALLBACK_CENTER_X
         center_y = FALLBACK_CENTER_Y
@@ -305,6 +317,25 @@ def _detect_medallion_geometry(*, cover: Image.Image, region: Region) -> dict[st
 
 
 def _resolve_medallion_geometry(*, cover: Image.Image, cover_path: Path, region: Region) -> dict[str, int]:
+    if frame_geometry.is_standard_medallion_cover(cover.size):
+        template = frame_geometry.resolve_standard_medallion_geometry(cover.size)
+        payload = {
+            "center_x": int(template.center_x),
+            "center_y": int(template.center_y),
+            "outer_radius": int(template.art_clip_radius),
+            "opening_radius": int(template.frame_hole_radius),
+        }
+        key = _geometry_cache_key(cover_path)
+        _GEOMETRY_CACHE[key] = dict(payload)
+        logger.info(
+            "Compositor using shared template geometry: cx=%d cy=%d outer=%d opening=%d",
+            payload["center_x"],
+            payload["center_y"],
+            payload["outer_radius"],
+            payload["opening_radius"],
+        )
+        return payload
+
     if region.center_x > 0 and region.center_y > 0 and region.radius > 0:
         outer = int(max(20, region.radius))
         min_open, max_open = _dynamic_opening_bounds(*cover.size)
@@ -722,6 +753,19 @@ def composite_single(
     rendered_by_pdf_swap = False
     pdf_source: Path | None = source_pdf_path
 
+    logger.info(
+        "Cover compositor start: cover=%s illustration=%s output=%s region_type=%s center=(%d,%d) radius=%d source_pdf=%s strict_window_mask=%s",
+        cover_path,
+        illustration_path,
+        output_path,
+        region_obj.region_type,
+        int(region_obj.center_x),
+        int(region_obj.center_y),
+        int(region_obj.radius),
+        str(pdf_source) if pdf_source is not None else "none",
+        "yes" if strict_window_mask is not None else "no",
+    )
+
     if region_obj.region_type == "rectangle" and region_obj.rect_bbox is not None:
         full_overlay = Image.new("RGBA", (cover_w, cover_h), (0, 0, 0, 0))
         x1, y1, x2, y2 = region_obj.rect_bbox
@@ -767,24 +811,48 @@ def composite_single(
                 from pdf_swap_compositor import composite_via_pdf_swap  # type: ignore
 
             try:
+                logger.info(
+                    "Cover compositor attempting PDF swap: cover=%s source_pdf=%s expected_output_size=%s border_trim_ratio=%.4f",
+                    cover_path.name,
+                    pdf_source.name,
+                    (cover_w, cover_h),
+                    float(getattr(runtime, "border_strip_percent", 0.05)),
+                )
                 composite_via_pdf_swap(
                     source_pdf_path=pdf_source,
                     ai_art_path=Path(illustration_path),
                     output_jpg_path=Path(output_path),
                     border_trim_ratio=float(getattr(runtime, "border_strip_percent", 0.05)),
                     expected_output_size=(cover_w, cover_h),
+                    overlay_center=(int(region_obj.center_x), int(region_obj.center_y)),
                 )
                 with Image.open(output_path) as rendered:
                     composited_rgb = rendered.convert("RGB")
                 rendered_by_pdf_swap = True
+                if frame_geometry.is_standard_medallion_cover((cover_w, cover_h)):
+                    template = frame_geometry.resolve_standard_medallion_geometry((cover_w, cover_h))
+                    validation_radius = int(template.frame_hole_radius)
+                    validation_center_x = int(template.center_x)
+                    validation_center_y = int(template.center_y)
+                else:
+                    validation_radius = max(20, TEMPLATE_PUNCH_RADIUS)
+                    validation_center_x = FALLBACK_CENTER_X
+                    validation_center_y = FALLBACK_CENTER_Y
                 validation_region = Region(
-                    center_x=FALLBACK_CENTER_X,
-                    center_y=FALLBACK_CENTER_Y,
-                    radius=max(20, TEMPLATE_PUNCH_RADIUS),
+                    center_x=validation_center_x,
+                    center_y=validation_center_y,
+                    radius=validation_radius,
                     frame_bbox=region_obj.frame_bbox,
                     region_type="circle",
                 )
-                logger.info("PDF swap composite succeeded for %s using %s", cover_path.name, pdf_source.name)
+                logger.info(
+                    "Cover compositor PDF swap succeeded: cover=%s source_pdf=%s validation_center=(%d,%d) validation_radius=%d",
+                    cover_path.name,
+                    pdf_source.name,
+                    int(validation_center_x),
+                    int(validation_center_y),
+                    int(validation_radius),
+                )
             except Exception as exc:
                 logger.warning(
                     "PDF swap failed for %s with %s: %s; falling back to legacy compositor",
@@ -796,8 +864,26 @@ def composite_single(
         if not rendered_by_pdf_swap:
             # ── RGBA Frame-Overlay Compositing ─────────────────────────
             # Three layers: canvas -> art -> RGBA overlay (frame painted LAST).
-            center_x = FALLBACK_CENTER_X
-            center_y = FALLBACK_CENTER_Y
+            if frame_geometry.is_standard_medallion_cover((cover_w, cover_h)):
+                template = frame_geometry.resolve_standard_medallion_geometry((cover_w, cover_h))
+                center_x = int(template.center_x)
+                center_y = int(template.center_y)
+                template_frame_hole_radius = int(template.frame_hole_radius)
+                template_art_clip_radius = int(template.art_clip_radius)
+            else:
+                center_x = FALLBACK_CENTER_X
+                center_y = FALLBACK_CENTER_Y
+                template_frame_hole_radius = FRAME_HOLE_RADIUS
+                template_art_clip_radius = ART_CLIP_RADIUS
+
+            logger.info(
+                "Cover compositor RGBA fallback geometry: cover=%s center=(%d,%d) frame_hole_radius=%d art_clip_radius=%d",
+                cover_path.name,
+                int(center_x),
+                int(center_y),
+                int(template_frame_hole_radius),
+                int(template_art_clip_radius),
+            )
 
             # Always use the deterministic fallback overlay for medallion compositing.
             # Cached extracted overlays can carry stale alpha artifacts that damage
@@ -806,19 +892,25 @@ def composite_single(
                 cover=cover,
                 center_x=center_x,
                 center_y=center_y,
-                punch_radius=TEMPLATE_PUNCH_RADIUS,
+                punch_radius=template_frame_hole_radius,
             )
 
             fill_rgb = _sample_cover_background(
                 cover=cover,
                 center_x=center_x,
                 center_y=center_y,
-                outer_radius=FALLBACK_RADIUS,
+                outer_radius=template_art_clip_radius,
+            )
+            logger.info(
+                "Cover compositor RGBA fallback fill: cover=%s fill_rgb=%s art_radius=%d",
+                cover_path.name,
+                fill_rgb,
+                int(template_art_clip_radius),
             )
 
             canvas = Image.new("RGBA", (cover_w, cover_h), (*fill_rgb, 255))
 
-            art_radius = ART_CLIP_RADIUS  # 600
+            art_radius = template_art_clip_radius
             art_diameter = art_radius * 2  # 1200
             art = _simple_center_crop(illustration)
             art = art.resize((art_diameter, art_diameter), Image.LANCZOS)
@@ -845,6 +937,27 @@ def composite_single(
             result = Image.alpha_composite(canvas, art_layer)
             result = Image.alpha_composite(result, frame_overlay)
             composited_rgb = result.convert("RGB")
+            composited_rgb, protrusion_details = protrusion_overlay.apply_shared_protrusion_overlay(
+                image=composited_rgb,
+                center_x=int(center_x),
+                center_y=int(center_y),
+                cover_size=(cover_w, cover_h),
+            )
+            logger.info(
+                "Cover compositor protrusion overlay: cover=%s applied=%s reason=%s overlay_size=%dx%d paste=(%d,%d) requested_center=(%d,%d) applied_center=(%d,%d) components=%s",
+                cover_path.name,
+                "yes" if protrusion_details.get("applied") else "no",
+                str(protrusion_details.get("reason", "")),
+                int(protrusion_details.get("overlay_width", 0)),
+                int(protrusion_details.get("overlay_height", 0)),
+                int(protrusion_details.get("paste_x", 0)),
+                int(protrusion_details.get("paste_y", 0)),
+                int(center_x),
+                int(center_y),
+                int(protrusion_details.get("applied_center_x", center_x)),
+                int(protrusion_details.get("applied_center_y", center_y)),
+                protrusion_details.get("components", []),
+            )
 
             _orig_arr = np.array(cover, dtype=np.float32)
             _comp_arr = np.array(composited_rgb, dtype=np.float32)
@@ -880,7 +993,7 @@ def composite_single(
             validation_region = Region(
                 center_x=center_x,
                 center_y=center_y,
-                radius=max(20, TEMPLATE_PUNCH_RADIUS),
+                radius=max(20, template_frame_hole_radius),
                 frame_bbox=region_obj.frame_bbox,
                 region_type="circle",
             )
@@ -910,6 +1023,14 @@ def composite_single(
             **validation.to_dict(),
             "validated_at": datetime.now(timezone.utc).isoformat(),
         },
+    )
+    logger.info(
+        "Cover compositor validation: output=%s rendered_by_pdf_swap=%s valid=%s issues=%s metrics=%s",
+        output_path,
+        "yes" if rendered_by_pdf_swap else "no",
+        "yes" if validation.valid else "no",
+        ",".join(validation.issues) if validation.issues else "none",
+        validation.metrics,
     )
     if not validation.valid:
         logger.warning("Composite validation issues for %s: %s", output_path, ", ".join(validation.issues))
@@ -1122,6 +1243,17 @@ def _validate_pdf_swap_output(
     frame_pixels_ok = bool(checks.get("frame_pixels", {}).get("pass", False))
     if not frame_pixels_ok and "frame_pixels_changed" not in issues:
         issues.append("frame_pixels_changed")
+
+    logger.info(
+        "PDF swap verification summary: output=%s overall_pass=%s issues=%s dpi=(%.3f,%.3f) file_size_kb=%.2f checks_failed=%s",
+        output_path,
+        "yes" if bool(result.get("overall_pass", False) and dpi_ok and file_size_ok) else "no",
+        ",".join(issues) if issues else "none",
+        float(dpi_x),
+        float(dpi_y),
+        float(file_size_kb),
+        ",".join(sorted(issues)) if issues else "none",
+    )
 
     return CompositeValidation(
         output_path=str(output_path),

@@ -1996,6 +1996,98 @@ def _persist_composite_image(
         return None
 
 
+def _copy_composite_companions(*, composite_source: Path, composite_dest: Path) -> None:
+    for suffix in (".pdf", ".ai"):
+        source_companion = _resolve_composited_companion(composite_source, suffix)
+        if source_companion is None or not source_companion.exists():
+            continue
+        shutil.copy2(str(source_companion), str(composite_dest.with_suffix(suffix)))
+
+
+def _persist_composite_candidate_for_row(
+    *,
+    runtime: config.Config,
+    row: dict[str, Any],
+    destination: Path | None = None,
+) -> Path | None:
+    image_source = _project_path_if_exists(row.get("image_path"))
+    if image_source is None:
+        return None
+    candidate = _resolve_composited_candidate(image_source, runtime=runtime)
+    if candidate is None or not candidate.exists():
+        return None
+
+    book_number = _safe_int(row.get("book_number"), 0)
+    variant = _safe_int(row.get("variant"), 0)
+    if book_number <= 0 or variant <= 0:
+        return None
+
+    model_token = str(row.get("model", "unknown") or "unknown").replace("/", "_").replace(" ", "_")
+    job_token = _generation_artifact_job_token(row=row)
+    raw_art = _resolve_durable_raw_image_path(runtime=runtime, row=row)
+    raw_art_path_token = str(row.get("raw_art_path", "") or "").strip()
+
+    logger.info(
+        "Saved composite candidate found: book=%s variant=%s model=%s candidate=%s destination=%s raw_art=%s",
+        int(book_number),
+        int(variant),
+        model_token,
+        candidate,
+        destination if destination is not None else "(auto)",
+        raw_art if raw_art is not None else "none",
+    )
+
+    if destination is None:
+        persisted_rel = _persist_composite_image(
+            runtime=runtime,
+            book_number=book_number,
+            variant=variant,
+            model_token=model_token,
+            composite_source=candidate,
+            job_token=job_token,
+            raw_art_source=raw_art,
+            raw_art_path_token=raw_art_path_token,
+        )
+        if not persisted_rel:
+            return None
+        persisted_path = PROJECT_ROOT / str(persisted_rel)
+    else:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(candidate), str(destination))
+        _copy_composite_companions(composite_source=candidate, composite_dest=destination)
+        _write_saved_composite_manifest(
+            composite_path=destination,
+            job_token=job_token,
+            book_number=book_number,
+            variant=variant,
+            model_token=model_token,
+            raw_art_source=raw_art,
+            raw_art_path_token=raw_art_path_token,
+        )
+        persisted_path = destination
+
+    logger.info(
+        "Saved composite persisted from candidate: book=%s variant=%s model=%s source=%s persisted=%s companions_pdf=%s companions_ai=%s",
+        int(book_number),
+        int(variant),
+        model_token,
+        candidate,
+        persisted_path,
+        "yes" if persisted_path.with_suffix(".pdf").exists() else "no",
+        "yes" if persisted_path.with_suffix(".ai").exists() else "no",
+    )
+
+    row["saved_composited_path"] = _to_project_relative(persisted_path)
+    row["composited_path"] = _to_project_relative(persisted_path)
+    pdf_candidate = persisted_path.with_suffix(".pdf")
+    if pdf_candidate.exists():
+        row["composited_pdf_path"] = _to_project_relative(pdf_candidate)
+    ai_candidate = persisted_path.with_suffix(".ai")
+    if ai_candidate.exists():
+        row["composited_ai_path"] = _to_project_relative(ai_candidate)
+    return persisted_path
+
+
 def _saved_composite_manifest_path(composite_path: Path) -> Path:
     return Path(f"{composite_path}.manifest.json")
 
@@ -2101,6 +2193,61 @@ def _rebuild_saved_composite_from_raw_art(*, runtime: config.Config, row: dict[s
         catalog_path=runtime.book_catalog_path,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Saved composite rebuild start: book=%s variant=%s raw_art=%s cover=%s source_pdf=%s output=%s region=%s",
+        int(book_number),
+        int(variant),
+        raw_art,
+        cover_path,
+        source_pdf if source_pdf is not None else "none",
+        output_path,
+        region,
+    )
+    if source_pdf is not None:
+        source_jpg = pdf_compositor.find_source_jpg_for_book(
+            input_dir=runtime.input_dir,
+            book_number=book_number,
+            catalog_path=runtime.book_catalog_path,
+        )
+        if source_jpg is not None and source_jpg.exists():
+            try:
+                result = pdf_compositor.composite_cover_pdf(
+                    source_pdf_path=str(source_pdf),
+                    ai_art_path=str(raw_art),
+                    output_pdf_path=str(output_path.with_suffix(".pdf")),
+                    output_jpg_path=str(output_path),
+                    output_ai_path=str(output_path.with_suffix(".ai")),
+                    source_jpg_path=str(source_jpg),
+                    book_number=book_number,
+                    regions_path=config.cover_regions_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir),
+                )
+                _write_saved_composite_manifest(
+                    composite_path=output_path,
+                    job_token=_generation_artifact_job_token(row=row),
+                    book_number=book_number,
+                    variant=variant,
+                    model_token=str(row.get("model", "unknown") or "unknown").replace("/", "_").replace(" ", "_"),
+                    raw_art_source=raw_art,
+                    raw_art_path_token=str(row.get("raw_art_path", "") or "").strip(),
+                )
+                logger.info(
+                    "Saved composite rebuild completed via JPG compositor: book=%s variant=%s output=%s valid=%s issues=%s placement_source=%s overlay_source=%s",
+                    int(book_number),
+                    int(variant),
+                    output_path,
+                    "yes" if bool(result.get("valid", False)) else "no",
+                    ",".join(result.get("issues", [])) if isinstance(result.get("issues"), list) and result.get("issues") else "none",
+                    str(result.get("placement_source", "") or ""),
+                    str(result.get("overlay_source", "") or ""),
+                )
+                return output_path
+            except Exception as exc:
+                logger.warning(
+                    "JPG compositor rebuild failed for book %s variant %s; falling back to cover compositor: %s",
+                    book_number,
+                    variant,
+                    exc,
+                )
     rebuilt = cover_compositor.composite_single(
         cover_path=cover_path,
         illustration_path=raw_art,
@@ -2117,6 +2264,13 @@ def _rebuild_saved_composite_from_raw_art(*, runtime: config.Config, row: dict[s
         raw_art_source=raw_art,
         raw_art_path_token=str(row.get("raw_art_path", "") or "").strip(),
     )
+    logger.info(
+        "Saved composite rebuild completed via cover compositor: book=%s variant=%s output=%s source_pdf=%s",
+        int(book_number),
+        int(variant),
+        rebuilt,
+        source_pdf if source_pdf is not None else "none",
+    )
     return rebuilt
 
 
@@ -2124,17 +2278,25 @@ def _ensure_saved_composite_for_row(*, runtime: config.Config, row: dict[str, An
     composite_path = _project_path_if_exists(row.get("saved_composited_path"))
     if composite_path is not None and composite_path.exists():
         if _saved_composite_manifest_matches_row(runtime=runtime, row=row, composite_path=composite_path):
+            logger.info("Saved composite reuse: existing manifest matched for %s", composite_path)
             return composite_path
         if _resolve_durable_raw_image_path(runtime=runtime, row=row) is None:
+            logger.info("Saved composite reuse: existing file retained without raw-art rebuild source for %s", composite_path)
             return composite_path
     destination = composite_path or _saved_composite_destination_for_row(runtime=runtime, row=row)
     if destination is None:
         return composite_path if composite_path is not None and composite_path.exists() else None
+    persisted_candidate = _persist_composite_candidate_for_row(runtime=runtime, row=row, destination=destination)
+    if persisted_candidate is not None and persisted_candidate.exists():
+        logger.info("Saved composite selection: used persisted candidate %s", persisted_candidate)
+        return persisted_candidate
     rebuilt = _rebuild_saved_composite_from_raw_art(runtime=runtime, row=row, output_path=destination)
     if rebuilt is not None and rebuilt.exists():
         row["saved_composited_path"] = _to_project_relative(rebuilt)
+        logger.info("Saved composite selection: used rebuilt composite %s", rebuilt)
         return rebuilt
     if composite_path is not None and composite_path.exists() and _resolve_durable_raw_image_path(runtime=runtime, row=row) is None:
+        logger.info("Saved composite selection: fell back to pre-existing composite %s", composite_path)
         return composite_path
     return None
 
@@ -2694,9 +2856,17 @@ def _execute_generation_payload(
                 book_number=book,
                 catalog_path=runtime.book_catalog_path,
             )
+            logger.info(
+                "Composite stage setup: book=%s source_pdf=%s generated_dir=%s output_dir=%s",
+                int(book),
+                source_pdf if source_pdf is not None else "none",
+                runtime.tmp_dir / "generated" / str(int(book)),
+                runtime.tmp_dir / "composited" / str(int(book)),
+            )
             if source_pdf is not None:
                 _emit_stage("composite", "Compositing generated variants via source PDF...", 0.78)
                 try:
+                    logger.info("Composite stage path: book=%s mode=pdf_compositor", int(book))
                     pdf_compositor.composite_all_variants(
                         book_number=book,
                         input_dir=runtime.input_dir,
@@ -2714,6 +2884,7 @@ def _execute_generation_payload(
 
             if not used_pdf_mode:
                 _emit_stage("composite", "Compositing generated variants via JPG fallback...", 0.78)
+                logger.info("Composite stage path: book=%s mode=cover_compositor_fallback", int(book))
                 cover_compositor.composite_all_variants(
                     book_number=book,
                     input_dir=runtime.input_dir,

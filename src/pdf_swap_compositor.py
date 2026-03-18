@@ -17,9 +17,16 @@ import numpy as np
 import pikepdf
 from PIL import Image, ImageOps
 
+try:
+    from src import frame_geometry
+    from src import protrusion_overlay
+except ModuleNotFoundError:  # pragma: no cover
+    import frame_geometry  # type: ignore
+    import protrusion_overlay  # type: ignore
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_BLEND_RADIUS = 840
+DEFAULT_BLEND_RADIUS = 844
 DEFAULT_FEATHER_PX = 20
 DEFAULT_BORDER_TRIM_RATIO = 0.05
 JPEG_QUALITY = 100
@@ -36,6 +43,7 @@ def composite_via_pdf_swap(
     render_dpi: int = RENDER_DPI,
     border_trim_ratio: float = DEFAULT_BORDER_TRIM_RATIO,
     expected_output_size: tuple[int, int] | None = None,
+    overlay_center: tuple[int, int] | None = None,
 ) -> Path:
     """Swap AI art into ``/Im0`` and render the modified PDF to JPG.
 
@@ -51,6 +59,17 @@ def composite_via_pdf_swap(
         raise FileNotFoundError(f"Source PDF not found: {source_pdf_path}")
     if not ai_art_path.exists():
         raise FileNotFoundError(f"AI art not found: {ai_art_path}")
+
+    logger.info(
+        "PDF swap start: source_pdf=%s ai_art=%s output_jpg=%s requested_outer_radius=%s feather_px=%d render_dpi=%d expected_output_size=%s",
+        source_pdf_path,
+        ai_art_path,
+        output_jpg_path,
+        "auto" if blend_radius is None else int(blend_radius),
+        int(feather_px),
+        int(render_dpi),
+        expected_output_size,
+    )
 
     with pikepdf.Pdf.open(str(source_pdf_path)) as pdf:
         page = pdf.pages[0]
@@ -80,6 +99,15 @@ def composite_via_pdf_swap(
             raise ValueError(
                 f"Decoded /SMask shape mismatch: got {smask_arr.shape}, expected {(height, width)}"
             )
+        logger.info(
+            "PDF swap source geometry: source_pdf=%s im0_size=%dx%d mode=%s bands=%d smask_shape=%s",
+            source_pdf_path.name,
+            int(width),
+            int(height),
+            mode,
+            int(bands),
+            tuple(int(v) for v in smask_arr.shape),
+        )
 
         fitted_art = _load_ai_art(
             ai_art_path=ai_art_path,
@@ -96,13 +124,18 @@ def composite_via_pdf_swap(
             )
 
         safe_outer_radius = detect_blend_radius_from_smask(smask_arr)
-        requested_radius = int(blend_radius) if blend_radius is not None else DEFAULT_BLEND_RADIUS
-        effective_outer_radius = int(requested_radius)
+        target_inner_radius, target_outer_radius = _resolve_target_radii(
+            source_pdf_path=source_pdf_path,
+            smask_arr=smask_arr,
+            expected_output_size=expected_output_size,
+            requested_outer_radius=(int(blend_radius) if blend_radius is not None else None),
+            feather_px=feather_px,
+        )
         art_mask = _build_art_mask(
             width=width,
             height=height,
-            outer_radius=effective_outer_radius,
-            feather_px=feather_px,
+            inner_radius=target_inner_radius,
+            outer_radius=target_outer_radius,
         )
 
         blended = original_arr.copy()
@@ -132,12 +165,47 @@ def composite_via_pdf_swap(
         render_dpi=render_dpi,
         expected_output_size=expected_output_size,
     )
+    with Image.open(output_jpg_path) as rendered:
+        rendered_rgb = rendered.convert("RGB")
+    if overlay_center is None and frame_geometry.is_standard_medallion_cover(rendered_rgb.size):
+        geometry = frame_geometry.resolve_standard_medallion_geometry(rendered_rgb.size)
+        overlay_center = (int(geometry.center_x), int(geometry.center_y))
+    if overlay_center is not None:
+        rendered_rgb, overlay_details = protrusion_overlay.apply_shared_protrusion_overlay(
+            image=rendered_rgb,
+            center_x=int(overlay_center[0]),
+            center_y=int(overlay_center[1]),
+            cover_size=rendered_rgb.size,
+        )
+        rendered_rgb.save(
+            output_jpg_path,
+            format="JPEG",
+            quality=JPEG_QUALITY,
+            subsampling=0,
+            dpi=(render_dpi, render_dpi),
+        )
+        logger.info(
+            "PDF swap protrusion overlay: source=%s applied=%s reason=%s overlay_size=%dx%d paste=(%d,%d) requested_center=(%d,%d) applied_center=(%d,%d) components=%s",
+            source_pdf_path.name,
+            "yes" if overlay_details.get("applied") else "no",
+            str(overlay_details.get("reason", "")),
+            int(overlay_details.get("overlay_width", 0)),
+            int(overlay_details.get("overlay_height", 0)),
+            int(overlay_details.get("paste_x", 0)),
+            int(overlay_details.get("paste_y", 0)),
+            int(overlay_center[0]),
+            int(overlay_center[1]),
+            int(overlay_details.get("applied_center_x", overlay_center[0])),
+            int(overlay_details.get("applied_center_y", overlay_center[1])),
+            overlay_details.get("components", []),
+        )
     logger.info(
-        "PDF swap composite complete: source=%s output=%s safe_radius=%d effective_radius=%d",
+        "PDF swap composite complete: source=%s output=%s safe_radius=%d hole_radius=%d art_radius=%d",
         source_pdf_path.name,
         output_jpg_path,
         safe_outer_radius,
-        effective_outer_radius,
+        target_inner_radius,
+        target_outer_radius,
     )
     return output_jpg_path
 
@@ -147,13 +215,38 @@ def detect_blend_radius_from_smask(smask_arr: np.ndarray) -> int:
 
     if smask_arr.ndim != 2:
         raise ValueError("SMask array must be 2D")
-    return DEFAULT_BLEND_RADIUS
-
-
-def _build_art_mask(*, width: int, height: int, outer_radius: int, feather_px: int) -> np.ndarray:
+    height, width = smask_arr.shape
     center_x = (width - 1) / 2.0
     center_y = (height - 1) / 2.0
-    inner_radius = max(0.0, float(outer_radius) - float(max(0, feather_px)))
+    max_radius = int(min(center_x, center_y))
+    if max_radius <= 0:
+        return DEFAULT_BLEND_RADIUS
+
+    directional_limits: list[int] = []
+    for angle in np.linspace(0.0, np.pi * 2.0, 96, endpoint=False):
+        cos_a = float(np.cos(angle))
+        sin_a = float(np.sin(angle))
+        last_opaque = 0
+        for radius in range(1, max_radius + 1):
+            px = int(np.clip(round(center_x + (cos_a * radius)), 0, width - 1))
+            py = int(np.clip(round(center_y + (sin_a * radius)), 0, height - 1))
+            if int(smask_arr[py, px]) >= 250:
+                last_opaque = radius
+                continue
+            break
+        directional_limits.append(last_opaque)
+
+    candidate = int(np.percentile(np.array(directional_limits, dtype=np.float32), 10))
+    if candidate <= 0:
+        return DEFAULT_BLEND_RADIUS
+    return max(20, int(candidate - 16))
+
+
+def _build_art_mask(*, width: int, height: int, inner_radius: int, outer_radius: int) -> np.ndarray:
+    center_x = (width - 1) / 2.0
+    center_y = (height - 1) / 2.0
+    inner_radius = max(0.0, float(inner_radius))
+    outer_radius = max(inner_radius, float(outer_radius))
 
     yy, xx = np.ogrid[:height, :width]
     dist = np.sqrt((xx - center_x) ** 2 + (yy - center_y) ** 2)
@@ -166,6 +259,68 @@ def _build_art_mask(*, width: int, height: int, outer_radius: int, feather_px: i
         mask[transition] = 1.0 - ((dist[transition] - inner_radius) / span)
 
     return np.clip(mask, 0.0, 1.0)
+
+
+def _resolve_target_radii(
+    *,
+    source_pdf_path: Path,
+    smask_arr: np.ndarray,
+    expected_output_size: tuple[int, int] | None,
+    requested_outer_radius: int | None,
+    feather_px: int,
+) -> tuple[int, int]:
+    if requested_outer_radius is not None:
+        outer = max(20, int(requested_outer_radius))
+        inner = max(20, int(outer - max(0, feather_px)))
+        logger.info(
+            "PDF swap radii: source=%s mode=requested requested_outer=%d feather_px=%d hole_radius=%d art_radius=%d",
+            source_pdf_path.name,
+            int(requested_outer_radius),
+            int(feather_px),
+            int(inner),
+            int(outer),
+        )
+        return inner, outer
+
+    if expected_output_size and frame_geometry.is_standard_medallion_cover(expected_output_size):
+        try:
+            try:
+                from src import pdf_compositor as jpg_pdf_compositor
+            except ModuleNotFoundError:  # pragma: no cover
+                import pdf_compositor as jpg_pdf_compositor  # type: ignore
+
+            transform = jpg_pdf_compositor._extract_im0_transform(source_pdf_path)
+            mapping = jpg_pdf_compositor._im0_to_jpg_mapping(
+                transform,
+                int(expected_output_size[0]),
+                int(expected_output_size[1]),
+            )
+            inner, outer = frame_geometry.template_geometry_to_im0(mapping, expected_output_size)
+            logger.info(
+                "PDF swap radii: source=%s mode=template_mapping expected_output_size=%s im0_center=(%.2f,%.2f) jpg_scale=%.6f hole_radius=%d art_radius=%d",
+                source_pdf_path.name,
+                expected_output_size,
+                float(mapping["im0_cx"]),
+                float(mapping["im0_cy"]),
+                float(frame_geometry.average_jpg_scale(mapping)),
+                int(inner),
+                int(outer),
+            )
+            return inner, outer
+        except Exception as exc:
+            logger.warning("Template radius mapping failed for %s: %s", source_pdf_path.name, exc)
+
+    outer = detect_blend_radius_from_smask(smask_arr)
+    inner = max(20, int(outer - max(0, feather_px)))
+    logger.info(
+        "PDF swap radii: source=%s mode=smask_detected safe_outer_radius=%d feather_px=%d hole_radius=%d art_radius=%d",
+        source_pdf_path.name,
+        int(outer),
+        int(feather_px),
+        int(inner),
+        int(outer),
+    )
+    return inner, outer
 
 
 def _load_ai_art(

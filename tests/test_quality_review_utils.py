@@ -1916,10 +1916,12 @@ def test_hydrate_serialized_result_paths_persists_saved_composite_after_composit
     raw_path = raw_dir / "job-hydrate_variant_1_openrouter_google_gemini-3-pro-image-preview.png"
     Image.new("RGB", (64, 64), (81, 91, 101)).save(raw_path, format="PNG")
 
+    rebuilt = {"called": False}
+
     def _fake_rebuild(*, runtime: config.Config, row: dict[str, Any], output_path: Path) -> Path:
-        del runtime, row
-        Image.new("RGB", (64, 64), (81, 91, 101)).save(output_path, format="PNG")
-        return output_path
+        del runtime, row, output_path
+        rebuilt["called"] = True
+        raise AssertionError("should not rebuild when tmp/composited candidate exists")
 
     monkeypatch.setattr(qr, "_rebuild_saved_composite_from_raw_art", _fake_rebuild)
 
@@ -1939,7 +1941,10 @@ def test_hydrate_serialized_result_paths_persists_saved_composite_after_composit
     )
 
     assert hydrated[0]["saved_composited_path"]
-    assert (qr.PROJECT_ROOT / str(hydrated[0]["saved_composited_path"])).exists()
+    saved_path = qr.PROJECT_ROOT / str(hydrated[0]["saved_composited_path"])
+    assert saved_path.exists()
+    assert rebuilt["called"] is False
+    assert qr._file_sha256(saved_path) == qr._file_sha256(composite_path)
 
 
 def test_hydrate_serialized_result_paths_prefers_verified_saved_composite_over_mutable_tmp(tmp_path: Path):
@@ -2020,10 +2025,9 @@ def test_hydrate_serialized_result_paths_repairs_untrusted_saved_composite_from_
     rebuilt = {"called": False}
 
     def _fake_rebuild(*, runtime: config.Config, row: dict[str, Any], output_path: Path) -> Path:
-        del runtime, row
+        del runtime, row, output_path
         rebuilt["called"] = True
-        Image.new("RGB", (64, 64), (20, 200, 40)).save(output_path, format="PNG")
-        return output_path
+        raise AssertionError("should prefer current tmp/composited candidate over rebuilding from raw art")
 
     monkeypatch.setattr(qr, "_rebuild_saved_composite_from_raw_art", _fake_rebuild)
 
@@ -2044,9 +2048,69 @@ def test_hydrate_serialized_result_paths_repairs_untrusted_saved_composite_from_
 
     assert hydrated[0]["saved_composited_path"] == qr._to_project_relative(saved_path)
     assert hydrated[0]["composited_path"] == qr._to_project_relative(saved_path)
-    assert rebuilt["called"] is True
+    assert rebuilt["called"] is False
     with Image.open(saved_path) as image:
-        assert image.getpixel((0, 0)) == (20, 200, 40)
+        px = image.getpixel((0, 0))
+        assert abs(int(px[0]) - 220) <= 10
+        assert abs(int(px[1]) - 10) <= 10
+        assert abs(int(px[2]) - 10) <= 10
+
+
+def test_rebuild_saved_composite_from_raw_art_prefers_pdf_compositor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg.book_catalog_path.write_text(
+        json.dumps([{"number": 1, "folder_name": "1. Test Book", "title": "Test Book", "author": "A. Writer"}]),
+        encoding="utf-8",
+    )
+    cover_folder = cfg.input_dir / "1. Test Book"
+    cover_folder.mkdir(parents=True, exist_ok=True)
+    cover_jpg = cover_folder / "cover.jpg"
+    cover_pdf = cover_folder / "cover.pdf"
+    Image.new("RGB", (64, 64), (20, 30, 40)).save(cover_jpg, format="JPEG")
+    cover_pdf.write_bytes(b"%PDF-FAKE")
+
+    raw_path = cfg.output_dir / "raw_art" / "1" / "job-pdf_variant_1_openai_gpt-image-1-mini.png"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 64), (90, 120, 150)).save(raw_path, format="PNG")
+
+    monkeypatch.setattr(qr, "_first_local_cover_path", lambda **_kwargs: cover_jpg)
+    monkeypatch.setattr(qr, "_load_json", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(qr.cover_compositor, "_region_for_book", lambda *_args, **_kwargs: {"center_x": 10, "center_y": 10, "radius": 5, "frame_bbox": [0, 0, 20, 20]})
+
+    calls = {"pdf": 0, "cover": 0}
+
+    def _fake_pdf_composite(**kwargs):  # type: ignore[no-untyped-def]
+        calls["pdf"] += 1
+        Image.new("RGB", (64, 64), (11, 144, 211)).save(kwargs["output_jpg_path"], format="JPEG")
+        Path(kwargs["output_pdf_path"]).write_bytes(b"%PDF-OUT")
+        Path(kwargs["output_ai_path"]).write_bytes(b"%AI-OUT")
+        return {"success": True, "valid": True, "issues": [], "validation_metrics": {}}
+
+    def _fake_cover_composite(**kwargs):  # type: ignore[no-untyped-def]
+        calls["cover"] += 1
+        raise AssertionError("cover compositor fallback should not run when pdf_compositor rebuild succeeds")
+
+    monkeypatch.setattr(qr.pdf_compositor, "composite_cover_pdf", _fake_pdf_composite)
+    monkeypatch.setattr(qr.cover_compositor, "composite_single", _fake_cover_composite)
+
+    output_path = cfg.output_dir / "saved_composites" / "1" / "job-pdf_variant_1_openai_gpt-image-1-mini.jpg"
+    rebuilt = qr._rebuild_saved_composite_from_raw_art(
+        runtime=cfg,
+        row={
+            "book_number": 1,
+            "variant": 1,
+            "model": "openai/gpt-image-1-mini",
+            "raw_art_path": qr._to_project_relative(raw_path),
+        },
+        output_path=output_path,
+    )
+
+    assert rebuilt == output_path
+    assert calls["pdf"] == 1
+    assert calls["cover"] == 0
+    assert output_path.exists()
+    assert output_path.with_suffix(".pdf").exists()
+    assert output_path.with_suffix(".ai").exists()
 
 
 def test_save_raw_context_repairs_untrusted_saved_composite_before_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

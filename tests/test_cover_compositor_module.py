@@ -89,6 +89,39 @@ def test_composite_single_circle_and_rectangle(tmp_path: Path):
     assert rect_out.exists()
 
 
+def test_composite_single_rgba_fallback_applies_protrusion_overlay(tmp_path: Path, monkeypatch):
+    cover = tmp_path / "cover.jpg"
+    ill = tmp_path / "ill.png"
+    _make_rgb(cover, size=(3784, 2777))
+    _make_rgba(ill, size=(512, 512))
+
+    monkeypatch.setattr(cc, "_find_source_pdf_for_cover_path", lambda _cover_path: None)
+    monkeypatch.setattr(cc.frame_geometry, "is_standard_medallion_cover", lambda _size: True)
+    monkeypatch.setattr(
+        cc.frame_geometry,
+        "resolve_standard_medallion_geometry",
+        lambda _size: SimpleNamespace(center_x=2864, center_y=1620, frame_hole_radius=492, art_clip_radius=500),
+    )
+
+    calls: list[dict[str, int]] = []
+
+    def _fake_overlay(*, image, center_x, center_y, cover_size, overlay_path=cc.protrusion_overlay.SHARED_PROTRUSION_OVERLAY_PATH):
+        calls.append({"center_x": int(center_x), "center_y": int(center_y), "width": int(cover_size[0]), "height": int(cover_size[1])})
+        out = image.copy()
+        out.putpixel((2864, 1110), (250, 220, 40))
+        return out, {"applied": True, "reason": "test", "overlay_width": 10, "overlay_height": 10, "paste_x": 0, "paste_y": 0}
+
+    monkeypatch.setattr(cc.protrusion_overlay, "apply_shared_protrusion_overlay", _fake_overlay)
+
+    out = tmp_path / "fallback.jpg"
+    region = {"center_x": 2864, "center_y": 1620, "radius": 500, "frame_bbox": [2200, 900, 3400, 2200], "region_type": "circle"}
+    cc.composite_single(cover, ill, region, out)
+
+    assert calls == [{"center_x": 2864, "center_y": 1620, "width": 3784, "height": 2777}]
+    with Image.open(out) as result:
+        assert result.convert("RGB").getpixel((2864, 1110))[0] > 200
+
+
 def test_generate_fit_overlay_and_color_match(tmp_path: Path):
     cover = tmp_path / "cover.jpg"
     ill = tmp_path / "ill.png"
@@ -446,9 +479,9 @@ def test_resolve_medallion_geometry_keeps_opening_inside_outer_ring(tmp_path: Pa
 
     assert int(resolved["center_x"]) == 2864
     assert int(resolved["center_y"]) == 1620
-    assert resolved["outer_radius"] == 500
-    assert 360 <= int(resolved["opening_radius"]) <= 530
-    assert int(resolved["opening_radius"]) <= int(resolved["outer_radius"]) - cc.MIN_OPENING_MARGIN_PX
+    assert resolved["outer_radius"] == cc.ART_CLIP_RADIUS
+    assert resolved["opening_radius"] == cc.FRAME_HOLE_RADIUS
+    assert int(resolved["opening_radius"]) < int(resolved["outer_radius"])
 
 
 def test_smart_square_crop_uses_deterministic_center_crop():
