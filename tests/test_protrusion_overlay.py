@@ -23,7 +23,7 @@ def test_apply_shared_protrusion_overlay_centers_and_masks_black_background(tmp_
     monkeypatch.setattr(
         po.frame_geometry,
         "resolve_standard_medallion_geometry",
-        lambda _size: SimpleNamespace(center_x=50, center_y=50, frame_hole_radius=20, radius_scale=1.0),
+        lambda _size: SimpleNamespace(center_x=50, center_y=50, frame_hole_radius=20, art_clip_radius=20, radius_scale=1.0),
     )
     po._load_overlay_rgba.cache_clear()
 
@@ -38,10 +38,12 @@ def test_apply_shared_protrusion_overlay_centers_and_masks_black_background(tmp_
 
     assert details["applied"] is True
     assert [component["name"] for component in details["components"]] == ["top", "bottom"]
+    assert details["paste_x"] == 40
+    assert details["paste_y"] == 30
     assert details["components"][0]["paste_x"] == 48
-    assert details["components"][0]["paste_y"] == 24
+    assert details["components"][0]["paste_y"] == 31
     assert details["components"][1]["paste_x"] == 46
-    assert details["components"][1]["paste_y"] == 68
-    assert result.getpixel((50, 24))[0] > 200
-    assert result.getpixel((50, 68))[0] > 200
+    assert details["components"][1]["paste_y"] == 57
+    assert result.getpixel((50, 35))[0] > 200
+    assert result.getpixel((50, 60))[0] > 200
     assert result.getpixel((40, 40)) == (20, 30, 80)

@@ -24,7 +24,6 @@ SHARED_PROTRUSION_OVERLAY_PATH = config.CONFIG_DIR / "frame_overlays" / "Frame_5
 BACKGROUND_THRESHOLD = 4.0
 COMPONENT_ROW_GAP_PX = 12
 COMPONENT_MIN_ROWS = 8
-PROTRUSION_RING_OVERLAP_PX = 6
 
 
 @lru_cache(maxsize=4)
@@ -142,9 +141,18 @@ def apply_shared_protrusion_overlay(
 
     geometry = frame_geometry.resolve_standard_medallion_geometry(target_size)
     scale = float(getattr(geometry, "radius_scale", 1.0) or 1.0)
-    applied_center_x = int(getattr(geometry, "center_x", center_x) or center_x)
-    applied_center_y = int(getattr(geometry, "center_y", center_y) or center_y)
-    components = _extract_overlay_components(overlay)
+    applied_center_x = int(center_x) if int(center_x) > 0 else int(getattr(geometry, "center_x", 0) or 0)
+    applied_center_y = int(center_y) if int(center_y) > 0 else int(getattr(geometry, "center_y", 0) or 0)
+    scaled_overlay = overlay
+    if scale != 1.0:
+        scaled_overlay = overlay.resize(
+            (
+                max(1, int(round(overlay.width * scale))),
+                max(1, int(round(overlay.height * scale))),
+            ),
+            Image.LANCZOS,
+        )
+    components = _extract_overlay_components(scaled_overlay)
     if not components:
         details["reason"] = "overlay_components_missing"
         logger.warning(
@@ -158,30 +166,20 @@ def apply_shared_protrusion_overlay(
 
     base_mode = image.mode
     composited = image.convert("RGBA")
-    overlap = max(1, int(round(PROTRUSION_RING_OVERLAP_PX * scale)))
+    paste_x = int(round(applied_center_x - (scaled_overlay.width / 2.0)))
+    paste_y = int(round(applied_center_y - (scaled_overlay.height / 2.0)))
+    composited.alpha_composite(scaled_overlay, dest=(paste_x, paste_y))
     component_details: list[dict[str, Any]] = []
     for index, component in enumerate(components):
-        piece = component["overlay"]
-        scaled_width = max(1, int(round(piece.width * scale)))
-        scaled_height = max(1, int(round(piece.height * scale)))
-        if (scaled_width, scaled_height) != piece.size:
-            piece = piece.resize((scaled_width, scaled_height), Image.LANCZOS)
-        else:
-            piece = piece.copy()
+        left, top, right, bottom = component["bbox"]
         name = "top" if index == 0 else "bottom"
-        paste_x = int(round(applied_center_x - (piece.width / 2.0)))
-        if name == "top":
-            paste_y = int(round(applied_center_y - int(geometry.frame_hole_radius) - overlap))
-        else:
-            paste_y = int(round(applied_center_y + int(geometry.frame_hole_radius) - piece.height + overlap))
-        composited.alpha_composite(piece, dest=(paste_x, paste_y))
         component_details.append(
             {
                 "name": name,
-                "overlay_width": int(piece.width),
-                "overlay_height": int(piece.height),
-                "paste_x": int(paste_x),
-                "paste_y": int(paste_y),
+                "overlay_width": int(right - left),
+                "overlay_height": int(bottom - top),
+                "paste_x": int(paste_x + left),
+                "paste_y": int(paste_y + top),
             }
         )
 
@@ -191,10 +189,10 @@ def apply_shared_protrusion_overlay(
             "reason": "applied",
             "applied_center_x": int(applied_center_x),
             "applied_center_y": int(applied_center_y),
-            "overlay_width": int(overlay.width),
-            "overlay_height": int(overlay.height),
-            "paste_x": int(component_details[0]["paste_x"]),
-            "paste_y": int(component_details[0]["paste_y"]),
+            "overlay_width": int(scaled_overlay.width),
+            "overlay_height": int(scaled_overlay.height),
+            "paste_x": int(paste_x),
+            "paste_y": int(paste_y),
             "scale": round(scale, 6),
             "components": component_details,
         }
@@ -207,8 +205,8 @@ def apply_shared_protrusion_overlay(
         int(applied_center_x),
         int(applied_center_y),
         target_size,
-        int(overlay.width),
-        int(overlay.height),
+        int(scaled_overlay.width),
+        int(scaled_overlay.height),
         float(scale),
         component_details,
     )

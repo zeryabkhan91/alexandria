@@ -18,12 +18,14 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 try:
+    from src import art_focus
     from src import config
     from src import frame_geometry
     from src import protrusion_overlay
     from src import safe_json
     from src.logger import get_logger
 except ModuleNotFoundError:  # pragma: no cover
+    import art_focus  # type: ignore
     import config  # type: ignore
     import frame_geometry  # type: ignore
     import protrusion_overlay  # type: ignore
@@ -472,25 +474,28 @@ def _geometry_from_strict_mask(mask: Image.Image | None) -> dict[str, int] | Non
 
 
 def _smart_square_crop(image: Image.Image) -> Image.Image:
-    """Crop image to a centered square for deterministic medallion placement."""
+    """Crop image to a square using focus-aware centering."""
     src = image.convert("RGBA")
-    img_w, img_h = src.size
-    if img_w <= 1 or img_h <= 1:
-        return src
-    side = min(img_w, img_h)
-    left = (img_w - side) // 2
-    top = (img_h - side) // 2
-    return src.crop((left, top, left + side, top + side))
+    cropped, crop_details = art_focus.crop_square(src)
+    logger.info(
+        "Cover compositor smart crop: source=%dx%d crop_left=%d crop_top=%d crop_size=%d centering=(%.4f,%.4f) focus=(%.4f,%.4f) confidence=%.6f",
+        int(src.size[0]),
+        int(src.size[1]),
+        int(crop_details.get("crop_left", 0)),
+        int(crop_details.get("crop_top", 0)),
+        int(crop_details.get("crop_size", min(src.size))),
+        float(crop_details.get("centering_x", 0.5)),
+        float(crop_details.get("centering_y", 0.5)),
+        float(crop_details.get("focus_x", 0.5)),
+        float(crop_details.get("focus_y", 0.5)),
+        float(crop_details.get("confidence", 0.0)),
+    )
+    return cropped
 
 
 def _simple_center_crop(image: Image.Image) -> Image.Image:
-    """Center crop to square. No foreground detection."""
-    src = image.convert("RGBA")
-    w, h = src.size
-    side = min(w, h)
-    left = (w - side) // 2
-    top = (h - side) // 2
-    return src.crop((left, top, left + side, top + side))
+    """Focus-aware square crop used by the deterministic medallion fallback."""
+    return _smart_square_crop(image)
 
 
 def _find_template_for_cover(cover_path: Path) -> Path | None:
