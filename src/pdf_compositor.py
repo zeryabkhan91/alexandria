@@ -25,12 +25,14 @@ try:
     from src import config
     from src import frame_geometry
     from src import protrusion_overlay
+    from src import replacement_frame
     from src import safe_json
     from src.logger import get_logger
 except ModuleNotFoundError:  # pragma: no cover
     import config  # type: ignore
     import frame_geometry  # type: ignore
     import protrusion_overlay  # type: ignore
+    import replacement_frame  # type: ignore
     import safe_json  # type: ignore
     from logger import get_logger  # type: ignore
 
@@ -363,6 +365,21 @@ def _load_cover_regions_payload(regions_path: Path) -> dict[str, Any]:
     return {}
 
 
+def _resolve_book_region_row(
+    *,
+    payload: dict[str, Any],
+    book_number: int | None,
+) -> dict[str, Any] | None:
+    if payload:
+        if book_number is not None and int(book_number) > 0:
+            for row in payload.get("covers", []):
+                if isinstance(row, dict) and int(row.get("cover_id", 0) or 0) == int(book_number):
+                    return row
+        if isinstance(payload.get("consensus_region"), dict):
+            return payload.get("consensus_region")
+    return None
+
+
 def _resolve_book_geometry(
     *,
     size: tuple[int, int],
@@ -370,29 +387,21 @@ def _resolve_book_geometry(
     regions_path: Path,
 ) -> tuple[frame_geometry.MedallionGeometry | None, str]:
     payload = _load_cover_regions_payload(regions_path)
-    if payload:
-        region_row: dict[str, Any] | None = None
-        if book_number is not None and int(book_number) > 0:
-            for row in payload.get("covers", []):
-                if isinstance(row, dict) and int(row.get("cover_id", 0) or 0) == int(book_number):
-                    region_row = row
-                    break
-        if region_row is None and isinstance(payload.get("consensus_region"), dict):
-            region_row = payload.get("consensus_region")
-        if isinstance(region_row, dict):
-            center_x = int(region_row.get("center_x", 0) or 0)
-            center_y = int(region_row.get("center_y", 0) or 0)
-            radius = int(region_row.get("radius", 0) or 0)
-            if center_x > 0 and center_y > 0 and radius > 0:
-                return (
-                    frame_geometry.resolve_reference_medallion_geometry(
-                        size,
-                        center_x=center_x,
-                        center_y=center_y,
-                        radius=radius,
-                    ),
-                    "cover_region" if book_number is not None and int(book_number) > 0 else "consensus_region",
-                )
+    region_row = _resolve_book_region_row(payload=payload, book_number=book_number)
+    if isinstance(region_row, dict):
+        center_x = int(region_row.get("center_x", 0) or 0)
+        center_y = int(region_row.get("center_y", 0) or 0)
+        radius = int(region_row.get("radius", 0) or 0)
+        if center_x > 0 and center_y > 0 and radius > 0:
+            return (
+                frame_geometry.resolve_reference_medallion_geometry(
+                    size,
+                    center_x=center_x,
+                    center_y=center_y,
+                    radius=radius,
+                ),
+                "cover_region" if book_number is not None and int(book_number) > 0 else "consensus_region",
+            )
     if frame_geometry.is_standard_medallion_cover(size):
         return frame_geometry.resolve_standard_medallion_geometry(size), "template_geometry"
     return None, ""
@@ -599,7 +608,17 @@ def composite_cover_pdf(
     strict_mask_used = False
     strict_mask_coverage = 0.0
     validation_art_radius = 0
+    replacement_details: dict[str, Any] = {"applied": False, "reason": ""}
     resolved_regions_path = regions_path or config.cover_regions_path()
+    regions_payload = _load_cover_regions_payload(resolved_regions_path)
+    region_row = _resolve_book_region_row(payload=regions_payload, book_number=book_number)
+    frame_bbox = None
+    template_id = ""
+    if isinstance(region_row, dict):
+        bbox = region_row.get("frame_bbox")
+        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+            frame_bbox = tuple(int(v) for v in bbox)
+        template_id = str(region_row.get("template_id", "") or "")
 
     geometry, geometry_path = _resolve_book_geometry(
         size=(jpg_w, jpg_h),
@@ -607,7 +626,57 @@ def composite_cover_pdf(
         regions_path=resolved_regions_path,
     )
 
-    if geometry is not None:
+    if geometry is not None and replacement_frame.is_active_for_size((jpg_w, jpg_h)):
+        center_x = int(geometry.center_x)
+        center_y = int(geometry.center_y)
+        result_img, replacement_details = replacement_frame.apply_replacement_frame_composite(
+            image=base_jpg,
+            ai_art_path=art_path,
+            center_x=center_x,
+            center_y=center_y,
+            cover_size=(jpg_w, jpg_h),
+            frame_bbox=frame_bbox,
+            geometry_source=geometry_path,
+            book_number=book_number,
+            template_id=template_id,
+        )
+        validation_art_radius = int(replacement_details.get("clear_radius", geometry.art_clip_radius))
+        placement_width = int(replacement_details.get("overlay_width", 0))
+        placement_height = int(replacement_details.get("overlay_height", 0))
+        overlay_source = "replacement_frame_overlay"
+        placement_source = geometry_path
+        validation_metrics = replacement_frame.compute_outside_change_metrics(
+            original_rgb=base_jpg,
+            composited_rgb=result_img,
+            center_x=center_x,
+            center_y=center_y,
+            guard_radius=max(20, int(replacement_details.get("clear_radius", geometry.art_clip_radius))),
+        )
+        logger.info(
+            "JPG compositor replacement frame: book=%s path=%s center=(%d,%d) hole_radius=%d clear_radius=%d source_anchor_box=%s overlay_anchor_box_scaled=%s final_scale=%.6f final_dx=%d final_dy=%d anchor_error_max_px=%.4f navy_band_max_px=%.4f overlay_size=%dx%d paste=(%d,%d) fill_policy=%s fill_rgb=%s derived_rgba=%s override_source=%s",
+            int(book_number or 0),
+            geometry_path,
+            center_x,
+            center_y,
+            int(replacement_details.get("hole_radius", 0)),
+            int(replacement_details.get("clear_radius", 0)),
+            tuple(replacement_details.get("source_anchor_box", []) or ()),
+            tuple(replacement_details.get("overlay_anchor_box_scaled", []) or ()),
+            float(replacement_details.get("final_scale", 0.0)),
+            int(replacement_details.get("final_dx", 0)),
+            int(replacement_details.get("final_dy", 0)),
+            float(replacement_details.get("anchor_error_max_px", 0.0)),
+            float(replacement_details.get("navy_band_max_px", 0.0)),
+            int(replacement_details.get("overlay_width", 0)),
+            int(replacement_details.get("overlay_height", 0)),
+            int(replacement_details.get("paste_x", 0)),
+            int(replacement_details.get("paste_y", 0)),
+            str(replacement_details.get("fill_policy", "")),
+            tuple(replacement_details.get("fill_rgb", ()) or ()),
+            str(replacement_details.get("derived_rgba_path", "")),
+            str(replacement_details.get("override_source", "")),
+        )
+    elif geometry is not None:
         hole_radius = max(20, int(geometry.frame_hole_radius))
         art_radius = hole_radius
         art_diameter = max(2, art_radius * 2)
@@ -755,12 +824,25 @@ def composite_cover_pdf(
     if result_img.size != EXPECTED_JPG_SIZE:
         result_img = result_img.resize(EXPECTED_JPG_SIZE, Image.LANCZOS)
 
-    result_img, protrusion_details = protrusion_overlay.apply_shared_protrusion_overlay(
-        image=result_img,
-        center_x=int(center_x),
-        center_y=int(center_y),
-        cover_size=result_img.size,
-    )
+    if bool(replacement_details.get("applied")):
+        protrusion_details = {
+            "applied": False,
+            "reason": "replacement_frame_mode",
+            "overlay_width": 0,
+            "overlay_height": 0,
+            "paste_x": 0,
+            "paste_y": 0,
+            "applied_center_x": int(center_x),
+            "applied_center_y": int(center_y),
+            "components": [],
+        }
+    else:
+        result_img, protrusion_details = protrusion_overlay.apply_shared_protrusion_overlay(
+            image=result_img,
+            center_x=int(center_x),
+            center_y=int(center_y),
+            cover_size=result_img.size,
+        )
     logger.info(
         "JPG compositor protrusion overlay: book=%s applied=%s reason=%s overlay_size=%dx%d paste=(%d,%d) center=(%d,%d) applied_center=(%d,%d) components=%s",
         int(book_number or 0),
@@ -778,13 +860,22 @@ def composite_cover_pdf(
     )
 
     final_arr = np.asarray(result_img, dtype=np.uint8)
-    validation_metrics = _compute_ring_integrity_metrics(
-        original_arr=base_arr_u8,
-        composited_arr=final_arr,
-        center_x=center_x,
-        center_y=center_y,
-        art_clip_radius=max(20, int(validation_art_radius)),
-    )
+    if bool(replacement_details.get("applied")):
+        validation_metrics = replacement_frame.compute_outside_change_metrics(
+            original_rgb=base_jpg,
+            composited_rgb=result_img,
+            center_x=int(center_x),
+            center_y=int(center_y),
+            guard_radius=max(20, int(replacement_details.get("clear_radius", validation_art_radius))),
+        )
+    else:
+        validation_metrics = _compute_ring_integrity_metrics(
+            original_arr=base_arr_u8,
+            composited_arr=final_arr,
+            center_x=center_x,
+            center_y=center_y,
+            art_clip_radius=max(20, int(validation_art_radius)),
+        )
 
     result_img.save(output_jpg, format="JPEG", quality=100, subsampling=0, dpi=(EXPECTED_DPI, EXPECTED_DPI))
 
@@ -792,26 +883,46 @@ def composite_cover_pdf(
     shutil.copyfile(source_pdf, output_pdf)
     shutil.copyfile(source_pdf, output_ai)
 
-    valid = (
-        float(validation_metrics.get("ring_changed_pct", 0.0)) <= RING_CHANGED_PCT_THRESHOLD
-        and float(validation_metrics.get("ring_mean_delta", 0.0)) <= RING_MEAN_DELTA_THRESHOLD
-    )
+    if bool(replacement_details.get("applied")):
+        valid = (
+            float(validation_metrics.get("outside_changed_pct", 0.0)) <= 0.25
+            and float(validation_metrics.get("outside_mean_delta", 0.0)) <= 0.5
+        )
+    else:
+        valid = (
+            float(validation_metrics.get("ring_changed_pct", 0.0)) <= RING_CHANGED_PCT_THRESHOLD
+            and float(validation_metrics.get("ring_mean_delta", 0.0)) <= RING_MEAN_DELTA_THRESHOLD
+        )
     issues: list[str] = []
     if not valid:
-        issues.append("frame_ring_changed")
+        issues.append("frame_outside_changed" if bool(replacement_details.get("applied")) else "frame_ring_changed")
 
-    logger.info(
-        "JPG compositor validation: book=%s valid=%s overlay=%s placement=%s geometry=%s ring_changed_pct=%.4f ring_mean_delta=%.4f thresholds=(%.1f%%, %.1f)",
-        int(book_number or 0),
-        "yes" if valid else "no",
-        overlay_source,
-        placement_source,
-        geometry_path,
-        float(validation_metrics.get("ring_changed_pct", 0.0)),
-        float(validation_metrics.get("ring_mean_delta", 0.0)),
-        float(RING_CHANGED_PCT_THRESHOLD),
-        float(RING_MEAN_DELTA_THRESHOLD),
-    )
+    if bool(replacement_details.get("applied")):
+        logger.info(
+            "JPG compositor validation: book=%s valid=%s overlay=%s placement=%s geometry=%s outside_changed_pct=%.4f outside_mean_delta=%.4f thresholds=(%.2f%%, %.2f)",
+            int(book_number or 0),
+            "yes" if valid else "no",
+            overlay_source,
+            placement_source,
+            geometry_path,
+            float(validation_metrics.get("outside_changed_pct", 0.0)),
+            float(validation_metrics.get("outside_mean_delta", 0.0)),
+            0.25,
+            0.5,
+        )
+    else:
+        logger.info(
+            "JPG compositor validation: book=%s valid=%s overlay=%s placement=%s geometry=%s ring_changed_pct=%.4f ring_mean_delta=%.4f thresholds=(%.1f%%, %.1f)",
+            int(book_number or 0),
+            "yes" if valid else "no",
+            overlay_source,
+            placement_source,
+            geometry_path,
+            float(validation_metrics.get("ring_changed_pct", 0.0)),
+            float(validation_metrics.get("ring_mean_delta", 0.0)),
+            float(RING_CHANGED_PCT_THRESHOLD),
+            float(RING_MEAN_DELTA_THRESHOLD),
+        )
     if not valid:
         logger.warning(
             "JPG compositor frame-integrity failure: book=%s output_jpg=%s issues=%s metrics=%s",
@@ -834,6 +945,7 @@ def composite_cover_pdf(
 
     return {
         "success": True,
+        "compositor_mode": "replacement_frame" if bool(replacement_details.get("applied")) else "jpg_blend",
         "source_pdf": str(source_pdf),
         "source_jpg": str(jpg_path),
         "output_pdf": str(output_pdf),
@@ -851,6 +963,7 @@ def composite_cover_pdf(
         "geometry_path": geometry_path,
         "strict_mask_used": strict_mask_used,
         "strict_mask_coverage": round(strict_mask_coverage, 6),
+        "replacement_frame": replacement_details,
         "protrusion_overlay": protrusion_details,
     }
 
@@ -952,13 +1065,42 @@ def composite_all_variants(
                 "output_path": str(output_jpg),
                 "valid": bool(result.get("valid", True)),
                 "issues": list(result.get("issues", [])),
-                "mode": "jpg_blend",
+                "mode": "replacement_frame" if str(result.get("overlay_source", "")) == "replacement_frame_overlay" else "jpg_blend",
                 "source_pdf": str(source_pdf),
                 "source_jpg": str(source_jpg),
                 "variant": variant,
                 "model": model,
                 "overlay_source": str(result.get("overlay_source", "")),
                 "placement_source": str(result.get("placement_source", "")),
+                "replacement_frame": {
+                    "mode": str(dict(result.get("replacement_frame", {})).get("replacement_frame_mode", "")),
+                    "fill_policy": str(dict(result.get("replacement_frame", {})).get("fill_policy", "")),
+                    "clear_radius": int(dict(result.get("replacement_frame", {})).get("clear_radius", 0) or 0),
+                    "fill_rgb": list(dict(result.get("replacement_frame", {})).get("fill_rgb", ()) or []),
+                    "source_anchor_box": list(dict(result.get("replacement_frame", {})).get("source_anchor_box", ()) or []),
+                    "source_anchor_source": str(dict(result.get("replacement_frame", {})).get("source_anchor_source", "")),
+                    "overlay_anchor_box_unscaled": list(dict(result.get("replacement_frame", {})).get("overlay_anchor_box_unscaled", ()) or []),
+                    "overlay_anchor_box_scaled": list(dict(result.get("replacement_frame", {})).get("overlay_anchor_box_scaled", ()) or []),
+                    "auto_scale": float(dict(result.get("replacement_frame", {})).get("auto_scale", 0.0) or 0.0),
+                    "auto_dx": int(dict(result.get("replacement_frame", {})).get("auto_dx", 0) or 0),
+                    "auto_dy": int(dict(result.get("replacement_frame", {})).get("auto_dy", 0) or 0),
+                    "final_scale": float(dict(result.get("replacement_frame", {})).get("final_scale", 0.0) or 0.0),
+                    "final_dx": int(dict(result.get("replacement_frame", {})).get("final_dx", 0) or 0),
+                    "final_dy": int(dict(result.get("replacement_frame", {})).get("final_dy", 0) or 0),
+                    "anchor_error_top_px": float(dict(result.get("replacement_frame", {})).get("anchor_error_top_px", 0.0) or 0.0),
+                    "anchor_error_bottom_px": float(dict(result.get("replacement_frame", {})).get("anchor_error_bottom_px", 0.0) or 0.0),
+                    "anchor_error_left_px": float(dict(result.get("replacement_frame", {})).get("anchor_error_left_px", 0.0) or 0.0),
+                    "anchor_error_right_px": float(dict(result.get("replacement_frame", {})).get("anchor_error_right_px", 0.0) or 0.0),
+                    "anchor_error_max_px": float(dict(result.get("replacement_frame", {})).get("anchor_error_max_px", 0.0) or 0.0),
+                    "navy_band_max_px": float(dict(result.get("replacement_frame", {})).get("navy_band_max_px", 0.0) or 0.0),
+                    "override_applied": bool(dict(result.get("replacement_frame", {})).get("override_applied", False)),
+                    "override_source": str(dict(result.get("replacement_frame", {})).get("override_source", "")),
+                    "legacy_outer_radius": int(dict(result.get("replacement_frame", {})).get("legacy_outer_radius", 0) or 0),
+                    "overlay_outer_radius_scaled": float(dict(result.get("replacement_frame", {})).get("overlay_outer_radius_scaled", 0.0) or 0.0),
+                    "outer_fit_scale": float(dict(result.get("replacement_frame", {})).get("outer_fit_scale", 0.0) or 0.0),
+                    "outer_radius_error_px": float(dict(result.get("replacement_frame", {})).get("outer_radius_error_px", 0.0) or 0.0),
+                    "moat_band_width_px": float(dict(result.get("replacement_frame", {})).get("moat_band_width_px", 0.0) or 0.0),
+                },
                 "metrics": {
                     "image_width": float(result.get("image_width", 0)),
                     "image_height": float(result.get("image_height", 0)),

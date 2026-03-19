@@ -3,6 +3,10 @@
 This module replaces only the center art inside the source PDF's ``/Im0``
 image XObject while preserving the ornamental frame and the original ``/SMask``.
 The modified PDF is then rendered to the final composite JPG.
+
+It is intentionally not the correct compositor for the replacement-frame-only
+workflow, because that workflow requires deleting the legacy source medallion
+and showing only ``Untitled__4_frame.png`` in the final result.
 """
 
 from __future__ import annotations

@@ -2231,7 +2231,7 @@ def _rebuild_saved_composite_from_raw_art(*, runtime: config.Config, row: dict[s
                     raw_art_path_token=str(row.get("raw_art_path", "") or "").strip(),
                 )
                 logger.info(
-                    "Saved composite rebuild completed via JPG compositor: book=%s variant=%s output=%s valid=%s issues=%s placement_source=%s overlay_source=%s",
+                    "Saved composite rebuild completed via JPG compositor: book=%s variant=%s output=%s valid=%s issues=%s placement_source=%s overlay_source=%s replacement_mode=%s clear_radius=%s fill_policy=%s fill_rgb=%s",
                     int(book_number),
                     int(variant),
                     output_path,
@@ -2239,6 +2239,10 @@ def _rebuild_saved_composite_from_raw_art(*, runtime: config.Config, row: dict[s
                     ",".join(result.get("issues", [])) if isinstance(result.get("issues"), list) and result.get("issues") else "none",
                     str(result.get("placement_source", "") or ""),
                     str(result.get("overlay_source", "") or ""),
+                    str(dict(result.get("replacement_frame", {})).get("replacement_frame_mode", "") or ""),
+                    str(dict(result.get("replacement_frame", {})).get("clear_radius", "") or ""),
+                    str(dict(result.get("replacement_frame", {})).get("fill_policy", "") or ""),
+                    tuple(dict(result.get("replacement_frame", {})).get("fill_rgb", ()) or ()),
                 )
                 return output_path
             except Exception as exc:
@@ -2264,12 +2268,17 @@ def _rebuild_saved_composite_from_raw_art(*, runtime: config.Config, row: dict[s
         raw_art_source=raw_art,
         raw_art_path_token=str(row.get("raw_art_path", "") or "").strip(),
     )
+    validation_payload = _load_json(rebuilt.with_suffix(rebuilt.suffix + ".validation.json"), {})
     logger.info(
-        "Saved composite rebuild completed via cover compositor: book=%s variant=%s output=%s source_pdf=%s",
+        "Saved composite rebuild completed via cover compositor: book=%s variant=%s output=%s source_pdf=%s compositor_mode=%s replacement_mode=%s clear_radius=%s fill_policy=%s",
         int(book_number),
         int(variant),
         rebuilt,
         source_pdf if source_pdf is not None else "none",
+        str(validation_payload.get("compositor_mode", "") or ""),
+        str(dict(validation_payload.get("replacement_frame", {})).get("replacement_frame_mode", "") or ""),
+        str(dict(validation_payload.get("replacement_frame", {})).get("clear_radius", "") or ""),
+        str(dict(validation_payload.get("replacement_frame", {})).get("fill_policy", "") or ""),
     )
     return rebuilt
 

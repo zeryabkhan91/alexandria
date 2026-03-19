@@ -1,0 +1,14 @@
+{
+  "source_path": "/home/developer/projects/vis-leads/alexandria-cover-designer/config/frame_overlays/Untitled__4_frame.png",
+  "rgba_path": "/home/developer/projects/vis-leads/alexandria-cover-designer/config/frame_overlays/_derived/Untitled__4_frame_rgba.png",
+  "overlay_width": 1008,
+  "overlay_height": 1024,
+  "hole_radius": 385,
+  "hole_bbox_x1": 126,
+  "hole_bbox_y1": 141,
+  "hole_bbox_x2": 882,
+  "hole_bbox_y2": 889,
+  "hole_width": 756,
+  "hole_height": 748,
+  "erase_radius": 534
+}

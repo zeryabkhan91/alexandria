@@ -1,0 +1,11 @@
+{
+  "template_defaults": {
+    "navy_gold_medallion": {
+      "scale_adjust": 0.0,
+      "dx": 0,
+      "dy": 0,
+      "approved": false
+    }
+  },
+  "book_overrides": {}
+}

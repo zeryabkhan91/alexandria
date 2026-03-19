@@ -21,12 +21,14 @@ try:
     from src import config
     from src import frame_geometry
     from src import protrusion_overlay
+    from src import replacement_frame
     from src import safe_json
     from src.logger import get_logger
 except ModuleNotFoundError:  # pragma: no cover
     import config  # type: ignore
     import frame_geometry  # type: ignore
     import protrusion_overlay  # type: ignore
+    import replacement_frame  # type: ignore
     import safe_json  # type: ignore
     from logger import get_logger  # type: ignore
 
@@ -753,14 +755,17 @@ def composite_single(
     region_obj = _region_from_dict(region)
     cover_w, cover_h = cover.size
     strict_window_mask = _load_global_compositing_mask((cover_w, cover_h))
+    replacement_frame_active = replacement_frame.is_active_for_size((cover_w, cover_h))
 
     validation_region = region_obj
     composited_rgb: Image.Image
     rendered_by_pdf_swap = False
     pdf_source: Path | None = source_pdf_path
+    replacement_details: dict[str, Any] = {"applied": False, "reason": ""}
+    protrusion_details: dict[str, Any] = {"applied": False, "reason": "not_used", "components": []}
 
     logger.info(
-        "Cover compositor start: cover=%s illustration=%s output=%s region_type=%s center=(%d,%d) radius=%d source_pdf=%s strict_window_mask=%s",
+        "Cover compositor start: cover=%s illustration=%s output=%s region_type=%s center=(%d,%d) radius=%d source_pdf=%s strict_window_mask=%s replacement_frame=%s",
         cover_path,
         illustration_path,
         output_path,
@@ -770,6 +775,7 @@ def composite_single(
         int(region_obj.radius),
         str(pdf_source) if pdf_source is not None else "none",
         "yes" if strict_window_mask is not None else "no",
+        "yes" if replacement_frame_active else "no",
     )
 
     if region_obj.region_type == "rectangle" and region_obj.rect_bbox is not None:
@@ -810,7 +816,7 @@ def composite_single(
         composited_rgb = Image.alpha_composite(cover.convert("RGBA"), full_overlay).convert("RGB")
     else:
         pdf_source = pdf_source or _find_source_pdf_for_cover_path(cover_path)
-        if pdf_source is not None:
+        if pdf_source is not None and not replacement_frame_active:
             try:
                 from src.pdf_swap_compositor import composite_via_pdf_swap
             except ModuleNotFoundError:  # pragma: no cover
@@ -866,143 +872,207 @@ def composite_single(
                     pdf_source.name,
                     exc,
                 )
+        elif pdf_source is not None and replacement_frame_active:
+            logger.info(
+                "Cover compositor skipping PDF swap for %s because replacement-frame mode is active",
+                cover_path.name,
+            )
 
         if not rendered_by_pdf_swap:
-            # ── RGBA Frame-Overlay Compositing ─────────────────────────
-            # Three layers: canvas -> art -> RGBA overlay (frame painted LAST).
-            if frame_geometry.is_standard_medallion_cover((cover_w, cover_h)):
+            if replacement_frame_active:
                 template = frame_geometry.resolve_standard_medallion_geometry((cover_w, cover_h))
-                center_x = int(template.center_x)
-                center_y = int(template.center_y)
-                template_frame_hole_radius = int(template.frame_hole_radius)
-                template_art_clip_radius = int(template.frame_hole_radius)
+                center_x = int(region_obj.center_x) if int(region_obj.center_x) > 0 else int(template.center_x)
+                center_y = int(region_obj.center_y) if int(region_obj.center_y) > 0 else int(template.center_y)
+                book_match = re.match(r"^(\d+)\.", cover_path.parent.name)
+                book_number = int(book_match.group(1)) if book_match else None
+                composited_rgb, replacement_details = replacement_frame.apply_replacement_frame_composite(
+                    image=cover,
+                    ai_art_path=Path(illustration_path),
+                    center_x=center_x,
+                    center_y=center_y,
+                    cover_size=(cover_w, cover_h),
+                    frame_bbox=region_obj.frame_bbox,
+                    geometry_source="cover_region",
+                    book_number=book_number,
+                    template_id="navy_gold_medallion",
+                )
+                protrusion_details = {
+                    "applied": False,
+                    "reason": "replacement_frame_mode",
+                    "overlay_width": 0,
+                    "overlay_height": 0,
+                    "paste_x": 0,
+                    "paste_y": 0,
+                    "applied_center_x": int(center_x),
+                    "applied_center_y": int(center_y),
+                    "components": [],
+                }
+                validation_region = Region(
+                    center_x=center_x,
+                    center_y=center_y,
+                    radius=max(20, int(replacement_details.get("clear_radius", template.frame_hole_radius))),
+                    frame_bbox=region_obj.frame_bbox,
+                    region_type="circle",
+                )
+                logger.info(
+                    "Cover compositor replacement frame: cover=%s center=(%d,%d) hole_radius=%d clear_radius=%d source_anchor_box=%s overlay_anchor_box_scaled=%s final_scale=%.6f final_dx=%d final_dy=%d anchor_error_max_px=%.4f navy_band_max_px=%.4f overlay_size=%dx%d paste=(%d,%d) fill_policy=%s fill_rgb=%s derived_rgba=%s override_source=%s",
+                    cover_path.name,
+                    int(center_x),
+                    int(center_y),
+                    int(replacement_details.get("hole_radius", 0)),
+                    int(replacement_details.get("clear_radius", 0)),
+                    tuple(replacement_details.get("source_anchor_box", []) or ()),
+                    tuple(replacement_details.get("overlay_anchor_box_scaled", []) or ()),
+                    float(replacement_details.get("final_scale", 0.0)),
+                    int(replacement_details.get("final_dx", 0)),
+                    int(replacement_details.get("final_dy", 0)),
+                    float(replacement_details.get("anchor_error_max_px", 0.0)),
+                    float(replacement_details.get("navy_band_max_px", 0.0)),
+                    int(replacement_details.get("overlay_width", 0)),
+                    int(replacement_details.get("overlay_height", 0)),
+                    int(replacement_details.get("paste_x", 0)),
+                    int(replacement_details.get("paste_y", 0)),
+                    str(replacement_details.get("fill_policy", "")),
+                    tuple(replacement_details.get("fill_rgb", ()) or ()),
+                    str(replacement_details.get("derived_rgba_path", "")),
+                    str(replacement_details.get("override_source", "")),
+                )
             else:
-                center_x = FALLBACK_CENTER_X
-                center_y = FALLBACK_CENTER_Y
-                template_frame_hole_radius = FRAME_HOLE_RADIUS
-                template_art_clip_radius = FRAME_HOLE_RADIUS
+                # ── RGBA Frame-Overlay Compositing ─────────────────────────
+                # Three layers: canvas -> art -> RGBA overlay (frame painted LAST).
+                if frame_geometry.is_standard_medallion_cover((cover_w, cover_h)):
+                    template = frame_geometry.resolve_standard_medallion_geometry((cover_w, cover_h))
+                    center_x = int(template.center_x)
+                    center_y = int(template.center_y)
+                    template_frame_hole_radius = int(template.frame_hole_radius)
+                    template_art_clip_radius = int(template.frame_hole_radius)
+                else:
+                    center_x = FALLBACK_CENTER_X
+                    center_y = FALLBACK_CENTER_Y
+                    template_frame_hole_radius = FRAME_HOLE_RADIUS
+                    template_art_clip_radius = FRAME_HOLE_RADIUS
 
-            logger.info(
-                "Cover compositor RGBA fallback geometry: cover=%s center=(%d,%d) frame_hole_radius=%d art_clip_radius=%d",
-                cover_path.name,
-                int(center_x),
-                int(center_y),
-                int(template_frame_hole_radius),
-                int(template_art_clip_radius),
-            )
+                logger.info(
+                    "Cover compositor RGBA fallback geometry: cover=%s center=(%d,%d) frame_hole_radius=%d art_clip_radius=%d",
+                    cover_path.name,
+                    int(center_x),
+                    int(center_y),
+                    int(template_frame_hole_radius),
+                    int(template_art_clip_radius),
+                )
 
-            # Always use the deterministic fallback overlay for medallion compositing.
-            # Cached extracted overlays can carry stale alpha artifacts that damage
-            # the frame edge and reveal rectangular seams.
-            frame_overlay = _build_fallback_frame_overlay(
-                cover=cover,
-                center_x=center_x,
-                center_y=center_y,
-                punch_radius=template_frame_hole_radius,
-            )
+                # Always use the deterministic fallback overlay for medallion compositing.
+                # Cached extracted overlays can carry stale alpha artifacts that damage
+                # the frame edge and reveal rectangular seams.
+                frame_overlay = _build_fallback_frame_overlay(
+                    cover=cover,
+                    center_x=center_x,
+                    center_y=center_y,
+                    punch_radius=template_frame_hole_radius,
+                )
 
-            fill_rgb = _sample_cover_background(
-                cover=cover,
-                center_x=center_x,
-                center_y=center_y,
-                outer_radius=template_art_clip_radius,
-            )
-            logger.info(
-                "Cover compositor RGBA fallback fill: cover=%s fill_rgb=%s art_radius=%d",
-                cover_path.name,
-                fill_rgb,
-                int(template_art_clip_radius),
-            )
+                fill_rgb = _sample_cover_background(
+                    cover=cover,
+                    center_x=center_x,
+                    center_y=center_y,
+                    outer_radius=template_art_clip_radius,
+                )
+                logger.info(
+                    "Cover compositor RGBA fallback fill: cover=%s fill_rgb=%s art_radius=%d",
+                    cover_path.name,
+                    fill_rgb,
+                    int(template_art_clip_radius),
+                )
 
-            canvas = Image.new("RGBA", (cover_w, cover_h), (*fill_rgb, 255))
+                canvas = Image.new("RGBA", (cover_w, cover_h), (*fill_rgb, 255))
 
-            art_radius = template_art_clip_radius
-            art_diameter = art_radius * 2  # 1200
-            art = _simple_center_crop(illustration)
-            art = art.resize((art_diameter, art_diameter), Image.LANCZOS)
-            art = _color_match_illustration(cover=cover, illustration=art, region=region_obj)
+                art_radius = template_art_clip_radius
+                art_diameter = art_radius * 2  # 1200
+                art = _simple_center_crop(illustration)
+                art = art.resize((art_diameter, art_diameter), Image.LANCZOS)
+                art = _color_match_illustration(cover=cover, illustration=art, region=region_obj)
 
-            art_bg = Image.new("RGBA", (art_diameter, art_diameter), (*fill_rgb, 255))
-            art_bg.alpha_composite(art)
-            art = art_bg
+                art_bg = Image.new("RGBA", (art_diameter, art_diameter), (*fill_rgb, 255))
+                art_bg.alpha_composite(art)
+                art = art_bg
 
-            art_layer = Image.new("RGBA", (cover_w, cover_h), (0, 0, 0, 0))
-            art_layer.paste(art, (center_x - art_radius, center_y - art_radius))
+                art_layer = Image.new("RGBA", (cover_w, cover_h), (0, 0, 0, 0))
+                art_layer.paste(art, (center_x - art_radius, center_y - art_radius))
 
-            clip_radius = art_radius
-            clip_mask = _build_circle_feather_mask(
-                width=cover_w,
-                height=cover_h,
-                center_x=center_x,
-                center_y=center_y,
-                radius=clip_radius,
-                feather_px=INNER_FEATHER_PX,
-            )
-            art_layer.putalpha(clip_mask)
+                clip_radius = art_radius
+                clip_mask = _build_circle_feather_mask(
+                    width=cover_w,
+                    height=cover_h,
+                    center_x=center_x,
+                    center_y=center_y,
+                    radius=clip_radius,
+                    feather_px=INNER_FEATHER_PX,
+                )
+                art_layer.putalpha(clip_mask)
 
-            result = Image.alpha_composite(canvas, art_layer)
-            result = Image.alpha_composite(result, frame_overlay)
-            composited_rgb = result.convert("RGB")
-            composited_rgb, protrusion_details = protrusion_overlay.apply_shared_protrusion_overlay(
-                image=composited_rgb,
-                center_x=int(center_x),
-                center_y=int(center_y),
-                cover_size=(cover_w, cover_h),
-            )
-            logger.info(
-                "Cover compositor protrusion overlay: cover=%s applied=%s reason=%s overlay_size=%dx%d paste=(%d,%d) requested_center=(%d,%d) applied_center=(%d,%d) components=%s",
-                cover_path.name,
-                "yes" if protrusion_details.get("applied") else "no",
-                str(protrusion_details.get("reason", "")),
-                int(protrusion_details.get("overlay_width", 0)),
-                int(protrusion_details.get("overlay_height", 0)),
-                int(protrusion_details.get("paste_x", 0)),
-                int(protrusion_details.get("paste_y", 0)),
-                int(center_x),
-                int(center_y),
-                int(protrusion_details.get("applied_center_x", center_x)),
-                int(protrusion_details.get("applied_center_y", center_y)),
-                protrusion_details.get("components", []),
-            )
+                result = Image.alpha_composite(canvas, art_layer)
+                result = Image.alpha_composite(result, frame_overlay)
+                composited_rgb = result.convert("RGB")
+                composited_rgb, protrusion_details = protrusion_overlay.apply_shared_protrusion_overlay(
+                    image=composited_rgb,
+                    center_x=int(center_x),
+                    center_y=int(center_y),
+                    cover_size=(cover_w, cover_h),
+                )
+                logger.info(
+                    "Cover compositor protrusion overlay: cover=%s applied=%s reason=%s overlay_size=%dx%d paste=(%d,%d) requested_center=(%d,%d) applied_center=(%d,%d) components=%s",
+                    cover_path.name,
+                    "yes" if protrusion_details.get("applied") else "no",
+                    str(protrusion_details.get("reason", "")),
+                    int(protrusion_details.get("overlay_width", 0)),
+                    int(protrusion_details.get("overlay_height", 0)),
+                    int(protrusion_details.get("paste_x", 0)),
+                    int(protrusion_details.get("paste_y", 0)),
+                    int(center_x),
+                    int(center_y),
+                    int(protrusion_details.get("applied_center_x", center_x)),
+                    int(protrusion_details.get("applied_center_y", center_y)),
+                    protrusion_details.get("components", []),
+                )
 
-            _orig_arr = np.array(cover, dtype=np.float32)
-            _comp_arr = np.array(composited_rgb, dtype=np.float32)
-            _h, _w = _orig_arr.shape[:2]
-            _yy, _xx = np.ogrid[:_h, :_w]
-            _dist = np.sqrt((_xx - center_x) ** 2 + (_yy - center_y) ** 2)
-            _overlay_alpha = np.array(frame_overlay.getchannel("A"), dtype=np.uint8)
-            # Guard check only on fully-opaque frame pixels; transparent scrollwork gaps are intentional.
-            _ring = (_dist >= 660) & (_dist <= 800) & (_overlay_alpha >= 250)
-            _diff = np.abs(_orig_arr - _comp_arr).max(axis=2)
-            _ring_diff = _diff[_ring]
-            _changed_pct = 100.0 * float(np.sum(_ring_diff > 15)) / max(1, int(_ring_diff.size))
-            _mean_delta = float(_ring_diff.mean()) if _ring_diff.size else 0.0
+                _orig_arr = np.array(cover, dtype=np.float32)
+                _comp_arr = np.array(composited_rgb, dtype=np.float32)
+                _h, _w = _orig_arr.shape[:2]
+                _yy, _xx = np.ogrid[:_h, :_w]
+                _dist = np.sqrt((_xx - center_x) ** 2 + (_yy - center_y) ** 2)
+                _overlay_alpha = np.array(frame_overlay.getchannel("A"), dtype=np.uint8)
+                # Guard check only on fully-opaque frame pixels; transparent scrollwork gaps are intentional.
+                _ring = (_dist >= 660) & (_dist <= 800) & (_overlay_alpha >= 250)
+                _diff = np.abs(_orig_arr - _comp_arr).max(axis=2)
+                _ring_diff = _diff[_ring]
+                _changed_pct = 100.0 * float(np.sum(_ring_diff > 15)) / max(1, int(_ring_diff.size))
+                _mean_delta = float(_ring_diff.mean()) if _ring_diff.size else 0.0
 
-            if _changed_pct > 5.0 or _mean_delta > 10.0:
-                logger.error(
-                    "FRAME DAMAGE DETECTED for %s: changed=%.1f%%, mean_delta=%.1f. Composite REJECTED.",
+                if _changed_pct > 5.0 or _mean_delta > 10.0:
+                    logger.error(
+                        "FRAME DAMAGE DETECTED for %s: changed=%.1f%%, mean_delta=%.1f. Composite REJECTED.",
+                        cover_path.name,
+                        _changed_pct,
+                        _mean_delta,
+                    )
+                    raise ValueError(
+                        f"Frame integrity check failed for {cover_path.name}: "
+                        f"ring_changed={_changed_pct:.1f}%, mean_delta={_mean_delta:.1f}"
+                    )
+                logger.info(
+                    "Frame integrity OK for %s: changed=%.1f%%, mean_delta=%.1f",
                     cover_path.name,
                     _changed_pct,
                     _mean_delta,
                 )
-                raise ValueError(
-                    f"Frame integrity check failed for {cover_path.name}: "
-                    f"ring_changed={_changed_pct:.1f}%, mean_delta={_mean_delta:.1f}"
-                )
-            logger.info(
-                "Frame integrity OK for %s: changed=%.1f%%, mean_delta=%.1f",
-                cover_path.name,
-                _changed_pct,
-                _mean_delta,
-            )
 
-            validation_region = Region(
-                center_x=center_x,
-                center_y=center_y,
-                radius=max(20, template_frame_hole_radius),
-                frame_bbox=region_obj.frame_bbox,
-                region_type="circle",
-            )
+                validation_region = Region(
+                    center_x=center_x,
+                    center_y=center_y,
+                    radius=max(20, template_frame_hole_radius),
+                    frame_bbox=region_obj.frame_bbox,
+                    region_type="circle",
+                )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if not rendered_by_pdf_swap:
@@ -1022,12 +1092,23 @@ def composite_single(
             composited=composited_rgb,
             region=validation_region,
             output_path=output_path,
+            compositor_mode="replacement_frame" if bool(replacement_details.get("applied")) else "legacy",
+            replacement_details=replacement_details,
         )
     safe_json.atomic_write_json(
         _validation_path(output_path),
         {
             **validation.to_dict(),
             "validated_at": datetime.now(timezone.utc).isoformat(),
+            "compositor_mode": (
+                "pdf_swap"
+                if rendered_by_pdf_swap
+                else "replacement_frame"
+                if bool(replacement_details.get("applied"))
+                else "legacy"
+            ),
+            "replacement_frame": replacement_details,
+            "protrusion_overlay": protrusion_details,
         },
     )
     logger.info(
@@ -1291,6 +1372,8 @@ def validate_composite_output(
     composited: Image.Image,
     region: Region,
     output_path: Path,
+    compositor_mode: str = "legacy",
+    replacement_details: dict[str, Any] | None = None,
 ) -> CompositeValidation:
     issues: list[str] = []
     cover_arr = np.array(cover.convert("RGB"), dtype=np.int16)
@@ -1354,15 +1437,32 @@ def validate_composite_output(
         issues.append("border_bleed_detected")
 
     ring_strength = 0.0
-    if region.region_type != "rectangle":
-        yy, xx = np.ogrid[:h, :w]
-        dist = np.sqrt((xx - target_x) ** 2 + (yy - target_y) ** 2)
-        ring = (dist >= max(0.0, float(region.radius) - 6.0)) & (dist <= float(region.radius) + 6.0)
-        if ring.any():
-            ring_strength = float(np.percentile(diff[ring], 95))
-    edge_artifacts_ok = ring_strength <= 130.0
-    if not edge_artifacts_ok:
-        issues.append("edge_artifact_risk")
+    outside_changed_pct = 0.0
+    outside_mean_delta = 0.0
+    if str(compositor_mode).strip().lower() == "replacement_frame":
+        outside_metrics = replacement_frame.compute_outside_change_metrics(
+            original_rgb=cover,
+            composited_rgb=composited,
+            center_x=int(region.center_x),
+            center_y=int(region.center_y),
+            guard_radius=max(20, int(dict(replacement_details or {}).get("clear_radius", region.radius) or region.radius)),
+        )
+        outside_changed_pct = float(outside_metrics.get("outside_changed_pct", 0.0))
+        outside_mean_delta = float(outside_metrics.get("outside_mean_delta", 0.0))
+        edge_artifacts_ok = outside_changed_pct <= 0.25 and outside_mean_delta <= 0.5
+        if not edge_artifacts_ok:
+            issues.append("frame_outside_changed")
+        ring_strength = outside_mean_delta
+    else:
+        if region.region_type != "rectangle":
+            yy, xx = np.ogrid[:h, :w]
+            dist = np.sqrt((xx - target_x) ** 2 + (yy - target_y) ** 2)
+            ring = (dist >= max(0.0, float(region.radius) - 6.0)) & (dist <= float(region.radius) + 6.0)
+            if ring.any():
+                ring_strength = float(np.percentile(diff[ring], 95))
+        edge_artifacts_ok = ring_strength <= 130.0
+        if not edge_artifacts_ok:
+            issues.append("edge_artifact_risk")
 
     frame_max_delta, frame_mean_delta = _frame_integrity_metrics(
         cover_arr=cover_arr,
@@ -1399,6 +1499,8 @@ def validate_composite_output(
             "alignment_tolerance_px": round(float(tolerance), 3),
             "border_bleed_ratio": round(bleed_ratio, 6),
             "edge_ring_strength": round(ring_strength, 3),
+            "outside_changed_pct": round(outside_changed_pct, 4),
+            "outside_mean_delta": round(outside_mean_delta, 4),
             "frame_pixel_max_delta": round(frame_max_delta, 6),
             "frame_pixel_mean_delta": round(frame_mean_delta, 6),
         },

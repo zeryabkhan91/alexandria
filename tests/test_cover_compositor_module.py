@@ -96,6 +96,7 @@ def test_composite_single_rgba_fallback_applies_protrusion_overlay(tmp_path: Pat
     _make_rgba(ill, size=(512, 512))
 
     monkeypatch.setattr(cc, "_find_source_pdf_for_cover_path", lambda _cover_path: None)
+    monkeypatch.setattr(cc.replacement_frame, "is_active_for_size", lambda _size: False)
     monkeypatch.setattr(cc.frame_geometry, "is_standard_medallion_cover", lambda _size: True)
     monkeypatch.setattr(
         cc.frame_geometry,
@@ -120,6 +121,54 @@ def test_composite_single_rgba_fallback_applies_protrusion_overlay(tmp_path: Pat
     assert calls == [{"center_x": 2864, "center_y": 1620, "width": 3784, "height": 2777}]
     with Image.open(out) as result:
         assert result.convert("RGB").getpixel((2864, 1110))[0] > 200
+
+
+def test_composite_single_replacement_frame_writes_validation_metadata(tmp_path: Path, monkeypatch):
+    cover = tmp_path / "cover.jpg"
+    ill = tmp_path / "ill.png"
+    _make_rgb(cover, size=(3784, 2777))
+    _make_rgba(ill, size=(512, 512))
+
+    monkeypatch.setattr(cc, "_find_source_pdf_for_cover_path", lambda _cover_path: None)
+    monkeypatch.setattr(cc.replacement_frame, "is_active_for_size", lambda _size: True)
+    monkeypatch.setattr(
+        cc.frame_geometry,
+        "resolve_standard_medallion_geometry",
+        lambda _size: SimpleNamespace(center_x=2864, center_y=1620, frame_hole_radius=492, art_clip_radius=500),
+    )
+
+    def _fake_replacement(**kwargs):  # type: ignore[no-untyped-def]
+        image = kwargs["image"].copy()
+        image.putpixel((2864, 1620), (40, 210, 70))
+        return image, {
+            "applied": True,
+            "replacement_frame_mode": "single_frame_standard_medallion",
+            "clear_radius": 595,
+            "fill_policy": "fixed_standard_navy",
+            "fill_rgb": (26, 39, 68),
+            "hole_radius": 385,
+            "overlay_width": 1008,
+            "overlay_height": 1024,
+            "paste_x": 2360,
+            "paste_y": 1108,
+            "legacy_outer_radius": 595,
+            "overlay_outer_radius_scaled": 595.0,
+            "outer_fit_scale": 1.133,
+            "outer_radius_error_px": 0.0,
+            "moat_band_width_px": 6.0,
+        }
+
+    monkeypatch.setattr(cc.replacement_frame, "apply_replacement_frame_composite", _fake_replacement)
+
+    out = tmp_path / "replacement.jpg"
+    region = {"center_x": 2864, "center_y": 1620, "radius": 500, "frame_bbox": [2269, 1025, 3459, 2215], "region_type": "circle"}
+    cc.composite_single(cover, ill, region, out)
+
+    payload = json.loads(out.with_suffix(out.suffix + ".validation.json").read_text(encoding="utf-8"))
+    assert payload["compositor_mode"] == "replacement_frame"
+    assert payload["replacement_frame"]["clear_radius"] == 595
+    assert payload["replacement_frame"]["fill_policy"] == "fixed_standard_navy"
+    assert payload["replacement_frame"]["outer_radius_error_px"] == 0.0
 
 
 def test_smart_square_crop_is_centered() -> None:

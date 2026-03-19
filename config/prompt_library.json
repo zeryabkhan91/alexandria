@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updated_at": "2026-03-18T13:07:09.043097+00:00",
+  "updated_at": "2026-03-19T12:54:34.786661+00:00",
   "style_anchors": [
     {
       "name": "allegorical_symbolic",
@@ -141,10 +141,10 @@
       ],
       "category": "builtin",
       "version": 1,
-      "usage_count": 13,
+      "usage_count": 16,
       "win_count": 0,
-      "last_used_at": "2026-03-18T13:07:09.043087+00:00",
-      "updated_at": "2026-03-18T13:07:09.043091+00:00"
+      "last_used_at": "2026-03-19T12:54:34.786651+00:00",
+      "updated_at": "2026-03-19T12:54:34.786656+00:00"
     },
     {
       "id": "alexandria-base-gothic-atmosphere",
@@ -255,6 +255,33 @@
       "updated_at": "2026-03-10T17:50:11.870626+00:00"
     },
     {
+      "id": "alexandria-wildcard-pre-raphaelite-garden",
+      "name": "WILDCARD 2 — Vintage Travel Poster",
+      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no medallion, no decorative edges. This illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in bold 1930s vintage travel poster style — flat unblended colour blocks with clean outlines, layered depth planes, burgundy navy cream and forest green palette, geometric confidence. The mood is {MOOD}. Era reference: {ERA}. Full scene composition filling the entire canvas, no circular framing. Square format, high resolution, print-ready.",
+      "style_anchors": [],
+      "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers. No circular vignette, no medallion composition, no ornamental frame, no decorative border, no floral border frame, no scrollwork frame.",
+      "source_book": "builtin",
+      "source_model": "openrouter/google/gemini-3-pro-image-preview",
+      "quality_score": 1.0,
+      "saved_by": "system",
+      "created_at": "2026-03-08T09:39:50.801657+00:00",
+      "notes": "Alexandria wildcard prompt. Flat-colour travel-poster composition with bold geometric depth.",
+      "tags": [
+        "alexandria",
+        "wildcard",
+        "vintage-travel-poster",
+        "travel-poster",
+        "graphic",
+        "flat-color"
+      ],
+      "category": "wildcard",
+      "version": 1,
+      "usage_count": 5,
+      "win_count": 0,
+      "last_used_at": "2026-03-19T12:53:09.394613+00:00",
+      "updated_at": "2026-03-19T12:53:09.394617+00:00"
+    },
+    {
       "id": "alexandria-wildcard-pre-raphaelite-dream",
       "name": "Pre-Raphaelite Dream",
       "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no medallion, no decorative edges. This illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in Pre-Raphaelite painting style — jewel-bright saturated colours, hyper-detailed botanical elements, flowing auburn hair and medieval-inspired drapery, Waterhouse-like romantic atmosphere. The mood is {MOOD}. Era reference: {ERA}. Full scene composition filling the entire canvas, no circular framing. Square format, high resolution, print-ready.",
@@ -281,33 +308,6 @@
       "updated_at": "2026-03-18T13:06:09.518501+00:00"
     },
     {
-      "id": "alexandria-wildcard-pre-raphaelite-garden",
-      "name": "WILDCARD 2 — Vintage Travel Poster",
-      "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no medallion, no decorative edges. This illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in bold 1930s vintage travel poster style — flat unblended colour blocks with clean outlines, layered depth planes, burgundy navy cream and forest green palette, geometric confidence. The mood is {MOOD}. Era reference: {ERA}. Full scene composition filling the entire canvas, no circular framing. Square format, high resolution, print-ready.",
-      "style_anchors": [],
-      "negative_prompt": "No text, no letters, no words, no numbers, no titles, no author names, no typography, no captions, no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, no blurry illustration, no off-centre composition, no white or light backgrounds. No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, no dividers. No circular vignette, no medallion composition, no ornamental frame, no decorative border, no floral border frame, no scrollwork frame.",
-      "source_book": "builtin",
-      "source_model": "openrouter/google/gemini-3-pro-image-preview",
-      "quality_score": 1.0,
-      "saved_by": "system",
-      "created_at": "2026-03-08T09:39:50.801657+00:00",
-      "notes": "Alexandria wildcard prompt. Flat-colour travel-poster composition with bold geometric depth.",
-      "tags": [
-        "alexandria",
-        "wildcard",
-        "vintage-travel-poster",
-        "travel-poster",
-        "graphic",
-        "flat-color"
-      ],
-      "category": "wildcard",
-      "version": 1,
-      "usage_count": 4,
-      "win_count": 0,
-      "last_used_at": "2026-03-18T12:14:51.284848+00:00",
-      "updated_at": "2026-03-18T12:14:51.284852+00:00"
-    },
-    {
       "id": "alexandria-wildcard-impressionist-plein-air",
       "name": "Impressionist Plein Air",
       "prompt_template": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements, no medallion, no decorative edges. This illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. Rendered in French Impressionist plein air style — visible brushstrokes, dappled natural sunlight, soft focus atmospheric depth, luminous pastel and sky-blue palette, Monet-like light on water and foliage. The mood is {MOOD}. Era reference: {ERA}. Full scene composition filling the entire canvas, no circular framing. Square format, high resolution, print-ready.",
@@ -328,10 +328,10 @@
       ],
       "category": "wildcard",
       "version": 1,
-      "usage_count": 3,
+      "usage_count": 4,
       "win_count": 0,
-      "last_used_at": "2026-03-18T00:02:36.614054+00:00",
-      "updated_at": "2026-03-18T00:02:36.614070+00:00"
+      "last_used_at": "2026-03-18T13:48:42.756879+00:00",
+      "updated_at": "2026-03-18T13:48:42.756884+00:00"
     },
     {
       "id": "alexandria-wildcard-art-nouveau-poster",
@@ -354,10 +354,10 @@
       ],
       "category": "wildcard",
       "version": 1,
-      "usage_count": 2,
+      "usage_count": 3,
       "win_count": 0,
-      "last_used_at": "2026-03-18T12:13:40.205772+00:00",
-      "updated_at": "2026-03-18T12:13:40.205776+00:00"
+      "last_used_at": "2026-03-18T13:51:04.893656+00:00",
+      "updated_at": "2026-03-18T13:51:04.893659+00:00"
     },
     {
       "id": "alexandria-wildcard-klimt-gold-leaf",

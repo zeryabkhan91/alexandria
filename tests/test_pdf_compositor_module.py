@@ -87,23 +87,37 @@ def test_composite_cover_pdf_standard_geometry_fills_shared_radius(tmp_path: Pat
         "resolve_standard_medallion_geometry",
         lambda _size: SimpleNamespace(center_x=50, center_y=50, frame_hole_radius=24, art_clip_radius=30),
     )
+    monkeypatch.setattr(pc.replacement_frame, "is_active_for_size", lambda _size: True)
+    captured: dict[str, object] = {}
+
+    def _fake_replacement(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        out = kwargs["image"].copy()
+        out.putpixel((50, 50), (40, 210, 70))
+        return out, {
+            "applied": True,
+            "replacement_frame_mode": "single_frame_standard_medallion",
+            "clear_radius": 30,
+            "hole_radius": 24,
+            "overlay_width": 40,
+            "overlay_height": 40,
+            "paste_x": 30,
+            "paste_y": 30,
+            "fill_policy": "fixed_standard_navy",
+            "fill_rgb": (26, 39, 68),
+            "legacy_outer_radius": 30,
+            "overlay_outer_radius_scaled": 30.0,
+            "outer_fit_scale": 1.25,
+            "outer_radius_error_px": 0.0,
+            "moat_band_width_px": 6.0,
+            "derived_rgba_path": "derived.png",
+        }
+
+    monkeypatch.setattr(pc.replacement_frame, "apply_replacement_frame_composite", _fake_replacement)
     monkeypatch.setattr(
-        pc.protrusion_overlay,
-        "apply_shared_protrusion_overlay",
-        lambda *, image, center_x, center_y, cover_size, overlay_path=pc.protrusion_overlay.SHARED_PROTRUSION_OVERLAY_PATH: (
-            image,
-            {
-                "applied": False,
-                "reason": "test_disabled",
-                "overlay_width": 0,
-                "overlay_height": 0,
-                "paste_x": 0,
-                "paste_y": 0,
-                "applied_center_x": center_x,
-                "applied_center_y": center_y,
-                "components": [],
-            },
-        ),
+        pc.replacement_frame,
+        "compute_outside_change_metrics",
+        lambda **_kwargs: {"outside_changed_pct": 0.0, "outside_mean_delta": 0.0},
     )
 
     source_pdf = tmp_path / "source.pdf"
@@ -129,15 +143,11 @@ def test_composite_cover_pdf_standard_geometry_fills_shared_radius(tmp_path: Pat
     )
 
     assert result["placement_source"] == "template_geometry"
-    assert result["overlay_source"] == "region_circle_blend"
-    with Image.open(out_jpg) as out:
-        arr = out.convert("RGB")
-        edge_px = arr.getpixel((73, 50))
-        outside_px = arr.getpixel((78, 50))
-        assert edge_px[1] > edge_px[0]
-        assert edge_px[1] > edge_px[2]
-        assert outside_px[0] > outside_px[1]
-        assert outside_px[0] > outside_px[2]
+    assert result["overlay_source"] == "replacement_frame_overlay"
+    assert result["replacement_frame"]["fill_policy"] == "fixed_standard_navy"
+    assert result["replacement_frame"]["outer_radius_error_px"] == 0.0
+    assert captured["frame_bbox"] is None
+    assert captured["geometry_source"] == "template_geometry"
 
 
 def test_composite_cover_pdf_applies_protrusion_overlay(tmp_path: Path, monkeypatch) -> None:
@@ -148,6 +158,7 @@ def test_composite_cover_pdf_applies_protrusion_overlay(tmp_path: Path, monkeypa
         "resolve_standard_medallion_geometry",
         lambda _size: SimpleNamespace(center_x=50, center_y=50, frame_hole_radius=24, art_clip_radius=30),
     )
+    monkeypatch.setattr(pc.replacement_frame, "is_active_for_size", lambda _size: False)
 
     calls: list[dict[str, int]] = []
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,9 +19,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 try:
     from src import config
+    from src import frame_geometry
+    from src import replacement_frame
     from src import safe_json
 except ModuleNotFoundError:  # pragma: no cover
     import config  # type: ignore
+    import frame_geometry  # type: ignore
+    import replacement_frame  # type: ignore
     import safe_json  # type: ignore
 
 
@@ -39,6 +44,13 @@ INNER_CHANGED_MIN_PCT = 20.0
 INNER_PIXEL_DELTA_THRESHOLD = 10.0
 
 GOLDEN_MEAN_DELTA_THRESHOLD = 15.0
+STANDARD_NAVY_RGB = np.array([26.0, 39.0, 68.0], dtype=np.float32)
+NAVY_BAND_DELTA_THRESHOLD = 38.0
+NAVY_BAND_MATCH_THRESHOLD = 0.72
+GOLD_BAND_RATIO_THRESHOLD = 0.18
+ANCHOR_ERROR_EDGE_THRESHOLD_PX = 4.0
+ANCHOR_ERROR_MAX_THRESHOLD_PX = 4.0
+NAVY_BAND_MAX_THRESHOLD_PX = 4.0
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -54,6 +66,105 @@ def _to_project_relative(path: Path) -> str:
         return str(resolved.relative_to(PROJECT_ROOT))
     except ValueError:
         return str(resolved)
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    payload = safe_json.load_json(path, {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _resolve_compositor_mode(composite_file: Path, requested_mode: str = "auto") -> str:
+    mode = str(requested_mode or "auto").strip().lower()
+    if mode and mode != "auto":
+        return mode
+
+    direct_validation = composite_file.with_suffix(composite_file.suffix + ".validation.json")
+    if direct_validation.exists():
+        payload = _load_json(direct_validation)
+        if bool(dict(payload.get("replacement_frame", {})).get("applied", False)):
+            return "replacement_frame"
+        direct_mode = str(payload.get("compositor_mode", "")).strip().lower()
+        if direct_mode:
+            return direct_mode
+
+    parent = composite_file.parent
+    report_path = parent / "composite_validation.json"
+    if not report_path.exists():
+        report_path = parent.parent / "composite_validation.json"
+    if report_path.exists():
+        report = _load_json(report_path)
+        for row in report.get("items", []) if isinstance(report.get("items"), list) else []:
+            if not isinstance(row, dict):
+                continue
+            output_path = Path(str(row.get("output_path", "")).strip())
+            try:
+                matches = output_path.resolve() == composite_file.resolve()
+            except Exception:
+                matches = str(output_path) == str(composite_file)
+            if not matches:
+                continue
+            if str(row.get("overlay_source", "")).strip().lower() == "replacement_frame_overlay":
+                return "replacement_frame"
+            row_mode = str(row.get("mode", "")).strip().lower()
+            if row_mode:
+                return row_mode
+
+    return "legacy"
+
+
+def _resolve_replacement_payload_from_artifacts(composite_file: Path) -> dict[str, Any]:
+    direct_validation = composite_file.with_suffix(composite_file.suffix + ".validation.json")
+    if direct_validation.exists():
+        payload = _load_json(direct_validation)
+        repl = payload.get("replacement_frame", {})
+        return repl if isinstance(repl, dict) else {}
+
+    parent = composite_file.parent
+    report_path = parent / "composite_validation.json"
+    if not report_path.exists():
+        report_path = parent.parent / "composite_validation.json"
+    if report_path.exists():
+        report = _load_json(report_path)
+        for row in report.get("items", []) if isinstance(report.get("items"), list) else []:
+            if not isinstance(row, dict):
+                continue
+            output_path = Path(str(row.get("output_path", "")).strip())
+            try:
+                matches = output_path.resolve() == composite_file.resolve()
+            except Exception:
+                matches = str(output_path) == str(composite_file)
+            if not matches:
+                continue
+            repl = row.get("replacement_frame", {})
+            return repl if isinstance(repl, dict) else {}
+    return {}
+
+
+def _legacy_outer_radius_for_book(*, book_number: int, center_x: int, center_y: int, width: int, height: int) -> int:
+    regions_path = config.cover_regions_path()
+    payload = safe_json.load_json(regions_path, {})
+    if isinstance(payload, dict):
+        for row in payload.get("covers", []) if isinstance(payload.get("covers"), list) else []:
+            if not isinstance(row, dict):
+                continue
+            if int(row.get("cover_id", 0) or 0) != int(book_number):
+                continue
+            bbox = row.get("frame_bbox")
+            if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                x1, y1, x2, y2 = [int(v) for v in bbox]
+                return int(
+                    math.ceil(
+                        max(
+                            abs(x1 - int(center_x)),
+                            abs(x2 - int(center_x)),
+                            abs(y1 - int(center_y)),
+                            abs(y2 - int(center_y)),
+                        )
+                    )
+                )
+    geometry = frame_geometry.resolve_standard_medallion_geometry((width, height))
+    scale = float(getattr(geometry, "radius_scale", 1.0) or 1.0)
+    return int(round(float(geometry.art_clip_radius) + (replacement_frame.STANDARD_FRAME_CLEAR_PADDING_PX * scale)))
 
 
 def _find_original_image(folder: Path) -> Path | None:
@@ -100,6 +211,142 @@ def _distance_grid(height: int, width: int, center_x: int, center_y: int) -> np.
     return np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
 
 
+def _replacement_outer_band_metrics(
+    *,
+    composite_arr: np.ndarray,
+    composite_file: Path,
+    book_number: int,
+    width: int,
+    height: int,
+    center_x: int,
+    center_y: int,
+    replacement_metrics: dict[str, Any] | None = None,
+) -> dict[str, float] | None:
+    if not frame_geometry.is_standard_medallion_cover((width, height)):
+        return None
+
+    resolved_metrics = dict(replacement_metrics or {})
+    if not resolved_metrics:
+        resolved_metrics = _resolve_replacement_payload_from_artifacts(composite_file)
+
+    assets = replacement_frame.ensure_replacement_frame_assets()
+    fallback_radius = float(
+        resolved_metrics.get(
+            "legacy_outer_radius",
+            _legacy_outer_radius_for_book(
+                book_number=book_number,
+                center_x=center_x,
+                center_y=center_y,
+                width=width,
+                height=height,
+            ),
+        )
+        or 0.0
+    )
+    source_anchor_box = resolved_metrics.get("source_anchor_box", [])
+    if not isinstance(source_anchor_box, (list, tuple)) or len(source_anchor_box) != 4:
+        source_anchor_box = [
+            int(center_x - fallback_radius),
+            int(center_y - fallback_radius),
+            int(center_x + fallback_radius),
+            int(center_y + fallback_radius),
+        ]
+    overlay_anchor_box_unscaled = resolved_metrics.get("overlay_anchor_box_unscaled", [])
+    if not isinstance(overlay_anchor_box_unscaled, (list, tuple)) or len(overlay_anchor_box_unscaled) != 4:
+        overlay_anchor_box_unscaled = [
+            int(assets.get("overlay_bbox_x1", 0)),
+            int(assets.get("overlay_bbox_y1", 0)),
+            int(assets.get("overlay_bbox_x2", assets.get("overlay_width", 0))),
+            int(assets.get("overlay_bbox_y2", assets.get("overlay_height", 0))),
+        ]
+    overlay_anchor_box_scaled = resolved_metrics.get("overlay_anchor_box_scaled", [])
+    if not isinstance(overlay_anchor_box_scaled, (list, tuple)) or len(overlay_anchor_box_scaled) != 4:
+        final_scale = float(resolved_metrics.get("final_scale", resolved_metrics.get("outer_fit_scale", 1.0)) or 1.0)
+        overlay_anchor_box_scaled = [
+            int(round(float(overlay_anchor_box_unscaled[0]) * final_scale)),
+            int(round(float(overlay_anchor_box_unscaled[1]) * final_scale)),
+            int(round(float(overlay_anchor_box_unscaled[2]) * final_scale)),
+            int(round(float(overlay_anchor_box_unscaled[3]) * final_scale)),
+        ]
+    navy_band_max_px = float(
+        resolved_metrics.get(
+            "navy_band_max_px",
+            resolved_metrics.get("moat_band_width_px", replacement_frame.SILHOUETTE_CLEAR_PADDING_PX),
+        )
+        or 0.0
+    )
+    clear_bbox = resolved_metrics.get("clear_bbox", [])
+    if not isinstance(clear_bbox, (list, tuple)) or len(clear_bbox) != 4:
+        clear_bbox = [
+            int(source_anchor_box[0] - navy_band_max_px),
+            int(source_anchor_box[1] - navy_band_max_px),
+            int(source_anchor_box[2] + navy_band_max_px),
+            int(source_anchor_box[3] + navy_band_max_px),
+        ]
+    anchor_error_left_px = float(
+        resolved_metrics.get("anchor_error_left_px", abs(float(overlay_anchor_box_scaled[0]) - float(source_anchor_box[0]))) or 0.0
+    )
+    anchor_error_top_px = float(
+        resolved_metrics.get("anchor_error_top_px", abs(float(overlay_anchor_box_scaled[1]) - float(source_anchor_box[1]))) or 0.0
+    )
+    anchor_error_right_px = float(
+        resolved_metrics.get("anchor_error_right_px", abs(float(overlay_anchor_box_scaled[2]) - float(source_anchor_box[2]))) or 0.0
+    )
+    anchor_error_bottom_px = float(
+        resolved_metrics.get("anchor_error_bottom_px", abs(float(overlay_anchor_box_scaled[3]) - float(source_anchor_box[3]))) or 0.0
+    )
+    anchor_error_max_px = float(
+        resolved_metrics.get(
+            "anchor_error_max_px",
+            max(anchor_error_left_px, anchor_error_top_px, anchor_error_right_px, anchor_error_bottom_px),
+        )
+        or 0.0
+    )
+    band = np.zeros((height, width), dtype=bool)
+    cx1, cy1, cx2, cy2 = [max(0, int(v)) for v in clear_bbox]
+    ox1, oy1, ox2, oy2 = [max(0, int(v)) for v in overlay_anchor_box_scaled]
+    cx2 = min(width, cx2)
+    cy2 = min(height, cy2)
+    ox2 = min(width, ox2)
+    oy2 = min(height, oy2)
+    if cx2 > cx1 and cy2 > cy1:
+        band[cy1:cy2, cx1:cx2] = True
+    if ox2 > ox1 and oy2 > oy1:
+        band[oy1:oy2, ox1:ox2] = False
+    if not np.any(band):
+        band = None
+
+    navy_match_ratio = 1.0
+    gold_ratio = 0.0
+    if band is not None and np.any(band):
+        pixels = composite_arr[band]
+        if pixels.size > 0:
+            deltas = np.abs(pixels - STANDARD_NAVY_RGB).mean(axis=1)
+            navy_match_ratio = float(np.mean(deltas <= NAVY_BAND_DELTA_THRESHOLD))
+            gold_mask = (
+                (pixels[:, 0] >= 85.0)
+                & (pixels[:, 1] >= 70.0)
+                & (pixels[:, 0] >= pixels[:, 1])
+                & (pixels[:, 1] >= pixels[:, 2])
+                & ((pixels[:, 0] - pixels[:, 2]) >= 30.0)
+            )
+            gold_ratio = float(np.mean(gold_mask))
+
+    return {
+        "outer_band_navy_match_ratio": round(navy_match_ratio, 4),
+        "outer_band_gold_ratio": round(gold_ratio, 4),
+        "source_anchor_box": [int(v) for v in source_anchor_box],
+        "overlay_anchor_box_unscaled": [int(v) for v in overlay_anchor_box_unscaled],
+        "overlay_anchor_box_scaled": [int(v) for v in overlay_anchor_box_scaled],
+        "anchor_error_left_px": round(anchor_error_left_px, 4),
+        "anchor_error_top_px": round(anchor_error_top_px, 4),
+        "anchor_error_right_px": round(anchor_error_right_px, 4),
+        "anchor_error_bottom_px": round(anchor_error_bottom_px, 4),
+        "anchor_error_max_px": round(anchor_error_max_px, 4),
+        "navy_band_max_px": round(navy_band_max_px, 4),
+    }
+
+
 def _report_check(
     name: str,
     passed: bool,
@@ -128,12 +375,15 @@ def verify_composite(
     radius: int = RADIUS,
     golden_dir: str | Path = "qa_output/golden",
     output_dir: str | Path = "qa_output",
+    compositor_mode: str = "auto",
+    replacement_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run structural visual QA checks on one composite and persist a JSON report."""
     original_file = Path(original_path)
     composite_file = Path(composite_path)
     original = Image.open(original_file).convert("RGB")
     composite = Image.open(composite_file).convert("RGB")
+    resolved_mode = _resolve_compositor_mode(composite_file, requested_mode=compositor_mode)
 
     same_dimensions = original.size == composite.size
     composite_for_analysis = composite if same_dimensions else composite.resize(original.size, Image.LANCZOS)
@@ -153,17 +403,38 @@ def verify_composite(
     frame_mean_delta = 0.0 if frame_values.size == 0 else float(frame_values.mean())
     metrics["frame_changed_pct"] = round(frame_changed_pct, 4)
     metrics["frame_mean_delta"] = round(frame_mean_delta, 4)
-    checks.append(
-        _report_check(
-            "frame_ring_integrity",
-            frame_changed_pct < FRAME_CHANGED_THRESHOLD_PCT and frame_mean_delta < FRAME_MEAN_DELTA_THRESHOLD,
-            value=f"{frame_changed_pct:.2f}% changed, delta {frame_mean_delta:.2f}",
-            threshold=f"<{FRAME_CHANGED_THRESHOLD_PCT:.1f}% changed and delta <{FRAME_MEAN_DELTA_THRESHOLD:.1f}",
-            detail="Ornamental frame ring must remain intact.",
+    if resolved_mode == "replacement_frame":
+        checks.append(
+            _report_check(
+                "frame_ring_integrity",
+                True,
+                value=f"mode={resolved_mode}, {frame_changed_pct:.2f}% changed, delta {frame_mean_delta:.2f}",
+                threshold="replacement-frame mode allows ring replacement",
+                detail="Original ring-integrity preservation is not required when the frame is intentionally replaced.",
+            )
         )
-    )
+    else:
+        checks.append(
+            _report_check(
+                "frame_ring_integrity",
+                frame_changed_pct < FRAME_CHANGED_THRESHOLD_PCT and frame_mean_delta < FRAME_MEAN_DELTA_THRESHOLD,
+                value=f"{frame_changed_pct:.2f}% changed, delta {frame_mean_delta:.2f}",
+                threshold=f"<{FRAME_CHANGED_THRESHOLD_PCT:.1f}% changed and delta <{FRAME_MEAN_DELTA_THRESHOLD:.1f}",
+                detail="Ornamental frame ring must remain intact.",
+            )
+        )
 
     outer_mask = dist > int(radius) + 150
+    if resolved_mode == "replacement_frame" and isinstance(replacement_metrics, dict):
+        source_anchor_box = replacement_metrics.get("source_anchor_box", [])
+        if isinstance(source_anchor_box, (list, tuple)) and len(source_anchor_box) == 4:
+            pad = 32
+            sx1 = max(0, int(source_anchor_box[0]) - pad)
+            sy1 = max(0, int(source_anchor_box[1]) - pad)
+            sx2 = min(width, int(source_anchor_box[2]) + pad)
+            sy2 = min(height, int(source_anchor_box[3]) + pad)
+            outer_mask = np.ones((height, width), dtype=bool)
+            outer_mask[sy1:sy2, sx1:sx2] = False
     outer_values = max_diff[outer_mask]
     outer_changed_pct = 0.0 if outer_values.size == 0 else float((outer_values > OUTER_PIXEL_DELTA_THRESHOLD).sum() / outer_values.size * 100.0)
     metrics["outer_changed_pct"] = round(outer_changed_pct, 4)
@@ -225,6 +496,114 @@ def verify_composite(
         )
     )
 
+    metrics["compositor_mode"] = resolved_mode
+    if resolved_mode == "replacement_frame":
+        replacement_metrics = _replacement_outer_band_metrics(
+            composite_arr=composite_arr,
+            composite_file=composite_file,
+            book_number=book_number,
+            width=width,
+            height=height,
+            center_x=center_x,
+            center_y=center_y,
+            replacement_metrics=replacement_metrics,
+        )
+        if replacement_metrics is None:
+            checks.append(
+                _report_check(
+                    "replacement_outer_band_clean",
+                    True,
+                    value="not_applicable",
+                    threshold="N/A",
+                    detail="Replacement-frame outer-band cleanliness check only runs for standard medallion geometry.",
+                )
+            )
+            checks.append(
+                _report_check(
+                    "replacement_outer_band_not_gold",
+                    True,
+                    value="not_applicable",
+                    threshold="N/A",
+                    detail="Replacement-frame outer-band residue check only runs for standard medallion geometry.",
+                )
+            )
+        else:
+            metrics.update(replacement_metrics)
+            navy_match_ratio = float(replacement_metrics["outer_band_navy_match_ratio"])
+            gold_ratio = float(replacement_metrics["outer_band_gold_ratio"])
+            checks.append(
+                _report_check(
+                    "replacement_anchor_left",
+                    float(replacement_metrics["anchor_error_left_px"]) <= ANCHOR_ERROR_EDGE_THRESHOLD_PX,
+                    value=f"left anchor error={float(replacement_metrics['anchor_error_left_px']):.3f}px",
+                    threshold=f"<={ANCHOR_ERROR_EDGE_THRESHOLD_PX:.1f}px",
+                    detail="Replacement frame left edge should align to the source medallion footprint.",
+                )
+            )
+            checks.append(
+                _report_check(
+                    "replacement_anchor_top",
+                    float(replacement_metrics["anchor_error_top_px"]) <= ANCHOR_ERROR_EDGE_THRESHOLD_PX,
+                    value=f"top anchor error={float(replacement_metrics['anchor_error_top_px']):.3f}px",
+                    threshold=f"<={ANCHOR_ERROR_EDGE_THRESHOLD_PX:.1f}px",
+                    detail="Replacement frame top crest should align to the source medallion footprint.",
+                )
+            )
+            checks.append(
+                _report_check(
+                    "replacement_anchor_right",
+                    float(replacement_metrics["anchor_error_right_px"]) <= ANCHOR_ERROR_EDGE_THRESHOLD_PX,
+                    value=f"right anchor error={float(replacement_metrics['anchor_error_right_px']):.3f}px",
+                    threshold=f"<={ANCHOR_ERROR_EDGE_THRESHOLD_PX:.1f}px",
+                    detail="Replacement frame right edge should align to the source medallion footprint.",
+                )
+            )
+            checks.append(
+                _report_check(
+                    "replacement_anchor_bottom",
+                    float(replacement_metrics["anchor_error_bottom_px"]) <= ANCHOR_ERROR_EDGE_THRESHOLD_PX,
+                    value=f"bottom anchor error={float(replacement_metrics['anchor_error_bottom_px']):.3f}px",
+                    threshold=f"<={ANCHOR_ERROR_EDGE_THRESHOLD_PX:.1f}px",
+                    detail="Replacement frame bottom flower should align to the source medallion footprint.",
+                )
+            )
+            checks.append(
+                _report_check(
+                    "replacement_anchor_max",
+                    float(replacement_metrics["anchor_error_max_px"]) <= ANCHOR_ERROR_MAX_THRESHOLD_PX,
+                    value=f"max anchor error={float(replacement_metrics['anchor_error_max_px']):.3f}px",
+                    threshold=f"<={ANCHOR_ERROR_MAX_THRESHOLD_PX:.1f}px",
+                    detail="Maximum anchor mismatch across the replacement frame must stay within signoff tolerance.",
+                )
+            )
+            checks.append(
+                _report_check(
+                    "replacement_navy_band",
+                    float(replacement_metrics["navy_band_max_px"]) <= NAVY_BAND_MAX_THRESHOLD_PX,
+                    value=f"navy band={float(replacement_metrics['navy_band_max_px']):.3f}px",
+                    threshold=f"<={NAVY_BAND_MAX_THRESHOLD_PX:.1f}px",
+                    detail="Visible navy band between the replacement frame and cleared source area must remain effectively invisible.",
+                )
+            )
+            checks.append(
+                _report_check(
+                    "replacement_outer_band_clean",
+                    navy_match_ratio >= NAVY_BAND_MATCH_THRESHOLD,
+                    value=f"navy match={navy_match_ratio:.3f}",
+                    threshold=f">={NAVY_BAND_MATCH_THRESHOLD:.2f}",
+                    detail="Band between cleared source medallion and replacement frame should stay navy, not haloed.",
+                )
+            )
+            checks.append(
+                _report_check(
+                    "replacement_outer_band_not_gold",
+                    gold_ratio <= GOLD_BAND_RATIO_THRESHOLD,
+                    value=f"gold ratio={gold_ratio:.3f}",
+                    threshold=f"<={GOLD_BAND_RATIO_THRESHOLD:.2f}",
+                    detail="Outer band should not retain visible gold source-frame residue or brown halos.",
+                )
+            )
+
     golden_path = Path(golden_dir) / f"golden_{int(book_number):03d}.jpg"
     if golden_path.exists():
         golden = Image.open(golden_path).convert("RGB")
@@ -264,6 +643,7 @@ def verify_composite(
         "failed_checks": failed_checks,
         "checks": checks,
         "metrics": metrics,
+        "compositor_mode": resolved_mode,
         "generated_at": generated_at,
         "original_path": _to_project_relative(original_file),
         "composite_path": _to_project_relative(composite_file),
@@ -286,6 +666,7 @@ def run_batch_verification(
     golden_dir: str | Path = "qa_output/golden",
     catalog: list[dict[str, Any]] | None = None,
     book_numbers: list[int] | None = None,
+    compositor_mode: str = "auto",
 ) -> dict[str, Any]:
     """Run structural QA for a set of books and persist a batch report."""
     input_root = Path(input_covers_dir)
@@ -342,6 +723,7 @@ def run_batch_verification(
             book_title=book_title,
             output_dir=out_dir,
             golden_dir=golden_root,
+            compositor_mode=compositor_mode,
         )
         results.append(report)
 
