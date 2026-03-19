@@ -43,6 +43,12 @@ COPY config/book_prompts_test-catalog.json config/book_prompts_test-catalog.json
 COPY config/cover_regions.json config/cover_regions.json
 COPY config/cover_regions_test-catalog.json config/cover_regions_test-catalog.json
 COPY config/frame_mask.png config/frame_mask.png
+COPY config/medallion_registration_overrides.json config/medallion_registration_overrides.json
+RUN mkdir -p config/frame_overlays/_derived
+COPY config/frame_overlays/Untitled__4_frame.png config/frame_overlays/Untitled__4_frame.png
+COPY config/frame_overlays/Frame_514868_frame.png config/frame_overlays/Frame_514868_frame.png
+COPY config/frame_overlays/_derived/Untitled__4_frame_rgba.png config/frame_overlays/_derived/Untitled__4_frame_rgba.png
+COPY config/frame_overlays/_derived/Untitled__4_frame_metrics.json config/frame_overlays/_derived/Untitled__4_frame_metrics.json
 COPY scripts/extract_frame_overlays.py scripts/extract_frame_overlays.py
 COPY scripts/verify_composite.py scripts/verify_composite.py
 COPY config/prompt_templates.json config/prompt_templates.json

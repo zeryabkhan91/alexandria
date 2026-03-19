@@ -1892,7 +1892,29 @@ def _serialize_generation_results(
                 logger.warning("Failed to persist raw AI art: %s", exc)
         composed = None
         persisted_composite_path = None
-        if row.image_path:
+        if persisted_raw_path:
+            save_row = {
+                "book_number": row.book_number,
+                "variant": row.variant,
+                "model": row.model,
+                "raw_art_path": persisted_raw_path,
+                "image_path": image_rel,
+            }
+            destination = _saved_composite_destination_for_row(runtime=runtime, row=save_row)
+            if destination is not None:
+                rebuilt = _rebuild_saved_composite_from_raw_art(runtime=runtime, row=save_row, output_path=destination)
+                if rebuilt is not None and rebuilt.exists():
+                    persisted_composite_path = _to_project_relative(rebuilt)
+                    composed = persisted_composite_path
+                    logger.info(
+                        "Persisted composite rebuilt from job-specific raw art: book=%s variant=%s model=%s raw_art=%s composite=%s",
+                        int(row.book_number),
+                        int(row.variant),
+                        model_token,
+                        persisted_raw_path,
+                        persisted_composite_path,
+                    )
+        if persisted_composite_path is None and row.image_path:
             candidate = _resolve_composited_candidate(row.image_path, runtime=runtime)
             if candidate and candidate.exists():
                 composed = _to_project_relative(candidate)
@@ -1988,6 +2010,7 @@ def _persist_composite_image(
             model_token=model_token,
             raw_art_source=raw_art_source,
             raw_art_path_token=raw_art_path_token,
+            composite_origin="candidate_copy",
         )
         logger.info("Persisted composite image to %s", composite_dest)
         return _to_project_relative(composite_dest)
@@ -2063,6 +2086,7 @@ def _persist_composite_candidate_for_row(
             model_token=model_token,
             raw_art_source=raw_art,
             raw_art_path_token=raw_art_path_token,
+            composite_origin="candidate_copy",
         )
         persisted_path = destination
 
@@ -2109,6 +2133,7 @@ def _write_saved_composite_manifest(
     model_token: str,
     raw_art_source: Path | None,
     raw_art_path_token: str,
+    composite_origin: str,
 ) -> None:
     safe_json.atomic_write_json(
         _saved_composite_manifest_path(composite_path),
@@ -2121,6 +2146,7 @@ def _write_saved_composite_manifest(
             "saved_composite_sha256": _file_sha256(composite_path),
             "raw_art_path": str(raw_art_path_token or "").strip(),
             "raw_art_sha256": _file_sha256(raw_art_source) if raw_art_source is not None and raw_art_source.exists() else "",
+            "composite_origin": str(composite_origin or "").strip(),
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )
@@ -2165,6 +2191,8 @@ def _saved_composite_manifest_matches_row(*, runtime: config.Config, row: dict[s
         return False
     raw_art = _resolve_durable_raw_image_path(runtime=runtime, row=row)
     if raw_art is not None and raw_art.exists():
+        if str(payload.get("composite_origin", "") or "").strip() != "raw_art_rebuild":
+            return False
         if str(payload.get("raw_art_sha256", "") or "").strip() != _file_sha256(raw_art):
             return False
     return True
@@ -2229,6 +2257,7 @@ def _rebuild_saved_composite_from_raw_art(*, runtime: config.Config, row: dict[s
                     model_token=str(row.get("model", "unknown") or "unknown").replace("/", "_").replace(" ", "_"),
                     raw_art_source=raw_art,
                     raw_art_path_token=str(row.get("raw_art_path", "") or "").strip(),
+                    composite_origin="raw_art_rebuild",
                 )
                 logger.info(
                     "Saved composite rebuild completed via JPG compositor: book=%s variant=%s output=%s valid=%s issues=%s placement_source=%s overlay_source=%s replacement_mode=%s clear_radius=%s fill_policy=%s fill_rgb=%s",
@@ -2267,6 +2296,7 @@ def _rebuild_saved_composite_from_raw_art(*, runtime: config.Config, row: dict[s
         model_token=str(row.get("model", "unknown") or "unknown").replace("/", "_").replace(" ", "_"),
         raw_art_source=raw_art,
         raw_art_path_token=str(row.get("raw_art_path", "") or "").strip(),
+        composite_origin="raw_art_rebuild",
     )
     validation_payload = _load_json(rebuilt.with_suffix(rebuilt.suffix + ".validation.json"), {})
     logger.info(
@@ -2295,6 +2325,13 @@ def _ensure_saved_composite_for_row(*, runtime: config.Config, row: dict[str, An
     destination = composite_path or _saved_composite_destination_for_row(runtime=runtime, row=row)
     if destination is None:
         return composite_path if composite_path is not None and composite_path.exists() else None
+    if _resolve_durable_raw_image_path(runtime=runtime, row=row) is not None:
+        rebuilt = _rebuild_saved_composite_from_raw_art(runtime=runtime, row=row, output_path=destination)
+        if rebuilt is not None and rebuilt.exists():
+            row["saved_composited_path"] = _to_project_relative(rebuilt)
+            row["composited_path"] = _to_project_relative(rebuilt)
+            logger.info("Saved composite selection: rebuilt from durable raw art %s", rebuilt)
+            return rebuilt
     persisted_candidate = _persist_composite_candidate_for_row(runtime=runtime, row=row, destination=destination)
     if persisted_candidate is not None and persisted_candidate.exists():
         logger.info("Saved composite selection: used persisted candidate %s", persisted_candidate)
@@ -7699,6 +7736,25 @@ def _run_startup_checks(runtime: config.Config) -> dict[str, Any]:
     }
     for label, path in required_paths.items():
         _record(label, path.exists(), str(path))
+
+    replacement_frame_path = config.CONFIG_DIR / "frame_overlays" / "Untitled__4_frame.png"
+    replacement_frame_metrics_path = (
+        config.CONFIG_DIR / "frame_overlays" / "_derived" / "Untitled__4_frame_metrics.json"
+    )
+    medallion_overrides_path = config.CONFIG_DIR / "medallion_registration_overrides.json"
+    _record("replacement_frame_source", replacement_frame_path.exists(), str(replacement_frame_path))
+    _record(
+        "replacement_frame_metrics",
+        replacement_frame_metrics_path.exists(),
+        str(replacement_frame_metrics_path),
+        level="warning",
+    )
+    _record(
+        "medallion_registration_overrides",
+        medallion_overrides_path.exists(),
+        str(medallion_overrides_path),
+        level="warning",
+    )
 
     writable_paths = {
         "output_dir_writable": runtime.output_dir,

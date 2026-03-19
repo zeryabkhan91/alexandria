@@ -1887,8 +1887,21 @@ def test_serialize_generation_results_persists_job_unique_raw_and_composite_arti
         attempts=1,
     )
 
-    first = qr._serialize_generation_results(runtime=cfg, book=1, results=[result], job_id="job-alpha")
-    second = qr._serialize_generation_results(runtime=cfg, book=1, results=[result], job_id="job-beta")
+    def _fake_rebuild(*, runtime: config.Config, row: dict[str, Any], output_path: Path) -> Path:
+        del runtime
+        token = str(row.get("raw_art_path", ""))
+        color = (210, 40, 40) if "job-alpha" in token else (40, 40, 210)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (64, 64), color).save(output_path, format="JPEG")
+        return output_path
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(qr, "_rebuild_saved_composite_from_raw_art", _fake_rebuild)
+    try:
+        first = qr._serialize_generation_results(runtime=cfg, book=1, results=[result], job_id="job-alpha")
+        second = qr._serialize_generation_results(runtime=cfg, book=1, results=[result], job_id="job-beta")
+    finally:
+        monkeypatch.undo()
 
     assert first[0]["raw_art_path"] != second[0]["raw_art_path"]
     assert first[0]["saved_composited_path"] != second[0]["saved_composited_path"]
@@ -1896,9 +1909,14 @@ def test_serialize_generation_results_persists_job_unique_raw_and_composite_arti
     assert (qr.PROJECT_ROOT / str(second[0]["raw_art_path"])).exists()
     assert (qr.PROJECT_ROOT / str(first[0]["saved_composited_path"])).exists()
     assert (qr.PROJECT_ROOT / str(second[0]["saved_composited_path"])).exists()
+    assert qr._file_sha256(qr.PROJECT_ROOT / str(first[0]["saved_composited_path"])) != qr._file_sha256(
+        qr.PROJECT_ROOT / str(second[0]["saved_composited_path"])
+    )
 
 
-def test_hydrate_serialized_result_paths_persists_saved_composite_after_compositing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_hydrate_serialized_result_paths_rebuilds_saved_composite_from_raw_art_when_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     cfg = _build_runtime_for_startup_checks(tmp_path)
     model = "openrouter/google/gemini-3-pro-image-preview"
     model_dir = cfg.tmp_dir / "generated" / "1" / qr.image_generator._model_to_directory(model)  # type: ignore[attr-defined]
@@ -1919,9 +1937,12 @@ def test_hydrate_serialized_result_paths_persists_saved_composite_after_composit
     rebuilt = {"called": False}
 
     def _fake_rebuild(*, runtime: config.Config, row: dict[str, Any], output_path: Path) -> Path:
-        del runtime, row, output_path
+        del runtime
         rebuilt["called"] = True
-        raise AssertionError("should not rebuild when tmp/composited candidate exists")
+        assert str(row.get("raw_art_path", "")).endswith(raw_path.name)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (64, 64), (111, 121, 131)).save(output_path, format="JPEG")
+        return output_path
 
     monkeypatch.setattr(qr, "_rebuild_saved_composite_from_raw_art", _fake_rebuild)
 
@@ -1943,8 +1964,12 @@ def test_hydrate_serialized_result_paths_persists_saved_composite_after_composit
     assert hydrated[0]["saved_composited_path"]
     saved_path = qr.PROJECT_ROOT / str(hydrated[0]["saved_composited_path"])
     assert saved_path.exists()
-    assert rebuilt["called"] is False
-    assert qr._file_sha256(saved_path) == qr._file_sha256(composite_path)
+    assert rebuilt["called"] is True
+    with Image.open(saved_path) as image:
+        px = image.getpixel((0, 0))
+        assert abs(int(px[0]) - 111) <= 10
+        assert abs(int(px[1]) - 121) <= 10
+        assert abs(int(px[2]) - 131) <= 10
 
 
 def test_hydrate_serialized_result_paths_prefers_verified_saved_composite_over_mutable_tmp(tmp_path: Path):
@@ -1960,11 +1985,6 @@ def test_hydrate_serialized_result_paths_prefers_verified_saved_composite_over_m
     mutable_composite = composite_dir / "variant_1.jpg"
     Image.new("RGB", (64, 64), (200, 10, 10)).save(mutable_composite, format="JPEG")
 
-    raw_dir = cfg.output_dir / "raw_art" / "1"
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    raw_path = raw_dir / "job-hydrate-safe_variant_1_openrouter_google_gemini-3-pro-image-preview.png"
-    Image.new("RGB", (64, 64), (81, 91, 101)).save(raw_path, format="PNG")
-
     stable_source = tmp_path / "stable-source.jpg"
     Image.new("RGB", (64, 64), (12, 140, 220)).save(stable_source, format="JPEG")
     saved_rel = qr._persist_composite_image(
@@ -1974,8 +1994,8 @@ def test_hydrate_serialized_result_paths_prefers_verified_saved_composite_over_m
         model_token="openrouter_google_gemini-3-pro-image-preview",
         composite_source=stable_source,
         job_token="job-hydrate-safe",
-        raw_art_source=raw_path,
-        raw_art_path_token=qr._to_project_relative(raw_path),
+        raw_art_source=None,
+        raw_art_path_token="",
     )
     assert saved_rel
 
@@ -1987,7 +2007,7 @@ def test_hydrate_serialized_result_paths_prefers_verified_saved_composite_over_m
                 "variant": 1,
                 "model": model,
                 "image_path": qr._to_project_relative(image_path),
-                "raw_art_path": qr._to_project_relative(raw_path),
+                "raw_art_path": "",
                 "composited_path": qr._to_project_relative(mutable_composite),
                 "saved_composited_path": saved_rel,
             }
@@ -2025,9 +2045,11 @@ def test_hydrate_serialized_result_paths_repairs_untrusted_saved_composite_from_
     rebuilt = {"called": False}
 
     def _fake_rebuild(*, runtime: config.Config, row: dict[str, Any], output_path: Path) -> Path:
-        del runtime, row, output_path
+        del runtime, row
         rebuilt["called"] = True
-        raise AssertionError("should prefer current tmp/composited candidate over rebuilding from raw art")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (64, 64), (220, 10, 10)).save(output_path, format="JPEG")
+        return output_path
 
     monkeypatch.setattr(qr, "_rebuild_saved_composite_from_raw_art", _fake_rebuild)
 
@@ -2048,7 +2070,7 @@ def test_hydrate_serialized_result_paths_repairs_untrusted_saved_composite_from_
 
     assert hydrated[0]["saved_composited_path"] == qr._to_project_relative(saved_path)
     assert hydrated[0]["composited_path"] == qr._to_project_relative(saved_path)
-    assert rebuilt["called"] is False
+    assert rebuilt["called"] is True
     with Image.open(saved_path) as image:
         px = image.getpixel((0, 0))
         assert abs(int(px[0]) - 220) <= 10
